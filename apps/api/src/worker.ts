@@ -1,0 +1,21 @@
+import { env } from "cloudflare:workers"
+import { Layer } from "effect"
+import { HttpRouter, HttpServer } from "effect/http"
+import { Bindings } from "./bindings.ts"
+import * as EpisodeRepo from "./episode-repo.ts"
+import { routes } from "./http.ts"
+import * as MediaStore from "./media-store.ts"
+
+// Route handlers read these services per request, so the app layer must expose them.
+const services = Layer.mergeAll(EpisodeRepo.layer, MediaStore.layer).pipe(
+  Layer.provideMerge(Layer.succeed(Bindings, env)),
+)
+
+const app = HttpRouter.toWebHandler(
+  routes.pipe(Layer.provideMerge(services), Layer.provide(HttpServer.layerServices)),
+  { disableLogger: true },
+)
+
+export default {
+  fetch: (request) => app.handler(request),
+} satisfies ExportedHandler<Env>
