@@ -60,7 +60,7 @@ ENGINES: dict[str, Callable[[str], Engine]] = {
 # Chosen from the bakeoff in BAKEOFF.md.
 DEFAULT_VOICE: dict[str, VoiceRef] = {
     "en": VoiceRef("kokoro", "af_heart"),
-    "is": VoiceRef("piper", "is_IS-salka-medium"),
+    "is": VoiceRef("piper", "is_IS-steinn-medium"),
     "es": VoiceRef("kokoro", "ef_dora"),
     "fr": VoiceRef("kokoro", "ff_siwis"),
     "it": VoiceRef("kokoro", "if_sara"),

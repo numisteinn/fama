@@ -48,7 +48,7 @@ Settings:
 
 - The chunk cache key is `sha256(text, engine, voice, model version, speed)`. A re-run or a retried job only synthesizes chunks it has not made before.
 - `engines/__init__.py` holds the two tables: `ENGINES` (name to engine) and `DEFAULT_VOICE` (language to voice). To add an engine, write a class with `name`, `model_version`, `max_chars`, `voices()` and `synthesize(text, voice_id, speed)`, and add one line to `ENGINES`.
-- Defaults come from the bakeoff in `BAKEOFF.md`: `kokoro:af_heart` for English, `piper:is_IS-salka-medium` for Icelandic.
+- Defaults come from the bakeoff in `BAKEOFF.md`: `kokoro:af_heart` for English, `piper:is_IS-steinn-medium` for Icelandic.
 
 ## Tests
 

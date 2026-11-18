@@ -201,16 +201,22 @@ def _is_cardinal(value: int, neuter: bool = False) -> str:
 def is_ordinal(value: int, ending: str = "i") -> str:
     """Icelandic ordinal in its weak form, for example 17 -> sautjándi."""
 
+    def stem(n: int) -> str:
+        # u-umlaut before -u: tuttugasti -> tuttugustu, hundraðasti -> hundruðustu.
+        word = _IS_ORDINAL_STEMS[n]
+        if ending == "u" and word.endswith("ast"):
+            word = word[:-3].replace("hundrað", "hundruð") + "ust"
+        return word + ending
+
     def unit(n: int) -> str:
-        return _IS_ANNAR[ending] if n == 2 else _IS_ORDINAL_STEMS[n] + ending
+        return _IS_ANNAR[ending] if n == 2 else stem(n)
 
     if value <= 0 or value >= 1000:
         return _is_cardinal(value)
     parts = []
     hundreds, rest = divmod(value, 100)
     if hundreds:
-        stem = _IS_ORDINAL_STEMS[100] + ending
-        parts.append(stem if hundreds == 1 else f"{_is_cardinal(hundreds, neuter=True)} {stem}")
+        parts.append(stem(100) if hundreds == 1 else f"{_is_cardinal(hundreds, neuter=True)} {stem(100)}")
     if rest:
         if rest < 20 or rest % 10 == 0:
             parts.append(unit(rest))

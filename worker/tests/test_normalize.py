@@ -6,6 +6,7 @@ from fama_worker.normalize import is_ordinal, is_year, normalize
 @pytest.mark.parametrize("text, spoken", [
     ("Þann 17. júní 1944 var lýðveldið stofnað.", "Þann sautjánda júní nítján hundruð fjörutíu og fjögur var lýðveldið stofnað."),
     ("Klaustur var stofnað á 13. öld.", "Klaustur var stofnað á þrettándu öld."),
+    ("Á 20. öld óx borgin.", "Á tuttugustu öld óx borgin."),
     ("Í Reykjavík búa 147.625 manns.", "Í Reykjavík búa eitt hundrað fjörutíu og sjö þúsund sex hundruð tuttugu og fimm manns."),
     ("Hann fékk 3,5 m.kr. Árið eftir kom hann.", "Hann fékk þrír komma fimm milljónir króna. Árið eftir kom hann."),
     ("Til dæmis t.d. 25% hlut o.s.frv.", "Til dæmis til dæmis tuttugu og fimm prósent hlut og svo framvegis"),
@@ -31,6 +32,9 @@ def test_icelandic_ordinals_and_years():
     assert is_ordinal(2, "a") == "annan"
     assert is_ordinal(21) == "tuttugasti og fyrsti"
     assert is_ordinal(125) == "hundraðasti tuttugasti og fimmti"
+    assert is_ordinal(20, "u") == "tuttugustu"
+    assert is_ordinal(21, "u") == "tuttugustu og fyrstu"
+    assert is_ordinal(100, "u") == "hundruðustu"
     assert is_year(1786) == "sautján hundruð áttatíu og sex"
     assert is_year(1805) == "átján hundruð og fimm"
     assert is_year(2025) == "tvö þúsund tuttugu og fimm"

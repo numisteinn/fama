@@ -224,7 +224,7 @@ def bake(candidate: Candidate, out: Path, transcribe: Transcriber) -> Result:
     leveled = Audio(audio.level(sample.samples), sample.sample_rate)
     audio.encode_chapter(leveled, path, title=f"{candidate.engine} {candidate.voice}", album="Fama bakeoff",
                          artist=None, track=1)
-    result.sample = str(path)
+    result.sample = str(path.relative_to(out))
     reference = _words(text, candidate.language)
     result.words_per_minute = len(reference) / result.audio_s * 60
     result.transcript = transcribe(path, candidate.language).strip()
@@ -255,9 +255,16 @@ def main() -> None:
     parser.add_argument("--only", choices=["is", "en"])
     parser.add_argument("--engine")
     parser.add_argument("--out", default=str(Path.home() / "Developer" / "fama-samples"))
+    parser.add_argument("--text", help="file with a longer text for --only's language; results go to results-long.json")
     args = parser.parse_args()
     out = Path(args.out)
     results_path = Path(__file__).with_name("results.json")
+    if args.text:
+        if not args.only:
+            parser.error("--text needs --only")
+        TEXT[args.only] = Path(args.text).read_text(encoding="utf-8")
+        results_path = Path(__file__).with_name("results-long.json")
+        out = out / "long"
     previous = {(r["engine"], r["voice"]): r for r in json.loads(results_path.read_text())} if results_path.exists() else {}
     transcribe = Transcriber()
     chosen = [c for c in CANDIDATES if (not args.only or c.language == args.only)
