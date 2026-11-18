@@ -121,6 +121,16 @@ export const ProgressRequest = Schema.Struct({
 })
 export interface ProgressRequest extends Schema.Schema.Type<typeof ProgressRequest> {}
 
+/** Query of `PUT /api/worker/jobs/:id/chapters/:index`. */
+export const ChapterUploadQuery = Schema.Struct({
+  workerId: WorkerId,
+  title: Schema.String,
+  durationMs: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
+})
+
+/** Query of `PUT /api/worker/jobs/:id/book` and `PUT /api/worker/jobs/:id/cover`. */
+export const UploadQuery = Schema.Struct({ workerId: WorkerId })
+
 export const CompleteRequest = Schema.Struct({ workerId: WorkerId, durationMs: Schema.Number })
 export const FailRequest = Schema.Struct({ workerId: WorkerId, reason: Schema.String })
 

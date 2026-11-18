@@ -46,9 +46,9 @@ A worker loops: claim, process, report. All calls are idempotent. A crash at any
 | `POST /api/worker/claim` | `{ workerId, voices: Voice[] }` | `200 { job: ClaimedJob }` or `204` when no work |
 | `GET /api/worker/jobs/:id/source` | | the uploaded file bytes (File sources only) |
 | `POST /api/worker/jobs/:id/progress` | `{ workerId, stage, done, total, title, author, language, voice }` | `204`. Also the heartbeat |
-| `PUT /api/worker/jobs/:id/chapters/:index?title=<urlenc>&durationMs=<int>` | `audio/mp4` bytes (`.m4a`) | `204`. Overwrites the same index |
-| `PUT /api/worker/jobs/:id/book` | `audio/mp4` bytes (`.m4b`) | `204` |
-| `PUT /api/worker/jobs/:id/cover` | `image/jpeg` or `image/png` | `204` |
+| `PUT /api/worker/jobs/:id/chapters/:index?workerId=<urlenc>&title=<urlenc>&durationMs=<int>` | `audio/mp4` bytes (`.m4a`) | `204`. Overwrites the same index |
+| `PUT /api/worker/jobs/:id/book?workerId=<urlenc>` | `audio/mp4` bytes (`.m4b`) | `204` |
+| `PUT /api/worker/jobs/:id/cover?workerId=<urlenc>` | `image/jpeg` or `image/png` | `204` |
 | `POST /api/worker/jobs/:id/complete` | `{ workerId, durationMs }` | `204`, job `Ready` |
 | `POST /api/worker/jobs/:id/fail` | `{ workerId, reason }` | `204`, job `Failed` |
 
@@ -57,7 +57,8 @@ Rules:
 - `claim` also registers the worker's voices for `GET /api/voices`.
 - `claim` returns the oldest `Queued` job, or a `Running` job whose `heartbeatAt` is older than `LEASE_MS` (10 minutes).
 - `ClaimedJob` is `{ episodeId, source, sourcePath, voice, speed, completedChapters }`. The worker skips chapter indexes in `completedChapters`.
-- Every write from a worker that no longer holds the lease (another `workerId` is now `Running`) gets `409`. The worker then drops the job.
+- Every write from a worker that no longer holds the lease (another `workerId` is now `Running`, or the job is no longer `Running`) gets `409`. The worker then drops the job. Byte uploads name the worker in the `workerId` query parameter, JSON writes in the body.
+- Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
 
 ## Storage keys (R2)
