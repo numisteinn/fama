@@ -1,4 +1,4 @@
-"""Extraction: Source -> Document. Language is detected when the source does not name it."""
+"""Extraction: Source -> Document. Language is detected from the text; a declared language breaks ties."""
 
 from __future__ import annotations
 
@@ -49,7 +49,8 @@ def _url(url: str) -> Document:
             return _file(downloaded, None)
         finally:
             downloaded.unlink(missing_ok=True)
-    return web.from_html(response.text, str(response.url), web.url_title(url))[0]
+    document, declared = web.from_html(response.text, str(response.url), web.url_title(url))
+    return dataclasses.replace(document, language=declared)
 
 
 def extract(source: Source, language: str | None = None) -> Document:
@@ -62,9 +63,10 @@ def extract(source: Source, language: str | None = None) -> Document:
             document = from_text(text, title)
         case FileSource(path, content_type):
             document = _file(path, content_type)
+    declared = document.language or None
     chapters = split_long(list(document.chapters))
     if not chapters:
         raise ValueError("Found no text to read in this source.")
     text = "\n".join(c.text for c in chapters)
     return dataclasses.replace(document, chapters=tuple(chapters),
-                               language=language or detect_language(text))
+                               language=language or detect_language(text, declared))

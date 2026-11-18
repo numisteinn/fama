@@ -66,7 +66,8 @@ def from_html(html: str, url: str | None, fallback_title: str) -> tuple[Document
         chapters=tuple(chapters),
         cover=_cover(meta.image if meta else None),
     )
-    return document, (meta.language if meta else None) or ""
+    declared = re.search(r"<html[^>]*\blang=[\"']?([a-zA-Z]{2,3})", html[:5000])
+    return document, (meta.language if meta and meta.language else None) or (declared[1].lower() if declared else "")
 
 
 def url_title(url: str) -> str:

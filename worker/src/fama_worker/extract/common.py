@@ -61,6 +61,7 @@ def clean_markdown(text: str) -> str:
     text = re.sub(r"^\s*\|.*$", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*>\s?", "", text, flags=re.MULTILINE)
     text = re.sub(r"^.*↑.*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^.*\d+°\s*\d+[′'].*$", "", text, flags=re.MULTILINE)  # map coordinates
     return text
 
 
@@ -97,6 +98,8 @@ def markdown_chapters(markdown: str, title: str) -> tuple[str | None, list[Chapt
             dropped_level = level
             continue
         body = paragraphs(clean_markdown("\n".join(lines)))
+        # A lone word with no punctuation is page chrome, such as Wikipedia's "Appearance" menu.
+        body = "\n\n".join(p for p in body.split("\n\n") if " " in p or re.search(r"[.!?:]$", p))
         kept.append((level, heading, body))
 
     title = h1 or title
