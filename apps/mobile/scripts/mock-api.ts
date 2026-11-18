@@ -91,7 +91,7 @@ const running = addEpisode({
   chapters: [chapter(0, runChapters[0]!.title, runChapters[0]!.file)],
   job: { _tag: "Running", workerId: "mock-worker" as never, stage: "synthesizing", done: 1, total: 3, heartbeatAt: now() },
 })
-simulateJob(running.id, { startAt: 1, stepMs: 20_000 })
+simulateJob(running.id, { startAt: 1, stepMs: 45_000 })
 
 /** Moves a job through Queued, Running and Ready, adding one chapter per step. */
 function simulateJob(id: string, { startAt = 0, stepMs = 6_000 } = {}) {
