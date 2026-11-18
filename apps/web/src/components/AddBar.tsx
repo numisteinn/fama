@@ -133,7 +133,7 @@ export function AddBar({ onAdded }: { onAdded: (episode: Episode) => void }) {
           />
           <VoicePicker voices={voices} value={voice} />
           <Picker
-            label="Voice speed"
+            label={`Voice speed: ${formatRate(speed)}`}
             value={speed}
             onChange={lastSpeed.set}
             options={SPEEDS.map((value) => ({ value, label: formatRate(value) }))}
@@ -181,7 +181,7 @@ function VoicePicker({ voices, value }: { voices: ReadonlyArray<Voice>; value: V
   const selected = voices.find((voice) => voice.id === value)
   return (
     <Picker
-      label="Voice"
+      label={`Voice: ${selected?.name ?? "Auto"}`}
       value={selected ? value : null}
       onChange={lastVoice.set}
       options={options}

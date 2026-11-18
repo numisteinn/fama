@@ -1,5 +1,5 @@
 import type { Episode, JobState } from "@fama/contracts"
-import { AudioLines, Play, RotateCw, Trash2 } from "lucide-react"
+import { AlignLeft, AudioLines, FileText, Link, Play, RotateCw, Trash2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { toApiError, type Library } from "~/library"
 import { formatDuration } from "~/lib/format"
@@ -84,17 +84,31 @@ function EpisodeRow({ episode, library }: { episode: Episode; library: Library }
   )
 }
 
+const SOURCE_ICON = { Url: Link, Text: AlignLeft, File: FileText } as const
+
 function Artwork({ episode, current, playing }: { episode: Episode; current: boolean; playing: boolean }) {
   const playable = episode.chapters.length > 0
+  const SourceIcon = SOURCE_ICON[episode.source._tag]
+  const hoverPlay = playable && !playing
   return (
     <span className="relative grid size-10 shrink-0 place-items-center overflow-hidden rounded-lg bg-accent text-muted-foreground">
-      {episode.coverUrl && (
+      {episode.coverUrl ? (
         <img src={mediaUrl(episode.coverUrl)} alt="" className="absolute inset-0 size-full object-cover" />
+      ) : (
+        !playing && (
+          <SourceIcon
+            className={cn(
+              "absolute size-4 transition-opacity duration-150",
+              hoverPlay && "group-hover:opacity-0",
+              current && "opacity-0",
+            )}
+          />
+        )
       )}
       {playing ? (
         <AudioLines className="relative size-4.5 text-foreground" />
       ) : (
-        playable && (
+        hoverPlay && (
           <Play
             className={cn(
               "relative size-4 fill-current text-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100",
@@ -129,7 +143,7 @@ function JobStatus({ episode }: { episode: Episode }) {
         <span className="flex w-28 shrink-0 flex-col items-end gap-1.5 text-[13px] text-muted-foreground tabular-nums">
           <span>
             {STAGE[job.stage]}
-            {job.total > 0 && ` ${job.done}/${job.total}`}
+            {job.stage === "synthesizing" && job.total > 0 && ` ${job.done}/${job.total}`}
           </span>
           <span className="h-0.5 w-full overflow-hidden rounded-full bg-faint" aria-hidden>
             <span

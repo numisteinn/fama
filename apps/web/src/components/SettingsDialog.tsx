@@ -88,7 +88,10 @@ function FeedRow() {
     setState({ _tag: "Loading" })
     api.feed().then(
       (url) => live && setState({ _tag: "Ok", url }),
-      (cause: unknown) => live && setState({ _tag: "Error", message: toApiError(cause).message }),
+      (cause: unknown) => {
+        const error = toApiError(cause)
+        if (live) setState(error.status === 401 ? { _tag: "Loading" } : { _tag: "Error", message: error.message })
+      },
     )
     return () => {
       live = false

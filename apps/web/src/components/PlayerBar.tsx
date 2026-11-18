@@ -29,15 +29,15 @@ export function PlayerBar() {
           <Scrubber />
         </div>
 
-        <div className="col-span-2 flex items-center justify-between gap-1 sm:col-span-1 sm:justify-end">
+        <div className="col-span-2 grid grid-cols-[1fr_auto_1fr] items-center gap-1 sm:col-span-1 sm:flex sm:justify-end">
           <Picker
-            label="Playback speed"
+            label={`Playback speed: ${formatRate(player.rate)}`}
             side="top"
             value={player.rate}
             onChange={player.setRate}
             options={RATES.map((value) => ({ value, label: formatRate(value) }))}
             trigger={
-              <Button size="sm" className="w-14 tabular-nums">
+              <Button size="sm" className="w-14 justify-self-start tabular-nums">
                 {formatRate(player.rate)}
               </Button>
             }
@@ -45,7 +45,7 @@ export function PlayerBar() {
           <div className="flex items-center gap-1 sm:hidden">
             <SkipButtons />
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center justify-end gap-1">
             {episode.chapters.length > 1 && (
               <Picker
                 label="Chapters"
@@ -171,13 +171,13 @@ function Scrubber() {
         className="flex-1"
       >
         <Slider.Control className="group/scrub flex h-6 w-full cursor-pointer touch-none items-center select-none">
-          <Slider.Track className="h-1 w-full overflow-hidden rounded-full bg-faint">
+          <Slider.Track className="relative h-1 w-full rounded-full bg-faint">
             <Slider.Indicator className="rounded-full bg-foreground" />
+            <Slider.Thumb
+              getAriaValueText={(_, ms) => formatClock(ms)}
+              className="size-3 rounded-full bg-foreground opacity-0 shadow-[0_1px_4px_rgb(0_0_0/0.4)] transition-opacity duration-150 outline-none group-hover/scrub:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring data-[dragging]:opacity-100 pointer-coarse:opacity-100"
+            />
           </Slider.Track>
-          <Slider.Thumb
-            getAriaValueText={(_, ms) => formatClock(ms)}
-            className="size-3 rounded-full bg-foreground opacity-0 shadow-[0_1px_4px_rgb(0_0_0/0.4)] transition-opacity duration-150 outline-none group-hover/scrub:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring data-[dragging]:opacity-100 pointer-coarse:opacity-100"
-          />
         </Slider.Control>
       </Slider.Root>
       <span className="w-12">{formatClock(player.durationMs)}</span>
