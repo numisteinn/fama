@@ -1,0 +1,227 @@
+// Drives the full Fama protocol against a running `pnpm dev` server.
+// Usage: node scripts/smoke.ts [baseUrl]. Exits non-zero on the first failed check.
+import { execFileSync } from "node:child_process"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+const base = process.argv[2] ?? "http://localhost:8787"
+const vars = Object.fromEntries(
+  readFileSync(new URL("../.dev.vars", import.meta.url), "utf8")
+    .split("\n")
+    .filter((line) => line.includes("="))
+    .map((line) => [line.slice(0, line.indexOf("=")).trim(), line.slice(line.indexOf("=") + 1).trim()]),
+)
+const apiToken = vars.FAMA_API_TOKEN ?? ""
+const feedToken = vars.FAMA_FEED_TOKEN ?? ""
+
+let checks = 0
+function check(condition: unknown, label: string, detail?: unknown): asserts condition {
+  if (!condition) {
+    throw new Error(`FAIL ${label} ${detail === undefined ? "" : JSON.stringify(detail, null, 2)}`)
+  }
+  checks++
+  console.log(`ok   ${label}`)
+}
+
+const call = (method: string, path: string, init: { body?: BodyInit; json?: unknown; headers?: Record<string, string> } = {}) =>
+  fetch(base + path, {
+    method,
+    headers: {
+      authorization: `Bearer ${apiToken}`,
+      ...(init.json === undefined ? {} : { "content-type": "application/json" }),
+      ...init.headers,
+    },
+    body: init.json === undefined ? (init.body ?? null) : JSON.stringify(init.json),
+  })
+
+const expectStatus = async (response: Response, status: number, label: string) => {
+  const text = await response.text()
+  check(response.status === status, `${label} -> ${status}`, { got: response.status, body: text })
+  return text === "" ? undefined : JSON.parse(text)
+}
+
+const voice = { id: "kokoro:af_heart", engine: "kokoro", name: "Heart", language: "en-US", gender: "female" }
+const workerA = `smoke-a-${process.pid}`
+const workerB = `smoke-b-${process.pid}`
+
+const dir = mkdtempSync(join(tmpdir(), "fama-smoke-"))
+const tone = (name: string, frequency: number, format: string) => {
+  const path = join(dir, name)
+  execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", `sine=frequency=${frequency}:duration=1`, "-c:a", "aac", "-f", format, path])
+  return readFileSync(path)
+}
+const chapter0 = tone("0.m4a", 440, "mp4")
+const chapter1 = tone("1.m4a", 660, "mp4")
+const book = tone("book.m4b", 550, "ipod")
+const created: Array<string> = []
+
+try {
+  const before = await expectStatus(await call("GET", "/api/episodes"), 200, "GET /api/episodes")
+  const pending = before.episodes.filter((e: any) => e.job._tag === "Queued" || e.job._tag === "Running")
+  check(pending.length === 0, "no pending jobs before the run (smoke claims the oldest job)", pending.map((e: any) => e.id))
+
+  check((await call("GET", "/api/episodes", { headers: { authorization: "Bearer wrong" } })).status === 401, "wrong API token -> 401")
+
+  // Client creates a Text episode and a File episode.
+  const text = await expectStatus(
+    await call("POST", "/api/episodes", {
+      json: { source: { _tag: "Text", title: null, text: "Fama reads this text aloud for the smoke test." }, voice: null, speed: 1 },
+    }),
+    201,
+    "POST /api/episodes (Text)",
+  )
+  created.push(text.id)
+  check(text.job._tag === "Queued" && text.title === "Fama reads this text aloud for the smoke…", "Text episode is Queued with provisional title", text)
+
+  const form = new FormData()
+  form.set("file", new Blob(["Hello from an uploaded file."], { type: "text/plain" }), "notes.txt")
+  form.set("voice", voice.id)
+  form.set("speed", "1.25")
+  const file = await expectStatus(await call("POST", "/api/episodes/upload", { body: form }), 201, "POST /api/episodes/upload")
+  created.push(file.id)
+  check(
+    file.source._tag === "File" && file.source.fileName === "notes.txt" && file.title === "notes.txt" && file.speed === 1.25 && file.voice === voice.id,
+    "File episode has source, title, voice, speed",
+    file,
+  )
+
+  // Worker A claims both jobs, oldest first.
+  const claim1 = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #1")
+  check(claim1.job.episodeId === text.id && claim1.job.sourcePath === null && claim1.job.completedChapters.length === 0, "claim #1 returns the Text job", claim1)
+  const claim2 = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #2")
+  check(claim2.job.episodeId === file.id && claim2.job.sourcePath === `/api/worker/jobs/${file.id}/source`, "claim #2 returns the File job with sourcePath", claim2)
+  const sourceResponse = await call("GET", claim2.job.sourcePath)
+  check(sourceResponse.status === 200 && (await sourceResponse.text()) === "Hello from an uploaded file.", "GET source returns the uploaded bytes")
+
+  const voices = await expectStatus(await call("GET", "/api/voices"), 200, "GET /api/voices")
+  check(voices.voices.some((v: any) => v.id === voice.id), "claim registered the worker's voice", voices)
+
+  // A second worker cannot take a live lease.
+  check((await call("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } })).status === 204, "worker B claim -> 204 (leases are live)")
+  const progressBody = (workerId: string, done: number) => ({
+    workerId, stage: "synthesizing", done, total: 2, title: "Smoke Text", author: "Smoke Author", language: "en", voice: voice.id,
+  })
+  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerB, 1) }), 409, "worker B progress on A's lease")
+  await expectStatus(
+    await call("PUT", `/api/worker/jobs/${text.id}/chapters/0?workerId=${workerB}&title=x&durationMs=1`, { body: chapter0, headers: { "content-type": "audio/mp4" } }),
+    409,
+    "worker B chapter upload on A's lease",
+  )
+
+  // Worker A reports progress, uploads chapters and the book, then completes.
+  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerA, 0) }), 204, "progress")
+  const chapters = [chapter0, chapter1]
+  for (const [index, bytes] of chapters.entries()) {
+    await expectStatus(
+      await call("PUT", `/api/worker/jobs/${text.id}/chapters/${index}?workerId=${workerA}&title=${encodeURIComponent(`Part ${index + 1} & more`)}&durationMs=1000`, {
+        body: bytes,
+        headers: { "content-type": "audio/mp4" },
+      }),
+      204,
+      `PUT chapter ${index}`,
+    )
+  }
+  const running = await expectStatus(await call("GET", `/api/episodes/${text.id}`), 200, "GET episode while Running")
+  check(
+    running.job._tag === "Running" && running.job.stage === "synthesizing" && running.title === "Smoke Text" && running.author === "Smoke Author" && running.chapters.length === 2,
+    "Running episode shows progress, metadata and chapters",
+    running,
+  )
+  const chapterAudio = await fetch(base + running.chapters[0].url)
+  check(
+    chapterAudio.status === 200 && chapterAudio.headers.get("content-type") === "audio/mp4" && (await chapterAudio.arrayBuffer()).byteLength === chapter0.length,
+    "chapter 0 plays while the job runs",
+  )
+
+  await expectStatus(await call("PUT", `/api/worker/jobs/${text.id}/book?workerId=${workerA}`, { body: book, headers: { "content-type": "audio/mp4" } }), 204, "PUT book")
+  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/complete`, { json: { workerId: workerA, durationMs: 2000 } }), 204, "complete")
+  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/complete`, { json: { workerId: workerA, durationMs: 2000 } }), 204, "complete again (idempotent)")
+  await expectStatus(await call("POST", `/api/episodes/${text.id}/retry`), 409, "retry of a Ready job")
+
+  const list = await expectStatus(await call("GET", "/api/episodes"), 200, "GET /api/episodes")
+  check(list.episodes[0].id === file.id && list.episodes[1].id === text.id, "episodes are newest first")
+  const ready = list.episodes.find((e: any) => e.id === text.id)
+  check(
+    ready.job._tag === "Ready" && ready.durationMs === 2000 && ready.chapters.length === 2 &&
+      ready.chapters[1].title === "Part 2 & more" && ready.chapters[1].url === `/media/${feedToken}/episodes/${text.id}/chapters/001.m4a` &&
+      ready.bookUrl === `/media/${feedToken}/episodes/${text.id}/book.m4b`,
+    "Ready episode has chapters and bookUrl",
+    ready,
+  )
+
+  // Feed.
+  const feedInfo = await expectStatus(await call("GET", "/api/feed"), 200, "GET /api/feed")
+  check(feedInfo.url === `${base}/feed/${feedToken}/rss.xml`, "feed url", feedInfo)
+  const feedResponse = await fetch(feedInfo.url)
+  const xml = await feedResponse.text()
+  check(feedResponse.status === 200 && feedResponse.headers.get("content-type")?.startsWith("application/rss+xml"), "feed is served as RSS")
+  execFileSync("xmllint", ["--noout", "-"], { input: xml })
+  check(true, "feed parses as XML (xmllint)")
+  const readyCount = list.episodes.filter((e: any) => e.job._tag === "Ready" && e.bookUrl !== null).length
+  const items = xml.match(/<item>/g)?.length ?? 0
+  check(items === readyCount, `feed has one item per ready episode (${items})`, { items, readyCount })
+  check(
+    xml.includes(`<enclosure url="${base}/media/${feedToken}/episodes/${text.id}/book.m4b" length="${book.length}" type="audio/x-m4a"/>`) &&
+      xml.includes("<itunes:duration>2</itunes:duration>") &&
+      xml.includes(`<guid isPermaLink="false">${text.id}</guid>`),
+    "feed item has absolute enclosure, length, duration and guid",
+  )
+  check((await fetch(`${base}/feed/wrong/rss.xml`)).status === 401, "wrong feed token -> 401")
+  const coverImage = await fetch(`${base}/feed/${feedToken}/cover.png`)
+  check(coverImage.status === 200 && coverImage.headers.get("content-type") === "image/png", "channel image is served")
+
+  // Media with Range.
+  const bookUrl = base + ready.bookUrl
+  const full = await fetch(bookUrl)
+  check(full.status === 200 && full.headers.get("content-length") === String(book.length) && full.headers.get("accept-ranges") === "bytes", "GET book -> 200 with length and accept-ranges")
+  await full.arrayBuffer()
+  const partial = await fetch(bookUrl, { headers: { range: "bytes=0-99" } })
+  const partialBytes = Buffer.from(await partial.arrayBuffer())
+  check(
+    partial.status === 206 && partial.headers.get("content-range") === `bytes 0-99/${book.length}` && partialBytes.equals(book.subarray(0, 100)) &&
+      partial.headers.get("content-type") === "audio/x-m4a",
+    "Range bytes=0-99 -> 206 with Content-Range and the right bytes",
+    Object.fromEntries(partial.headers),
+  )
+  const suffix = await fetch(bookUrl, { headers: { range: "bytes=-10" } })
+  check(suffix.status === 206 && Buffer.from(await suffix.arrayBuffer()).equals(book.subarray(book.length - 10)), "Range bytes=-10 -> 206 last 10 bytes")
+  const open = await fetch(bookUrl, { headers: { range: `bytes=${book.length - 5}-` } })
+  check(open.status === 206 && open.headers.get("content-range") === `bytes ${book.length - 5}-${book.length - 1}/${book.length}`, "Range bytes=N- -> 206")
+  await open.arrayBuffer()
+  const unsatisfiable = await fetch(bookUrl, { headers: { range: `bytes=${book.length + 10}-` } })
+  check(unsatisfiable.status === 416 && unsatisfiable.headers.get("content-range") === `bytes */${book.length}`, "Range past the end -> 416", unsatisfiable.status)
+  const head = await fetch(bookUrl, { method: "HEAD" })
+  check(head.status === 200 && head.headers.get("content-length") === String(book.length), "HEAD book -> 200 with length")
+  check((await fetch(`${base}/media/wrong/episodes/${text.id}/book.m4b`)).status === 401, "media with wrong feed token -> 401")
+
+  // Failure and retry of the File job.
+  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, reason: "nope" } }), 409, "worker B fail on A's lease")
+  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerA, reason: "extraction failed" } }), 204, "fail")
+  const failed = await expectStatus(await call("GET", `/api/episodes/${file.id}`), 200, "GET failed episode")
+  check(failed.job._tag === "Failed" && failed.job.reason === "extraction failed", "job is Failed with reason", failed.job)
+  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/progress`, { json: progressBody(workerA, 1) }), 409, "progress after fail")
+  const retried = await expectStatus(await call("POST", `/api/episodes/${file.id}/retry`), 200, "retry")
+  check(retried.job._tag === "Queued", "retry puts the job back to Queued", retried.job)
+  const reclaim = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } }), 200, "worker B claims the retried job")
+  check(reclaim.job.episodeId === file.id, "retried job is claimable", reclaim)
+  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, reason: "smoke cleanup" } }), 204, "worker B fails it")
+
+  // Delete removes the episode and its media.
+  for (const episode of [text, file]) {
+    await expectStatus(await call("DELETE", `/api/episodes/${episode.id}`), 204, `DELETE ${episode.source._tag} episode`)
+    await expectStatus(await call("GET", `/api/episodes/${episode.id}`), 404, `GET deleted ${episode.source._tag} episode`)
+  }
+  for (const url of [...ready.chapters.map((c: any) => c.url), ready.bookUrl]) {
+    check((await fetch(base + url)).status === 404, `media gone: ${url.split("/").slice(-2).join("/")}`)
+  }
+  await expectStatus(await call("GET", `/api/worker/jobs/${file.id}/source`), 404, "upload gone")
+
+  console.log(`\nsmoke passed: ${checks} checks`)
+} catch (error) {
+  console.error(error instanceof Error ? error.message : error)
+  process.exitCode = 1
+} finally {
+  rmSync(dir, { recursive: true, force: true })
+  await Promise.all(created.map((id) => call("DELETE", `/api/episodes/${id}`)))
+}

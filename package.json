@@ -4,8 +4,10 @@
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "dev:api": "corepack pnpm --filter @fama/api dev",
+    "smoke:api": "corepack pnpm --filter @fama/api smoke"
   },
   "devDependencies": {
     "typescript": "catalog:"
