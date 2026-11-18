@@ -35,9 +35,6 @@ importers:
       '@fama/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@fama/player':
-        specifier: file:./modules/fama-player
-        version: file:apps/mobile/modules/fama-player
       effect:
         specifier: 'catalog:'
         version: 4.1.3
@@ -747,9 +744,6 @@ packages:
   '@expo/xcpretty@4.4.7':
     resolution: {integrity: sha512-EbxYllZ7/ozONVZd425cm4XnolfW+AmSFT5aP7Jdno6oc3WrYQcHz2CO20z/2rwWwYgztmV2PXvYH+BQ8YFjqg==}
     hasBin: true
-
-  '@fama/player@file:apps/mobile/modules/fama-player':
-    resolution: {directory: apps/mobile/modules/fama-player, type: directory}
 
   '@isaacs/ttlcache@1.4.1':
     resolution: {integrity: sha512-RQgQ4uQ+pLbqXfOmieB91ejmLwvSgv9nLx6sT6sD83s7umBypgg+OIBOBbEUiJXrfpnp9j0mRhYYdzp9uqq3lA==}
@@ -3723,8 +3717,6 @@ snapshots:
       '@babel/code-frame': 7.29.7
       chalk: 4.1.2
       js-yaml: 4.3.2
-
-  '@fama/player@file:apps/mobile/modules/fama-player': {}
 
   '@isaacs/ttlcache@1.4.1': {}
 
