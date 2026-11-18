@@ -13,6 +13,7 @@ from fama_worker.model import Chapter, Document
 _PAGE_NUMBER = re.compile(r"^\W*(?:page\s*)?(?:\d+|[ivxlcdm]+)(?:\s*(?:of|/)\s*\d+)?\W*$", re.IGNORECASE)
 EDGE_BLOCKS = 2
 REPEAT_SHARE = 0.3
+RUNNING_MAX_WORDS = 12
 MIN_LETTER_SHARE = 0.5  # below this a block is a table of numbers or an equation
 LEAD_MIN_WORDS = 100
 
@@ -52,7 +53,8 @@ def _pages(doc) -> list[list[str]]:
     def keep(index: int, blocks: list[str]) -> bool:
         text = blocks[index]
         at_edge = index < EDGE_BLOCKS or index >= len(blocks) - EDGE_BLOCKS
-        return not (at_edge and (_PAGE_NUMBER.match(text) or _edge_key(text) in running))
+        is_running = len(text.split()) <= RUNNING_MAX_WORDS and _edge_key(text) in running
+        return not (at_edge and (_PAGE_NUMBER.match(text) or is_running))
 
     return [[b for i, b in enumerate(blocks) if keep(i, blocks) and _prose(b)] for blocks in pages]
 

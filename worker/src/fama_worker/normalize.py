@@ -51,13 +51,17 @@ def _tidy(text: str) -> str:
 
 
 _SENTENCE_START = re.compile(r"\s+[A-ZÁÉÍÓÚÝÞÆÖ]")
+# Expansions that come before a name or number, so their dot never ends a sentence.
+_LEADING = {"Mister", "Missus", "Miz", "Doctor", "Professor", "number", "page", "pages", "figure", "circa",
+            "doktor", "séra", "númer", "blaðsíða", "klukkan", "samkvæmt", "samanber", "sirka"}
 
 
 def _apply(text: str, table: dict[str, str]) -> str:
     """Expand abbreviations. A dot that also ended the sentence stays."""
     for pattern, spoken in table.items():
         def expand(match: re.Match, spoken: str = spoken) -> str:
-            ends_sentence = match[0].endswith(".") and _SENTENCE_START.match(match.string, match.end())
+            ends_sentence = (spoken not in _LEADING and match[0].endswith(".")
+                             and _SENTENCE_START.match(match.string, match.end()))
             return spoken + "." if ends_sentence else spoken
 
         text = re.sub(pattern, expand, text)
