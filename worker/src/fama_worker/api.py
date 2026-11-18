@@ -1,0 +1,124 @@
+"""HTTP client for the worker endpoints in docs/api.md."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+
+from fama_worker.model import TextSource, UrlSource, VoiceRef
+
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+RETRIES = 5
+
+
+class LeaseLost(Exception):
+    """409: another worker holds the job, or the job is no longer Running. Drop it."""
+
+
+class ApiError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class FileRef:
+    file_name: str
+    content_type: str
+
+
+@dataclass(frozen=True)
+class ClaimedJob:
+    episode_id: str
+    source: UrlSource | TextSource | FileRef
+    source_path: str | None
+    voice: VoiceRef | None
+    speed: float
+    completed_chapters: frozenset[int]
+
+    @staticmethod
+    def parse(data: dict) -> ClaimedJob:
+        raw = data["source"]
+        match raw["_tag"]:
+            case "Url":
+                source = UrlSource(raw["url"])
+            case "Text":
+                source = TextSource(raw["title"], raw["text"])
+            case "File":
+                source = FileRef(raw["fileName"], raw["contentType"])
+            case tag:
+                raise ApiError(f"Unknown source tag {tag!r}")
+        return ClaimedJob(
+            episode_id=data["episodeId"],
+            source=source,
+            source_path=data["sourcePath"],
+            voice=VoiceRef.parse(data["voice"]) if data["voice"] else None,
+            speed=float(data["speed"]),
+            completed_chapters=frozenset(int(i) for i in data["completedChapters"]),
+        )
+
+
+class Api:
+    def __init__(self, base_url: str, token: str, worker_id: str, transport: httpx.BaseTransport | None = None):
+        self.worker_id = worker_id
+        self.client = httpx.Client(base_url=base_url.rstrip("/"), transport=transport, timeout=120,
+                                   headers={"Authorization": f"Bearer {token}"})
+
+    def _send(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Retry network errors, 429 and 5xx. 409 means the lease is gone."""
+        for attempt in range(RETRIES):
+            try:
+                response = self.client.request(method, path, **kwargs)
+            except httpx.TransportError as error:
+                failure: str = str(error)
+            else:
+                if response.status_code == 409:
+                    raise LeaseLost(f"{method} {path}: {response.text[:200]}")
+                if response.status_code < 400:
+                    return response
+                failure = f"{method} {path} -> {response.status_code}: {response.text[:300]}"
+                if response.status_code != 429 and response.status_code < 500:
+                    raise ApiError(failure)
+            if attempt < RETRIES - 1:
+                time.sleep(2**attempt)
+        raise ApiError(failure)
+
+    def claim(self, voices: list[dict]) -> ClaimedJob | None:
+        response = self._send("POST", "/api/worker/claim", json={"workerId": self.worker_id, "voices": voices})
+        return None if response.status_code == 204 else ClaimedJob.parse(response.json()["job"])
+
+    def source(self, path: str) -> bytes:
+        return self._send("GET", path).content
+
+    def progress(self, job: str, stage: str, done: int, total: int, *, title: str | None, author: str | None,
+                 language: str | None, voice: str | None) -> None:
+        self._send("POST", f"/api/worker/jobs/{job}/progress", json={
+            "workerId": self.worker_id, "stage": stage, "done": done, "total": total,
+            "title": title, "author": author, "language": language, "voice": voice,
+        })
+
+    def _put(self, path: str, file: Path, content_type: str, params: dict) -> None:
+        data = file.read_bytes()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise ApiError(f"{file.name} is {len(data)} bytes; uploads are at most {MAX_UPLOAD_BYTES}")
+        self._send("PUT", path, content=data, params={"workerId": self.worker_id, **params},
+                   headers={"Content-Type": content_type})
+
+    def put_chapter(self, job: str, index: int, title: str, duration_ms: int, file: Path) -> None:
+        self._put(f"/api/worker/jobs/{job}/chapters/{index}", file, "audio/mp4",
+                  {"title": title, "durationMs": str(duration_ms)})
+
+    def put_book(self, job: str, file: Path) -> None:
+        self._put(f"/api/worker/jobs/{job}/book", file, "audio/mp4", {})
+
+    def put_cover(self, job: str, file: Path) -> None:
+        kind = "image/png" if file.suffix == ".png" else "image/jpeg"
+        self._put(f"/api/worker/jobs/{job}/cover", file, kind, {})
+
+    def complete(self, job: str, duration_ms: int) -> None:
+        self._send("POST", f"/api/worker/jobs/{job}/complete",
+                   json={"workerId": self.worker_id, "durationMs": duration_ms})
+
+    def fail(self, job: str, reason: str) -> None:
+        self._send("POST", f"/api/worker/jobs/{job}/fail", json={"workerId": self.worker_id, "reason": reason[:1000]})
