@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "@fontsource-variable/dm-sans";
+
+@theme {
+  --font-sans: "DM Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-popover: var(--popover);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-accent: var(--accent);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+}
+
+:root {
+  color-scheme: dark;
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --surface: #121212;
+  --popover: #161616;
+  --muted-foreground: #a1a1a1;
+  --faint: rgb(255 255 255 / 14%);
+  --border: rgb(255 255 255 / 8%);
+  --input: rgb(255 255 255 / 12%);
+  --accent: rgb(255 255 255 / 6%);
+  --ring: rgb(255 255 255 / 40%);
+  --destructive: #f87171;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --background: #fafafa;
+    --foreground: #171717;
+    --surface: #ffffff;
+    --popover: #ffffff;
+    --muted-foreground: #5c5c5c;
+    --faint: rgb(0 0 0 / 12%);
+    --border: rgb(0 0 0 / 8%);
+    --input: rgb(0 0 0 / 14%);
+    --accent: rgb(0 0 0 / 5%);
+    --ring: rgb(0 0 0 / 40%);
+    --destructive: #dc2626;
+  }
+}
+
+@layer base {
+  html {
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+  }
+  ::selection {
+    background: var(--foreground);
+    color: var(--background);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--faint) transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  textarea,
+  input {
+    caret-color: var(--foreground);
+  }
+}
