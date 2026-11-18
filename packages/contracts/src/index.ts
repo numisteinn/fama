@@ -1,0 +1,128 @@
+import { Schema } from "effect"
+
+export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
+export type EpisodeId = typeof EpisodeId.Type
+
+export const WorkerId = Schema.String.pipe(Schema.brand("WorkerId"))
+export type WorkerId = typeof WorkerId.Type
+
+/** `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. */
+export const VoiceRef = Schema.String.pipe(Schema.brand("VoiceRef"))
+export type VoiceRef = typeof VoiceRef.Type
+
+export const Voice = Schema.Struct({
+  id: VoiceRef,
+  engine: Schema.String,
+  name: Schema.String,
+  language: Schema.String,
+  gender: Schema.NullOr(Schema.Literals(["female", "male"])),
+})
+export interface Voice extends Schema.Schema.Type<typeof Voice> {}
+
+export const SourceInput = Schema.TaggedUnion({
+  Url: { url: Schema.String },
+  Text: { title: Schema.NullOr(Schema.String), text: Schema.String },
+})
+export type SourceInput = typeof SourceInput.Type
+
+export const Source = Schema.TaggedUnion({
+  Url: { url: Schema.String },
+  Text: { title: Schema.NullOr(Schema.String), text: Schema.String },
+  File: { fileName: Schema.String, contentType: Schema.String },
+})
+export type Source = typeof Source.Type
+
+export const Stage = Schema.Literals(["extracting", "synthesizing", "encoding", "uploading"])
+export type Stage = typeof Stage.Type
+
+export const JobState = Schema.TaggedUnion({
+  Queued: {},
+  Running: {
+    workerId: WorkerId,
+    stage: Stage,
+    done: Schema.Number,
+    total: Schema.Number,
+    heartbeatAt: Schema.String,
+  },
+  Ready: { finishedAt: Schema.String },
+  Failed: { reason: Schema.String, failedAt: Schema.String },
+})
+export type JobState = typeof JobState.Type
+
+export const Chapter = Schema.Struct({
+  index: Schema.Number,
+  title: Schema.String,
+  durationMs: Schema.Number,
+  url: Schema.String,
+})
+export interface Chapter extends Schema.Schema.Type<typeof Chapter> {}
+
+export const Episode = Schema.Struct({
+  id: EpisodeId,
+  createdAt: Schema.String,
+  source: Source,
+  title: Schema.String,
+  author: Schema.NullOr(Schema.String),
+  language: Schema.NullOr(Schema.String),
+  voice: Schema.NullOr(VoiceRef),
+  speed: Schema.Number,
+  durationMs: Schema.NullOr(Schema.Number),
+  chapters: Schema.Array(Chapter),
+  bookUrl: Schema.NullOr(Schema.String),
+  coverUrl: Schema.NullOr(Schema.String),
+  job: JobState,
+})
+export interface Episode extends Schema.Schema.Type<typeof Episode> {}
+
+// Client API
+
+export const CreateEpisode = Schema.Struct({
+  source: SourceInput,
+  voice: Schema.NullOr(VoiceRef),
+  speed: Schema.Number,
+})
+export interface CreateEpisode extends Schema.Schema.Type<typeof CreateEpisode> {}
+
+export const EpisodeList = Schema.Struct({ episodes: Schema.Array(Episode) })
+export const VoiceList = Schema.Struct({ voices: Schema.Array(Voice) })
+export const FeedInfo = Schema.Struct({ url: Schema.String })
+
+// Worker API
+
+export const ClaimRequest = Schema.Struct({
+  workerId: WorkerId,
+  voices: Schema.Array(Voice),
+})
+export interface ClaimRequest extends Schema.Schema.Type<typeof ClaimRequest> {}
+
+export const ClaimedJob = Schema.Struct({
+  episodeId: EpisodeId,
+  source: Source,
+  /** API path to GET the uploaded bytes. Set only for `File` sources. */
+  sourcePath: Schema.NullOr(Schema.String),
+  voice: Schema.NullOr(VoiceRef),
+  speed: Schema.Number,
+  /** Chapter indexes already uploaded by an earlier attempt. The worker skips them. */
+  completedChapters: Schema.Array(Schema.Number),
+})
+export interface ClaimedJob extends Schema.Schema.Type<typeof ClaimedJob> {}
+
+export const ClaimResponse = Schema.Struct({ job: ClaimedJob })
+
+export const ProgressRequest = Schema.Struct({
+  workerId: WorkerId,
+  stage: Stage,
+  done: Schema.Number,
+  total: Schema.Number,
+  title: Schema.NullOr(Schema.String),
+  author: Schema.NullOr(Schema.String),
+  language: Schema.NullOr(Schema.String),
+  voice: Schema.NullOr(VoiceRef),
+})
+export interface ProgressRequest extends Schema.Schema.Type<typeof ProgressRequest> {}
+
+export const CompleteRequest = Schema.Struct({ workerId: WorkerId, durationMs: Schema.Number })
+export const FailRequest = Schema.Struct({ workerId: WorkerId, reason: Schema.String })
+
+/** A job whose heartbeat is older than this can be claimed by another worker. */
+export const LEASE_MS = 10 * 60 * 1000
