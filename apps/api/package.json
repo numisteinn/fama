@@ -1,0 +1,23 @@
+{
+  "name": "@fama/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply DB --local && wrangler dev --port 8787",
+    "typecheck": "tsc -p . && tsc -p scripts",
+    "test": "vitest run",
+    "smoke": "node scripts/smoke.ts",
+    "types": "wrangler types"
+  },
+  "dependencies": {
+    "@fama/contracts": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "catalog:",
+    "vitest": "5.1.0",
+    "wrangler": "4.163.0"
+  }
+}
