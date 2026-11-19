@@ -6,7 +6,7 @@ Screens: Library (tab), Add (tab), Settings (tab), Player (modal), share confirm
 
 ## Run on the simulator
 
-Start the stack from the repo root with `corepack pnpm dev` (API on port 8787, see the root README). Then:
+Start the stack from the repo root with `pnpm dev` (API on port 8787, see the root README). Then:
 
 ```sh
 cd apps/mobile
@@ -14,12 +14,12 @@ npx expo prebuild --platform ios    # writes ios/ (git-ignored)
 xcodebuild -workspace ios/Fama.xcworkspace -scheme Fama -sdk iphonesimulator \
   -destination id=<simulator-udid> -derivedDataPath ios/build build
 xcrun simctl install <simulator-udid> ios/build/Build/Products/Debug-iphonesimulator/Fama.app
-corepack pnpm start                 # Metro for the dev client
+pnpm start                 # Metro for the dev client
 ```
 
 In the app, open Settings and enter `http://localhost:8787` and the `FAMA_API_TOKEN` from `apps/api/.dev.vars` (`dev-api-token` by default). On a phone, use the Mac's LAN address instead, for example `http://192.168.0.5:8787`.
 
-`corepack pnpm typecheck` runs `tsc`.
+`pnpm typecheck` runs `tsc`.
 
 ## Audio: a local Swift module, not expo-audio or react-native-track-player
 

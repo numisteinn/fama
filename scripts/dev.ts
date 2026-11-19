@@ -1,4 +1,4 @@
-// `corepack pnpm dev`: the API (wrangler dev, local D1 and R2, serving the web build), the web build in watch
+// `pnpm dev`: the API (wrangler dev, local D1 and R2, serving the web build), the web build in watch
 // mode, and the Mac worker. Ctrl-C stops all three. Each child runs in its own process group, so stopping a group
 // also stops what it spawned (workerd, Python), and nothing else on the machine.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process"

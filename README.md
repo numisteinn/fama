@@ -4,15 +4,16 @@ Send a link, file or text from your iPhone or the web, and get narrated audio (E
 
 ## Run it
 
-You need Node 24, [uv](https://docs.astral.sh/uv/) and ffmpeg (`brew install ffmpeg`).
+You need [mise](https://mise.jdx.dev) and ffmpeg (`brew install ffmpeg`). `mise.toml` pins Node, pnpm and uv.
 
 ```sh
-corepack pnpm install
+mise install
+pnpm install
 (cd worker && uv sync)
-corepack pnpm dev
+pnpm dev
 ```
 
-`corepack pnpm dev` starts three processes. Ctrl-C stops all of them.
+`pnpm dev` starts three processes. Ctrl-C stops all of them.
 
 - `api`: `wrangler dev` with local D1 and R2 on port 8787, on every network interface. It also serves the web app.
 - `web`: the web build in watch mode.

@@ -5,10 +5,10 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "node scripts/dev.ts",
-    "typecheck": "corepack pnpm -r typecheck",
-    "test": "corepack pnpm -r test",
-    "dev:api": "corepack pnpm --filter @fama/api dev",
-    "smoke:api": "corepack pnpm --filter @fama/api smoke"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev:api": "pnpm --filter @fama/api dev",
+    "smoke:api": "pnpm --filter @fama/api smoke"
   },
   "devDependencies": {
     "typescript": "catalog:"
