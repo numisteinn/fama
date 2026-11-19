@@ -35,7 +35,10 @@ function describe(status: number): string {
 export function normalizeServerUrl(input: string): string {
   const trimmed = input.trim().replace(/\/+$/, "")
   if (trimmed === "") return ""
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  // A dev server on the LAN speaks plain HTTP; anything else is assumed to be behind TLS.
+  const local = /^(localhost|\d{1,3}(\.\d{1,3}){3}|[^/:]+\.local)(:\d+)?$/i.test(trimmed)
+  return `${local ? "http" : "https"}://${trimmed}`
 }
 
 export type Api = ReturnType<typeof createApi>
