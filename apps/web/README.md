@@ -8,10 +8,4 @@ corepack pnpm --filter @fama/web build      # apps/web/dist, served by the API W
 corepack pnpm --filter @fama/web typecheck
 ```
 
-Without the API, run the mock (fixtures, a fake worker, real m4a files with Range support; token `dev`):
-
-```sh
-corepack pnpm --filter @fama/web mock
-```
-
-`PORT=8788 corepack pnpm --filter @fama/web mock` and `FAMA_API_URL=http://127.0.0.1:8788 corepack pnpm --filter @fama/web dev` move it off 8787 when `wrangler dev` holds that port.
+The whole stack (API, this build in watch mode, the worker) runs with `corepack pnpm dev` from the repo root.

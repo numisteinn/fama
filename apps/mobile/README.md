@@ -6,11 +6,10 @@ Screens: Library (tab), Add (tab), Settings (tab), Player (modal), share confirm
 
 ## Run on the simulator
 
+Start the stack from the repo root with `corepack pnpm dev` (API on port 8787, see the root README). Then:
+
 ```sh
-corepack pnpm install
 cd apps/mobile
-corepack pnpm fixtures              # spoken chapters via macOS `say` + ffmpeg, into scripts/fixtures/
-corepack pnpm mock-api              # http://localhost:8790, token dev-token
 npx expo prebuild --platform ios    # writes ios/ (git-ignored)
 xcodebuild -workspace ios/Fama.xcworkspace -scheme Fama -sdk iphonesimulator \
   -destination id=<simulator-udid> -derivedDataPath ios/build build
@@ -18,9 +17,7 @@ xcrun simctl install <simulator-udid> ios/build/Build/Products/Debug-iphonesimul
 corepack pnpm start                 # Metro for the dev client
 ```
 
-In the app, open Settings and enter `http://localhost:8790` and `dev-token`. Port 8790 avoids `wrangler dev` on 8787. Set `PORT` and `FAMA_API_TOKEN` to change them.
-
-The mock serves the client endpoints of `docs/api.md` from memory. It encodes every response with the `@fama/contracts` schemas, so a drift from the contract throws in the mock. Fixtures: one Ready episode with 2 chapters and a cover, one Running episode that gains a chapter every 45 s, one Failed episode. New and retried episodes run Queued, then Running, then Ready, one chapter every 6 s. `/media/...` supports `Range`.
+In the app, open Settings and enter `http://localhost:8787` and the `FAMA_API_TOKEN` from `apps/api/.dev.vars` (`dev-api-token` by default). On a phone, use the Mac's LAN address instead, for example `http://192.168.0.5:8787`.
 
 `corepack pnpm typecheck` runs `tsc`.
 

@@ -6,8 +6,6 @@
   "scripts": {
     "start": "expo start --dev-client",
     "ios": "EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios",
-    "mock-api": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/mock-api.ts",
-    "fixtures": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/make-fixtures.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
