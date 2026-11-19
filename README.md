@@ -30,6 +30,25 @@ Build and install the app as `apps/mobile/README.md` says. In the app, open Sett
 - Server: `http://localhost:8787` on the simulator. On a phone on the same Wi-Fi, the Mac's LAN address, for example `http://192.168.0.5:8787`. `wrangler dev` prints it at start.
 - API token: `FAMA_API_TOKEN` from `apps/api/.dev.vars`.
 
+## Deploy
+
+The API and web app run as one Cloudflare Worker with D1 and R2. To deploy your own:
+
+```sh
+cd apps/api
+npx wrangler d1 create fama            # put the id in wrangler.jsonc
+npx wrangler r2 bucket create fama-media
+npx wrangler d1 migrations apply DB --remote
+pnpm --filter @fama/web build
+npx wrangler deploy --secrets-file <file>   # JSON: {"FAMA_API_TOKEN": "...", "FAMA_FEED_TOKEN": "..."}
+```
+
+Then point the Mac worker at it:
+
+```sh
+cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <FAMA_API_TOKEN>
+```
+
 ## Parts
 
 | Path | What |

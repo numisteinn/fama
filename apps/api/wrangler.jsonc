@@ -14,7 +14,7 @@
     {
       "binding": "DB",
       "database_name": "fama",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "9ff2868d-bc63-4970-9493-66109b858984",
       "migrations_dir": "migrations"
     }
   ],
