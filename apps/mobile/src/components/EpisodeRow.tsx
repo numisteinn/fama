@@ -76,8 +76,8 @@ function Meta({ episode }: { episode: Episode }) {
     return (
       <View style={styles.meta}>
         <Icon name="exclamationmark.circle.fill" size={15} color={colors.danger} />
-        <Text style={[styles.metaText, { color: colors.danger }]} numberOfLines={1}>
-          {jobLabel(job)}
+        <Text style={[styles.metaText, styles.reason]} numberOfLines={1}>
+          {job.reason}
         </Text>
       </View>
     )
@@ -141,6 +141,7 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.medium, fontSize: 17, lineHeight: 22, color: colors.text },
   meta: { flexDirection: "row", alignItems: "center", gap: 6 },
   metaText: { fontFamily: fonts.regular, fontSize: 15, color: colors.textSecondary, fontVariant: ["tabular-nums"] },
+  reason: { flexShrink: 1, color: colors.danger },
   progressTrack: { position: "absolute", left: space.lg + 56 + space.md, right: space.lg, bottom: 6, height: 3, borderRadius: 2, backgroundColor: colors.surfaceRaised },
   progressFill: { height: 3, borderRadius: 2, backgroundColor: colors.accent },
   retry: {
