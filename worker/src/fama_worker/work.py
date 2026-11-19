@@ -24,7 +24,7 @@ from fama_worker.pipeline import ChapterFile, narrate
 HEARTBEAT_S = 30
 PROGRESS_THROTTLE_S = 5
 IDLE_MIN_S = 2
-IDLE_MAX_S = 60
+IDLE_MAX_S = 10  # a new episode waits at most this long in Queued
 
 
 def log(message: str) -> None:
