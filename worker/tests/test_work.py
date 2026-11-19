@@ -59,7 +59,7 @@ class FakeApi:
         elif kind == "complete":
             self.state = "Ready"
         elif kind == "fail":
-            self.state = "Failed"
+            self.state, self.reason = "Failed", json.loads(body)["reason"]
         return 204, b""
 
 
@@ -142,6 +142,7 @@ def test_extraction_error_fails_the_job(tone, server, tmp_path):
     fake, url = server(job)
     _run(url, tmp_path)
     assert fake.state == "Failed"
+    assert fake.reason == "Unsupported file type '.docx'. Use PDF, EPUB, TXT, MD or HTML."
 
 
 def test_heartbeat_sends_progress_while_idle(tone, server, tmp_path):

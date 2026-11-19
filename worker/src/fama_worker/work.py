@@ -153,7 +153,8 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
     except LeaseLost as error:
         log(f"{episode}: dropped, lease lost ({error})")
     except Exception as error:  # the job fails; the loop goes on
-        reason = f"{type(error).__name__}: {error}"
+        # Extractors raise ValueError with a message meant for the user; anything else is a bug worth naming.
+        reason = str(error) if isinstance(error, ValueError) else f"{type(error).__name__}: {error}"
         log(f"{episode}: failed: {reason}")
         try:
             api.fail(episode, reason)

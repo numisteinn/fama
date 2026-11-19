@@ -78,7 +78,12 @@ def url_title(url: str) -> str:
 
 def download(url: str) -> tuple[httpx.Response, Path | None]:
     """Fetch the URL. A PDF or EPUB lands in a temporary file for the file extractors."""
-    response = fetch(url)
+    try:
+        response = fetch(url)
+    except httpx.HTTPStatusError as error:
+        raise ValueError(f"The page returned {error.response.status_code} {error.response.reason_phrase}.") from error
+    except httpx.TransportError as error:
+        raise ValueError(f"Could not fetch the page: {error}") from error
     kind = response.headers.get("content-type", "").split(";")[0].strip()
     suffix = {"application/pdf": ".pdf", "application/epub+zip": ".epub"}.get(kind)
     if suffix is None and Path(urlparse(url).path).suffix.lower() in (".pdf", ".epub"):
