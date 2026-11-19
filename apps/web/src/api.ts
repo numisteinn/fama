@@ -41,8 +41,8 @@ function messageFor(status: number, body: string): string {
   if (status === 413) return "The file is too large"
   try {
     const parsed: unknown = JSON.parse(body)
-    if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") {
-      return parsed.error
+    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") {
+      return parsed.message
     }
   } catch {
     // Not JSON.
