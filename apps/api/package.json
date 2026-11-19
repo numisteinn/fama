@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler d1 migrations apply DB --local && wrangler dev --port 8787",
+    "dev": "wrangler d1 migrations apply DB --local && wrangler dev",
     "typecheck": "tsc -p . && tsc -p scripts",
     "test": "vitest run",
     "smoke": "node scripts/smoke.ts",

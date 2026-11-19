@@ -4,6 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "dev": "node scripts/dev.ts",
     "typecheck": "corepack pnpm -r typecheck",
     "test": "corepack pnpm -r test",
     "dev:api": "corepack pnpm --filter @fama/api dev",
