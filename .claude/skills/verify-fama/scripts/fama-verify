@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# Verification instance of Fama: local wrangler dev on its own port and its own empty state, the Mac worker, a
+# fixture server, and (for the iPhone) Metro. Never talks to the deployed server.
+#
+#   fama-verify up [--no-worker]   fresh API + web on :8788, fixtures on :8790, worker (default on)
+#   fama-verify metro              Metro on :8081 for the simulator dev client
+#   fama-verify worker             start the worker later (after `up --no-worker`)
+#   fama-verify doctor             read-only health check
+#   fama-verify api METHOD PATH    curl the verification API with the token, for example: api GET /api/episodes
+#   fama-verify wait ID [SECONDS]  poll episode ID until Ready or Failed (default 180 s), print a summary
+#   fama-verify feed               print the feed URL
+#   fama-verify down               stop what `up`, `metro` and `worker` started, copy logs to the evidence dir
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+SKILL="$REPO/.claude/skills/verify-fama"
+API_PORT="${FAMA_VERIFY_API_PORT:-8788}"
+FIXTURE_PORT="${FAMA_VERIFY_FIXTURE_PORT:-8790}"
+METRO_PORT=8081
+STATE="${FAMA_VERIFY_STATE:-${TMPDIR:-/tmp}/fama-verify}"
+EVIDENCE_ROOT="${FAMA_VERIFY_EVIDENCE:-$HOME/Developer/fama-shots/verify}"
+API="http://localhost:$API_PORT"
+TOKEN="dev-api-token"
+export _ZO_DOCTOR=0 FORCE_COLOR=0
+
+die() { echo "fama-verify: $*" >&2; exit 1; }
+note() { echo "fama-verify: $*" >&2; }
+
+# shellcheck disable=SC1091
+load() { [ -f "$STATE/run.env" ] && . "$STATE/run.env" || true; }
+save() { echo "$1=$2" >>"$STATE/run.env"; }
+alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+listener() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true; }
+pgid() { ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '; }
+
+# Start a command in its own process group, so `down` stops it and its children (workerd, Python) and nothing else.
+spawn() {
+  local name="$1" cwd="$2"; shift 2
+  set -m
+  (cd "$cwd" && exec nohup "$@" >"$STATE/$name.log" 2>&1) &
+  local pid=$!
+  set +m
+  save "$(echo "$name" | tr a-z A-Z)_PID" "$pid"
+  echo "$pid"
+}
+
+wait_for() {
+  local what="$1" seconds="$2"; shift 2
+  for _ in $(seq 1 "$seconds"); do
+    if "$@" >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  die "$what not ready after ${seconds}s. Logs: $STATE"
+}
+
+api() { curl -fsS -H "Authorization: Bearer $TOKEN" -X "$1" "$API$2" "${@:3}"; }
+voices_registered() { api GET /api/voices | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["voices"] else 1)'; }
+
+start_worker() {
+  load
+  alive "${WORKER_PID:-}" && die "worker already running (pid $WORKER_PID)"
+  spawn worker "$REPO/worker" uv run fama work --api "$API" --token "$TOKEN" \
+    --worker-id "verify-$RUN_ID" --out "$STATE/work" >/dev/null
+  wait_for "worker (voices registered)" 120 voices_registered
+  note "worker ready"
+}
+
+cmd_up() {
+  local worker=1
+  [ "${1:-}" = "--no-worker" ] && worker=0
+  load
+  if alive "${API_PID:-}"; then die "an instance is already up (api pid $API_PID). Run: fama-verify down"; fi
+  for port in "$API_PORT" "$FIXTURE_PORT"; do
+    [ -z "$(listener "$port")" ] || die "port $port is in use by pid $(listener "$port"), not by this run. Not touching it."
+  done
+  rm -rf "$STATE" && mkdir -p "$STATE"
+  RUN_ID="$(date +%Y%m%d-%H%M%S)"
+  save RUN_ID "$RUN_ID"
+  save EVIDENCE "$EVIDENCE_ROOT/$RUN_ID"
+  mkdir -p "$EVIDENCE_ROOT/$RUN_ID"
+  save COMMIT "$(git -C "$REPO" rev-parse --short HEAD)$(git -C "$REPO" diff --quiet || echo -dirty)"
+
+  [ -f "$REPO/apps/api/.dev.vars" ] || cp "$REPO/apps/api/.dev.vars.example" "$REPO/apps/api/.dev.vars"
+  grep -q "^FAMA_API_TOKEN=$TOKEN$" "$REPO/apps/api/.dev.vars" || die "apps/api/.dev.vars must set FAMA_API_TOKEN=$TOKEN"
+
+  note "building web (apps/web/dist)"
+  (cd "$REPO/apps/web" && ./node_modules/.bin/vite build >"$STATE/web-build.log" 2>&1) || die "web build failed: $STATE/web-build.log"
+  note "applying migrations to an empty local D1 in $STATE/wrangler"
+  (cd "$REPO/apps/api" && ./node_modules/.bin/wrangler d1 migrations apply DB --local --persist-to "$STATE/wrangler" \
+    >"$STATE/migrate.log" 2>&1) || die "migrations failed: $STATE/migrate.log"
+
+  spawn api "$REPO/apps/api" ./node_modules/.bin/wrangler dev --ip 127.0.0.1 --port "$API_PORT" --inspector-port 0 \
+    --persist-to "$STATE/wrangler" --show-interactive-dev-session=false >/dev/null
+  spawn fixtures "$SKILL/fixtures" python3 -m http.server "$FIXTURE_PORT" --bind 127.0.0.1 >/dev/null
+  wait_for "api" 60 api GET /api/episodes
+  wait_for "fixtures" 10 curl -fsS "http://localhost:$FIXTURE_PORT/article.html"
+  note "api ready on $API (state $STATE/wrangler)"
+  [ "$worker" = 1 ] && start_worker
+  load
+  echo "RUN_ID=$RUN_ID"
+  echo "WEB=$API"
+  echo "TOKEN=$TOKEN"
+  echo "FIXTURES=http://localhost:$FIXTURE_PORT"
+  echo "EVIDENCE=$EVIDENCE"
+}
+
+cmd_metro() {
+  load
+  [ -n "${RUN_ID:-}" ] || die "run 'fama-verify up' first"
+  local owner; owner="$(listener "$METRO_PORT")"
+  if [ -n "$owner" ]; then
+    alive "${METRO_PID:-}" && [ "$(pgid "$owner")" = "$METRO_PID" ] && { note "metro already up (ours)"; return; }
+    die "port $METRO_PORT is in use by pid $owner, not by this run. Stop it, or use it and say so in the report."
+  fi
+  spawn metro "$REPO/apps/mobile" ./node_modules/.bin/expo start --dev-client --port "$METRO_PORT" >/dev/null
+  wait_for "metro" 90 sh -c "curl -fsS http://localhost:$METRO_PORT/status | grep -q packager-status:running"
+  note "metro ready on :$METRO_PORT"
+}
+
+check() { if "$@"; then echo "ok   $label"; else echo "FAIL $label"; bad=1; fi; }
+
+cmd_doctor() {
+  load
+  [ -n "${RUN_ID:-}" ] || die "no verification instance. Run: fama-verify up"
+  bad=0
+  echo "run $RUN_ID, built from $COMMIT, now at $(git -C "$REPO" rev-parse --short HEAD)$(git -C "$REPO" diff --quiet || echo -dirty)"
+  label="api process alive (pid ${API_PID:-})"; check alive "${API_PID:-}"
+  local owner; owner="$(listener "$API_PORT")"
+  label="port $API_PORT owned by this run (listener pid ${owner:-none})"; check test -n "$owner" -a "$(pgid "${owner:-1}")" = "${API_PID:-x}"
+  label="token accepted (GET /api/episodes 200)"; check api GET /api/episodes -o /dev/null
+  label="no token refused (401)"; check test "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/episodes")" = 401
+  label="web app served"; check sh -c "curl -fsS $API/ | grep -q '<div id=\"root\"'"
+  label="fixtures served on :$FIXTURE_PORT"; check curl -fsS "http://localhost:$FIXTURE_PORT/article.html" -o /dev/null
+  if [ -n "${WORKER_PID:-}" ]; then
+    label="worker alive (pid $WORKER_PID)"; check alive "$WORKER_PID"
+    label="worker voices registered"; check voices_registered
+  else
+    echo "--   worker not started (fama-verify worker)"
+  fi
+  if [ -n "${METRO_PID:-}" ]; then
+    label="metro alive and serving"; check sh -c "curl -fsS http://localhost:$METRO_PORT/status | grep -q packager-status:running"
+  fi
+  [ "$bad" = 0 ] && echo "healthy" || { echo "unhealthy: see logs in $STATE"; exit 1; }
+}
+
+cmd_wait() {
+  local id="$1" seconds="${2:-180}"
+  for _ in $(seq 1 "$seconds"); do
+    local summary
+    summary="$(api GET "/api/episodes/$id" | python3 -c '
+import json, sys
+e = json.load(sys.stdin); j = e["job"]
+print(j["_tag"], json.dumps({"title": e["title"], "language": e["language"], "voice": e["voice"],
+  "durationMs": e["durationMs"], "chapters": [[c["index"], c["title"], c["durationMs"]] for c in e["chapters"]],
+  "bookUrl": e["bookUrl"], "job": j}, ensure_ascii=False))')"
+    case "$summary" in Ready*|Failed*) echo "$summary"; return;; esac
+    sleep 1
+  done
+  die "episode $id not done after ${seconds}s: $summary"
+}
+
+cmd_down() {
+  load
+  [ -n "${RUN_ID:-}" ] || { note "nothing to stop"; return; }
+  for name in WORKER METRO FIXTURES API; do
+    local var="${name}_PID" pid
+    pid="${!var:-}"
+    alive "$pid" || continue
+    kill -TERM -- "-$pid" 2>/dev/null || true
+    for _ in $(seq 1 10); do alive "$pid" || break; sleep 0.5; done
+    alive "$pid" && kill -KILL -- "-$pid" 2>/dev/null || true
+    note "stopped $name (group $pid)"
+  done
+  mkdir -p "$EVIDENCE/logs"
+  cp "$STATE"/*.log "$EVIDENCE/logs/" 2>/dev/null || true
+  rm -rf "$STATE"
+  note "evidence kept in $EVIDENCE"
+}
+
+case "${1:-}" in
+  up) shift; cmd_up "$@" ;;
+  metro) cmd_metro ;;
+  worker) start_worker ;;
+  doctor) cmd_doctor ;;
+  api) shift; api "$@"; echo ;;
+  wait) shift; cmd_wait "$@" ;;
+  feed) api GET /api/feed | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])' ;;
+  down) cmd_down ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -1,0 +1,46 @@
+# Add a link
+
+A user pastes a link to a web article. Fama adds an episode at once with a provisional title (the URL host and path), and the worker replaces the title with the article's real title, detects the language, and narrates it with the default voice for that language, or with the voice the user picked.
+
+## Sub-features
+
+- `link-web` adds a link from the web add bar.
+- `link-ios` adds a link from the iPhone Add screen.
+- `link-clipboard` fills the iPhone Link field from a link on the clipboard.
+- `link-language` picks the default voice by detected language: English `kokoro:af_heart`, Icelandic `piper:is_IS-steinn-medium`.
+- `link-voice` uses the voice and speed picked in the add bar or the Add screen.
+- `link-share` adds a link from the iOS share sheet (Safari, Share, Fama).
+- `link-invalid` refuses text that is not a link on iPhone (`Create` stays disabled). On the web, such text becomes a Text episode instead.
+
+## How to get to it (user POV)
+
+- Web: paste the link into `Link or text` and press Enter or choose `Add`.
+- iPhone: tab `Add`, mode `Link`, type or paste into `Link`, choose `Create`. The app then goes to `Library`.
+- iPhone: in Safari, Share, then `Fama`. A confirm sheet with voice and speed opens in the app. Choose `Add`.
+
+## Driving it with preview tools and agent-device
+
+Preconditions:
+
+- Baseline from `README.md`. The fixture server serves `http://localhost:8790/article.html` and `http://localhost:8790/grein.html`.
+- The library has no episode titled `The Quiet Harbour` or `Höfnin hljóða`.
+
+- **Web, add.** Type into textbox `Link or text` and press Enter. Run `preview_act {action: "type", locator: 'role=textbox[name="Link or text"]', text: "http://localhost:8790/article.html"}` and `preview_act {action: "press", key: "Enter"}`. A row with button `Play localhost:8790/article.html` (disabled) and status `Queued` appears at the top, and the textbox is empty.
+- **Web, real title.** Run `preview_wait_for {locator: 'role=button[name="Play The Quiet Harbour"]', timeoutMs: 60000}`. The row shows the real title and a duration.
+- **Web, stored episode.** Run `fama-verify api GET /api/episodes > $EVIDENCE/link-web/episodes.json`, then `fama-verify wait <id>`. The output starts with `Ready`, with `"language": "en"`, `"voice": "kokoro:af_heart"`, one chapter titled `The Quiet Harbour` of about 34000 ms, and a `bookUrl`.
+- **Web, audio exists.** Run `curl -s -D - -o $EVIDENCE/link-web/book.m4b -H 'Range: bytes=0-' http://localhost:8788<bookUrl>` and `ffprobe -v error -show_entries format=duration -of csv=p=0 $EVIDENCE/link-web/book.m4b`. The headers say `206 Partial Content` and `audio/x-m4a`. The duration is about 34 s.
+- **iPhone, add.** Run `$AD press 'label="Add"'`, `$AD press 'label="Link" editable=true'`, `$AD type "http://localhost:8790/grein.html"`, `$AD press 'label="Create"' --settle`. The app goes to `Library`, and a row for the new episode is at the top.
+- **iPhone, language.** Find the episode id in `fama-verify api GET /api/episodes` (source URL ends in `grein.html`) and run `fama-verify wait <id>`. The output starts with `Ready`, with `"language": "is"`, `"voice": "piper:is_IS-steinn-medium"` and title `Höfnin hljóða`. `$AD snapshot -i` shows button `Höfnin hljóða`.
+- **Voice picked by the user.** Web: choose button `Voice: Auto`, choose a voice in the menu, then add `article.html` again. iPhone: `$AD press 'label="Voice, Auto"'` and pick a voice. `fama-verify wait <id>` shows that voice, not the default.
+- **Share sheet.** Run `$AD open com.apple.mobilesafari http://localhost:8790/article.html`, press the Safari share button, choose `Fama`, then `Add` in the confirm sheet. `fama-verify api GET /api/episodes` gains a Url episode for `article.html`.
+- **Proof.** Web: `preview_snapshot {save: true}` after the title changes, copied to `$EVIDENCE/link-web/`. iPhone: `$AD screenshot $EVIDENCE/link-ios/library.png`. Keep the `wait` output and the `ffprobe` output next to them.
+
+## Gotchas
+
+- The provisional title is `host/path` without the scheme. Wait for the real title before you assert it.
+- The iPhone Add screen fills an empty `Link` field from the clipboard when the clipboard holds a link. Check the field value before you type, or you append to it.
+- Never `fill` on the iPhone. See `README.md`.
+- On iPhone, `Create` stays disabled until the text looks like `http(s)://host.tld...`. `http://localhost:8790/...` passes because of the dot in the path.
+- On the web, input with a space, or without `http(s)://`, is sent as a Text source, not a link. That is expected behavior, not a link failure.
+- The worker fetches the URL itself. A URL that only the browser or simulator can reach fails in the worker with a plain reason.
+- `link-share` and `link-clipboard` were not yet driven in a recorded run. The first run that drives them should replace this line with what it saw.
