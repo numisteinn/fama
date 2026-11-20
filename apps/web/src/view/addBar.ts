@@ -1,4 +1,5 @@
-import { Option } from "effect"
+import { Effect, Option } from "effect"
+import { Mount } from "foldkit"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { ADD_TEXT_ID, FILE_INPUT_ID } from "~/command"
 import { formatRate } from "~/lib/format"
@@ -8,6 +9,28 @@ import { pickerCheckedIndex } from "~/update"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
 import { type PickerOption, picker } from "~/view/picker"
+
+/**
+ * Enter and Space on the Attach file label open the file picker, as a click on it does.
+ * The picker opens inside the key event, so the browser sees the user's activation.
+ */
+export const OpenFilePickerOnKey = Mount.define("OpenFilePickerOnKey", {
+  messages: [Message.CompletedMountFilePickerKeys],
+  execute: ({ element }) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const onKeyDown = (event: Event) => {
+          if (!(event instanceof KeyboardEvent) || (event.key !== "Enter" && event.key !== " ")) return
+          event.preventDefault()
+          const control = element instanceof HTMLLabelElement ? element.control : null
+          ;(control ?? document.getElementById(FILE_INPUT_ID))?.click()
+        }
+        element.addEventListener("keydown", onKeyDown)
+        return onKeyDown
+      }),
+      (onKeyDown) => Effect.sync(() => element.removeEventListener("keydown", onKeyDown)),
+    ).pipe(Effect.as(Message.CompletedMountFilePickerKeys())),
+})
 
 const voiceOptions = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<PickerOption> => {
   const voices = sortedVoices(model.voices)
@@ -79,11 +102,13 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
       h.div(
         [h.Class("flex items-center gap-1 p-2")],
         [
-          h.button(
+          h.label(
             [
-              h.Type("button"),
+              h.For(FILE_INPUT_ID),
+              h.Role("button"),
+              h.Tabindex(0),
               h.AriaLabel("Attach file"),
-              h.OnClick(Message.ClickedAttachFile()),
+              h.OnMount(OpenFilePickerOnKey()),
               h.Class(buttonClass({ size: "icon-sm" })),
             ],
             [Icon.paperclip()],

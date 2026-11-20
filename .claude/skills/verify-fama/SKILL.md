@@ -54,7 +54,7 @@ Stable handles (accessible names):
 | Area | Handles |
 |---|---|
 | Header | button `Settings` |
-| Add bar | textbox `Link or text`, button `Attach file`, hidden `input[type=file]` (selector), button `Voice: <name>`, button `Voice speed: <rate>`, button `Add` (Enter in the textbox also submits), `role=alert` for errors, button `Remove file` |
+| Add bar | textbox `Link or text`, button `Attach file`, hidden `input[type=file]` (selector), button `Voice: <name>`, button `Voice speed: <rate>`, button `Add` (Enter in the textbox also submits), `role=alert` for errors, button `Remove file`. In an open menu, a typed letter highlights the next item that starts with it (`aria-activedescendant` on `role=menu`) |
 | Library row | button `Play <title>` / `Pause <title>` (disabled until chapter 0 exists), status text `Queued`, `Reading`, `Narrating n/m`, `Encoding`, `Uploading`, duration when ready, button `Retry` on failure, button `Delete <title>` (two clicks: it arms, then a `Delete` button confirms) |
 | Player bar | buttons `Back 15 seconds`, `Play`/`Pause`, `Forward 30 seconds`, group `Position` with a slider whose value is the position in ms, button `Playback speed: <rate>`, button `Chapters`, link `Download` (href is the book file) |
 | Settings dialog | textbox `API token`, textbox `Server`, button `Save`, button `Copy feed URL`, button `Close` |

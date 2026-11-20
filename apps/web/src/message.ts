@@ -24,7 +24,6 @@ export const Message = defineMessageUnion({
   UpdatedAddText: { value: Schema.String },
   PressedEnterInAddText: {},
   SubmittedAddForm: {},
-  ClickedAttachFile: {},
   ChangedFileInput: { files: Schema.Array(File.File) },
   ClickedRemoveFile: {},
   EnteredFileDrag: {},
@@ -32,7 +31,7 @@ export const Message = defineMessageUnion({
   DroppedFile: { file: File.File },
   SucceededCreateEpisode: { episode: Episode },
   FailedCreateEpisode: { failure: ApiFailure },
-  CompletedClickFileInput: {},
+  CompletedMountFilePickerKeys: {},
   CompletedFocusAddText: {},
 
   // Menus

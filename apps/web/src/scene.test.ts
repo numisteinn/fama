@@ -3,6 +3,7 @@ import {
   Command,
   Mount,
   Subscription,
+  changeFiles,
   click,
   expect,
   given,
@@ -10,6 +11,7 @@ import {
   keydown,
   role,
   scene,
+  selector,
   type,
 } from "foldkit/scene"
 import { Redacted } from "effect"
@@ -17,6 +19,7 @@ import { describe, test, expect as expectValue } from "vitest"
 import { LoadChapter, ToggleAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
+  FILE_INPUT_ID,
   FetchEpisodes,
   FetchFeed,
   FocusAddText,
@@ -31,18 +34,22 @@ import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from 
 import { Message } from "~/message"
 import { apiToken } from "~/api"
 import { update } from "~/update"
+import { OpenFilePickerOnKey } from "~/view/addBar"
 import { AnchorPicker } from "~/view/picker"
 import type { Voice, VoiceRef } from "@fama/contracts"
 import type { Message as AppMessage } from "~/message"
 import { view } from "~/view"
 
 const linkOrText = role("textbox", { name: "Link or text" })
+/** The add bar is always on screen, so every scene starts its Attach file key Mount. */
+const resolveAttachKeys = Mount.resolve(OpenFilePickerOnKey, Message.CompletedMountFilePickerKeys())
 
 describe("add a link", () => {
   test("Enter adds a Queued row with the provisional title and empties the box", () => {
     scene(
       { update, view },
       given(withEpisodes(baseModel(), [])),
+      resolveAttachKeys,
       expect(role("button", { name: "Add" })).toBeDisabled(),
       type(linkOrText, "http://localhost:8790/article.html"),
       expect(role("button", { name: "Add" })).toBeEnabled(),
@@ -60,6 +67,24 @@ describe("add a link", () => {
   })
 })
 
+describe("attach a file", () => {
+  // The click itself opens the picker natively, in the browser; the live check covers it.
+  test("Attach file is a label for the file input, so the click opens the picker natively", () => {
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [])),
+      expect(role("button", { name: "Attach file" })).toHaveAttr("htmlFor", FILE_INPUT_ID),
+      expect(role("button", { name: "Attach file" })).toHaveAttr("tabIndex", "0"),
+      expect(selector(`#${FILE_INPUT_ID}`)).toHaveAttr("type", "file"),
+      Mount.expectExact(OpenFilePickerOnKey),
+      resolveAttachKeys,
+      changeFiles(`#${FILE_INPUT_ID}`, [new File(["book"], "harbour-days.epub", { type: "application/epub+zip" })]),
+      expect(role("button", { name: "Remove file" })).toExist(),
+      expect(role("button", { name: "Add" })).toBeEnabled(),
+    )
+  })
+})
+
 describe("settings", () => {
   const savedConnection = { origin: "", token: apiToken("-2") }
 
@@ -67,6 +92,7 @@ describe("settings", () => {
     scene(
       { update, view },
       given(withEpisodes(baseModel(), [])),
+      resolveAttachKeys,
       click(role("button", { name: "Settings" })),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
       Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
@@ -94,6 +120,7 @@ describe("settings", () => {
     scene(
       { update: recordingUpdate, view },
       given(withEpisodes(baseModel(), [])),
+      resolveAttachKeys,
       click(role("button", { name: "Settings" })),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
       Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
@@ -123,6 +150,7 @@ describe("menus", () => {
     scene(
       { update, view },
       given({ ...withEpisodes(baseModel(), []), voices }),
+      resolveAttachKeys,
       click(role("button", { name: "Voice: Auto" })),
       Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
       Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
@@ -146,6 +174,7 @@ describe("play and pause", () => {
     scene(
       { update, view },
       given(withEpisodes(baseModel(), [harbourDays])),
+      resolveAttachKeys,
       click(role("button", { name: "Play Harbour Days" })),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),

@@ -133,12 +133,6 @@ export const pickerTriggerId = (pickerId: PickerId) => `${pickerId.toLowerCase()
 export const pickerMenuId = (pickerId: PickerId) => `${pickerId.toLowerCase()}-menu`
 export const pickerItemId = (pickerId: PickerId, index: number) => `${pickerId.toLowerCase()}-item-${index}`
 
-/** Opens the native file picker through the hidden, persistent file input. */
-export const ClickFileInput = Command.define("ClickFileInput", {
-  messages: [Message.CompletedClickFileInput],
-  execute: Dom.clickElement(`#${FILE_INPUT_ID}`).pipe(Effect.ignore, Effect.as(Message.CompletedClickFileInput())),
-})
-
 export const FocusAddText = Command.define("FocusAddText", {
   messages: [Message.CompletedFocusAddText],
   execute: Dom.focus(`#${ADD_TEXT_ID}`).pipe(Effect.ignore, Effect.as(Message.CompletedFocusAddText())),

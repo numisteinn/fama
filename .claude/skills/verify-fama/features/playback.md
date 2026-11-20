@@ -31,6 +31,7 @@ Preconditions:
 - **Web, start.** Choose `Play Harbour Days`. Run `preview_act {action: "click", locator: 'role=button[name="Play Harbour Days"]'}`. The row button becomes `Pause Harbour Days`. The player bar shows `Harbour Days` and `Morning`, and button `Pause`. The network log has a `206` for `.../chapters/000.m4a`.
 - **Web, moving clock.** Run `preview_snapshot` twice, about 3 s apart. The slider inside group `Position` has a larger value (ms) the second time, and the elapsed text changes.
 - **Web, skip.** Choose `Forward 30 seconds`. The position jumps by about 30000 ms and the chapter text changes to `Evening` (because `Morning` is about 27 s). Choose `Back 15 seconds`. The position drops by about 15000 ms.
+- **Web, ended.** Play to the end of the last chapter (or `Forward 30 seconds` until the slider is at its max and the player shows `Play`). Choose `Forward 30 seconds`, then `Play`. Playback starts again from `Morning` at 0:00, not from the start of the last chapter.
 - **Web, speed.** Choose `Playback speed: 1×` and pick another rate. The button label changes, and the clock moves faster in the next two snapshots.
 - **Web, chapters.** Choose `Chapters`, then the `Evening` item. The chapter text shows `Evening`.
 - **Web, download.** Read the href of link `Download`. `curl -s -D - -o /dev/null http://localhost:8788<href>` returns `200` or `206` with `audio/x-m4a`.

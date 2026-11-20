@@ -7,7 +7,6 @@ import { modifyFields } from "foldkit/struct"
 import { type Connection, apiToken, isSameConnection } from "~/api"
 import { type AudioPlayer, LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
-  ClickFileInput,
   CopyFeedUrl,
   CreateEpisodeFromSource,
   DeleteEpisode,
@@ -523,7 +522,6 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     PressedEnterInAddText: () => submitAdd(model),
     SubmittedAddForm: () => submitAdd(model),
-    ClickedAttachFile: () => ({ model, commands: [ClickFileInput()] }),
     ChangedFileInput: ({ files }) =>
       Option.match(Option.fromNullishOr(files[0]), {
         onNone: () => ({ model }),
@@ -557,7 +555,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     FailedCreateEpisode: ({ failure }) => ({
       model: modifyFields(model, { isAdding: () => false, maybeAddError: () => Option.some(failure.message) }),
     }),
-    CompletedClickFileInput: () => ({ model }),
+    CompletedMountFilePickerKeys: () => ({ model }),
     CompletedFocusAddText: () => ({ model }),
 
     ClickedPickerTrigger: ({ pickerId }) =>

@@ -7,7 +7,8 @@ import { type Model, POLL_MS, SKIP_BACK_MS, SKIP_FORWARD_MS, current, episodes, 
 import { chapterStartMs, totalMs } from "~/timeline"
 
 /** Focused controls keep their own keys. */
-const INTERACTIVE = "input, textarea, select, [contenteditable], button, a, [role=slider], [role^=menuitem], [role=menu]"
+const INTERACTIVE =
+  "input, textarea, select, [contenteditable], button, a, [role=button], [role=slider], [role^=menuitem], [role=menu]"
 
 const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false
 
