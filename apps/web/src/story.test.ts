@@ -2,7 +2,7 @@ import { Dialog } from "@foldkit/ui"
 import { Option } from "effect"
 import { Command, given, message, model, story } from "foldkit/story"
 import { describe, expect, test } from "vitest"
-import { LoadChapter, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
+import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
   DeleteEpisode,
@@ -169,6 +169,50 @@ describe("player", () => {
       Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
       Command.resolve(SavePosition, Message.CompletedSavePosition()),
       model((next) => expect(next.savedPositions[harbourDays.id]).toBe(15_000)),
+    )
+  })
+
+  test("after the end, Forward 30 seconds keeps the episode ended, so Play starts from the top", () => {
+    story(
+      update,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.EndedChapter()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
+      message(Message.EndedChapter()),
+      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(true)),
+      message(Message.ClickedSkip({ deltaMs: 30_000 })),
+      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(true)),
+      message(Message.ClickedPlayPause()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
+      Command.expectExact(LoadChapter),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("a seek back from the end leaves the ended state, so Play resumes there", () => {
+    story(
+      update,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.EndedChapter()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
+      message(Message.EndedChapter()),
+      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      message(Message.ClickedSkip({ deltaMs: -15_000 })),
+      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(false)),
+      message(Message.ClickedPlayPause()),
+      Command.expectExact(ToggleAudio),
+      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
     )
   })
 

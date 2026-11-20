@@ -376,20 +376,29 @@ const start =
     return Update.combine(model, [savePosition, loadChapter(episode, target.index, target.offsetMs, true)])
   }
 
+/**
+ * Moves to `ms` on the timeline. A paused move to the very end leaves the episode ended, as the
+ * audio element is: the next Play then starts from the top, not from the start of the last chapter.
+ */
 const seek = (ms: number): Step =>
   withLoaded(({ playback, episode }) => {
-    const clamped = Math.min(Math.max(0, ms), totalMs(episode.chapters))
+    const total = totalMs(episode.chapters)
+    const clamped = Math.min(Math.max(0, ms), total)
     const target = locate(episode.chapters, clamped)
-    const move: Step =
-      target.index === playback.chapter
-        ? (model) => ({
-            model: modifyFields(model, {
-              playback: () =>
-                Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false, isEnded: false }),
-            }),
-            commands: [SeekAudio({ offsetMs: target.offsetMs })],
-          })
-        : loadChapter(episode, target.index, target.offsetMs, playback.isPlaying || playback.isWaiting)
+    const isSameChapter = target.index === playback.chapter
+    const willPlay = isSameChapter ? playback.isPlaying : playback.isPlaying || playback.isWaiting
+    const isEnded = clamped >= total && !willPlay
+    const move: Step = isSameChapter
+      ? (model) => ({
+          model: modifyFields(model, {
+            playback: () => Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false, isEnded }),
+          }),
+          commands: [SeekAudio({ offsetMs: target.offsetMs })],
+        })
+      : Update.combine([
+          loadChapter(episode, target.index, target.offsetMs, willPlay),
+          setPlayback({ isEnded }),
+        ])
     return Update.combine([move, savePositionAt(episode.id, clamped)])
   })
 
