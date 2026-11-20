@@ -50,6 +50,7 @@ import {
   sortedVoices,
   toDraft,
 } from "~/model"
+import { formatRate } from "~/lib/format"
 import { chapterStartMs, locate, totalMs } from "~/timeline"
 
 export type Services = AudioPlayer | HttpClient.HttpClient
@@ -200,17 +201,36 @@ const submitAdd: Step = (model) => {
 
 // MENUS
 
-const pickerItemCount = (model: Model, pickerId: PickerId): number => {
+/** The text of each item in a menu, in order. Type-ahead matches against it. */
+const pickerItemTexts = (model: Model, pickerId: PickerId): ReadonlyArray<string> => {
   switch (pickerId) {
     case "Voice":
-      return model.voices.length + 1
+      return ["Auto", ...sortedVoices(model.voices).map((voice) => voice.name)]
     case "VoiceSpeed":
-      return SPEEDS.length
+      return SPEEDS.map(formatRate)
     case "PlaybackSpeed":
-      return RATES.length
+      return RATES.map(formatRate)
     case "Chapters":
-      return Option.match(current(model), { onNone: () => 0, onSome: ({ episode }) => episode.chapters.length })
+      return Option.match(current(model), {
+        onNone: () => [],
+        onSome: ({ episode }) => episode.chapters.map((chapter) => chapter.title),
+      })
   }
+}
+
+const pickerItemCount = (model: Model, pickerId: PickerId): number => pickerItemTexts(model, pickerId).length
+
+/** A single printable character, as the menus' type-ahead takes it. */
+export const isTypeAheadKey = (key: string): boolean => key.length === 1 && key !== " "
+
+/** The next item after `from` whose text starts with `key`, wrapping around, like base-ui's menu type-ahead. */
+const typeAheadIndex = (texts: ReadonlyArray<string>, from: number, key: string): Option.Option<number> => {
+  const needle = key.toLocaleLowerCase()
+  for (let step = 1; step <= texts.length; step++) {
+    const index = (from + step + texts.length) % texts.length
+    if (texts[index]?.toLocaleLowerCase().startsWith(needle)) return Option.some(index)
+  }
+  return Option.none()
 }
 
 /** The index of the checked item in a menu. */
@@ -292,7 +312,11 @@ const pressPickerKey = (key: string): Step => (model) => {
         onSome: (index) => selectPickerItem(pickerId, index)(model),
       })
     default:
-      return { model }
+      if (!isTypeAheadKey(key)) return { model }
+      return Option.match(typeAheadIndex(pickerItemTexts(model, pickerId), from, key), {
+        onNone: () => ({ model }),
+        onSome: (index) => activate(pickerId, index)(model),
+      })
   }
 }
 

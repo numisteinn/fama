@@ -6,6 +6,7 @@ type Child = Html | string
 import { pickerItemId, pickerMenuId, pickerTriggerId } from "~/command"
 import { Message } from "~/message"
 import type { Model, PickerId } from "~/model"
+import { isTypeAheadKey } from "~/update"
 import * as Icon from "~/view/icon"
 
 /**
@@ -153,8 +154,11 @@ export const picker = (model: Model, h: HtmlBuilder<Message>, config: PickerConf
           onNone: () => [],
           onSome: (index) => [h.AriaActiveDescendant(pickerItemId(pickerId, index))],
         }),
-        h.OnKeyDownPreventDefault((key) =>
-          MENU_KEYS.has(key) ? Option.some(Message.PressedPickerKey({ key })) : Option.none(),
+        h.OnKeyDownPreventDefault((key, modifiers) =>
+          MENU_KEYS.has(key) ||
+          (isTypeAheadKey(key) && !modifiers.metaKey && !modifiers.ctrlKey && !modifiers.altKey)
+            ? Option.some(Message.PressedPickerKey({ key }))
+            : Option.none(),
         ),
         h.OnMount(AnchorPicker({ triggerId, side: config.side ?? "Bottom", align: config.align ?? "Start" })),
         h.Class(POPUP_CLASS),

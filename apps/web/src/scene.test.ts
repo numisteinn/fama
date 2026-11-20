@@ -20,13 +20,19 @@ import {
   FetchEpisodes,
   FetchFeed,
   FocusAddText,
+  FocusPicker,
+  FocusPickerTrigger,
   SavePosition,
+  ScrollPickerItem,
+  StoreSetting,
   StoreConnection,
 } from "~/command"
 import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
 import { apiToken } from "~/api"
 import { update } from "~/update"
+import { AnchorPicker } from "~/view/picker"
+import type { Voice, VoiceRef } from "@fama/contracts"
 import type { Message as AppMessage } from "~/message"
 import { view } from "~/view"
 
@@ -99,6 +105,39 @@ describe("settings", () => {
     expectValue(tokenMessages.length).toBeGreaterThan(0)
     for (const message of tokenMessages) expectValue(Redacted.isRedacted(message.value)).toBe(true)
     expectValue(JSON.stringify(tokenMessages)).not.toContain("typed-secret")
+  })
+})
+
+describe("menus", () => {
+  const voice = (id: string, name: string, language: string): Voice => ({
+    id: id as VoiceRef,
+    engine: "kokoro",
+    name,
+    language,
+    gender: null,
+  })
+  const voices = [voice("kokoro:af_heart", "Heart", "en"), voice("kokoro:af_sarah", "Sarah", "en"), voice("piper:steinn", "Steinn", "is")]
+  const voiceMenu = role("menu")
+
+  test("typing a letter moves to the next item that starts with it", () => {
+    scene(
+      { update, view },
+      given({ ...withEpisodes(baseModel(), []), voices }),
+      click(role("button", { name: "Voice: Auto" })),
+      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
+      Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
+      keydown(voiceMenu, "s"),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-2"),
+      keydown(voiceMenu, "S"),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-3"),
+      keydown(voiceMenu, "Enter"),
+      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
+      Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
+      Mount.expectEnded(AnchorPicker),
+      expect(role("button", { name: "Voice: Steinn" })).toExist(),
+    )
   })
 })
 
