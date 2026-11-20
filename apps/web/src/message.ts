@@ -44,6 +44,7 @@ export const Message = defineMessageUnion({
   CompletedFocusPickerTrigger: {},
   CompletedScrollPickerItem: {},
   CompletedAnchorPicker: {},
+  CompletedWaitBeforeResetTypeAhead: { keys: Schema.Number },
 
   // Library rows
   ClickedPlayEpisode: { episodeId: EpisodeId },

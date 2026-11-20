@@ -21,6 +21,8 @@ export const SKIP_BACK_MS = 15_000
 export const SKIP_FORWARD_MS = 30_000
 export const DISARM_DELETE_MS = 3000
 export const RESET_COPIED_MS = 1500
+/** Type-ahead keys closer together than this make one prefix, as in base-ui. */
+export const RESET_TYPE_AHEAD_MS = 750
 
 export const isWorking = (job: JobState) => job._tag === "Queued" || job._tag === "Running"
 
@@ -30,10 +32,10 @@ export const isWorking = (job: JobState) => job._tag === "Queued" || job._tag ==
 export const PickerId = Schema.Literals(["Voice", "VoiceSpeed", "PlaybackSpeed", "Chapters"])
 export type PickerId = typeof PickerId.Type
 
-/** At most one menu is open. `maybeActiveIndex` is the highlighted item. */
+/** At most one menu is open. `maybeActiveIndex` is the highlighted item. `typedText` is the type-ahead so far. */
 export const Picker = defineTaggedUnion({
   Closed: {},
-  Open: { pickerId: PickerId, maybeActiveIndex: Schema.Option(Schema.Number) },
+  Open: { pickerId: PickerId, maybeActiveIndex: Schema.Option(Schema.Number), typedText: Schema.String },
 })
 export type Picker = typeof Picker.Type
 
@@ -88,6 +90,8 @@ export const Model = Schema.Struct({
   rowErrors: Schema.Record(Schema.String, Schema.String),
 
   picker: Picker,
+  /** Counts type-ahead keys. A reset timer clears the typed text only for the latest key. */
+  typeAheadKeys: Schema.Number,
 
   settingsDialog: Dialog.Model,
   settingsDraft: Connection,

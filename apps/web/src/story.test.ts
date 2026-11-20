@@ -16,11 +16,14 @@ import {
   SavePosition,
   StoreSetting,
   WaitBeforeDisarmDelete,
+  ScrollPickerItem,
   WaitBeforeResetCopied,
+  WaitBeforeResetTypeAhead,
 } from "~/command"
 import { Message } from "~/message"
 import { apiToken } from "~/api"
-import { Feed, Playback } from "~/model"
+import { Feed, Picker, Playback } from "~/model"
+import type { Voice, VoiceRef } from "@fama/contracts"
 import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
 import { update } from "~/update"
 
@@ -145,6 +148,56 @@ describe("settings", () => {
       given(baseModel()),
       message(Message.SucceededFetchFeed({ connection, url: newFeed })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+    )
+  })
+})
+
+describe("menus", () => {
+  const voices: ReadonlyArray<Voice> = ["Heart", "Sarah", "Sky", "Steinn"].map((name) => ({
+    id: `kokoro:${name.toLowerCase()}` as VoiceRef,
+    engine: "kokoro",
+    name,
+    language: "en",
+    gender: null,
+  }))
+  const voiceMenu = (typedText: string, active: number) => ({
+    ...baseModel(),
+    voices,
+    picker: Picker.Open({ pickerId: "Voice", maybeActiveIndex: Option.some(active), typedText }),
+    typeAheadKeys: typedText.length,
+  })
+  const activeIndex = (next: { picker: Picker }) => next.picker._tag === "Open" && Option.getOrNull(next.picker.maybeActiveIndex)
+
+  test("keys typed close together make one prefix: S, t, e goes to Steinn", () => {
+    story(
+      update,
+      given(voiceMenu("s", 2)),
+      message(Message.PressedPickerKey({ key: "t" })),
+      model((next) => expect(activeIndex(next)).toBe(4)),
+      Command.expectExact(WaitBeforeResetTypeAhead({ keys: 2 }), ScrollPickerItem),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
+      model((next) => expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")),
+    )
+  })
+
+  test("the reset timer of an earlier key keeps the prefix of a later one", () => {
+    story(
+      update,
+      given(voiceMenu("st", 4)),
+      message(Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
+      model((next) => expect(next.picker._tag === "Open" && next.picker.typedText).toBe("st")),
+    )
+  })
+
+  test("the same letter again cycles through the items that start with it", () => {
+    story(
+      update,
+      given(voiceMenu("s", 2)),
+      message(Message.PressedPickerKey({ key: "s" })),
+      model((next) => expect(activeIndex(next)).toBe(3)),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
     )
   })
 })

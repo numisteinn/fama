@@ -4,7 +4,7 @@ import { HttpClientRequest } from "effect/http"
 import { Command, Dom, File } from "foldkit"
 import { Connection, episodePath, send, sendJson } from "~/api"
 import { Message } from "~/message"
-import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS } from "~/model"
+import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS, RESET_TYPE_AHEAD_MS } from "~/model"
 
 // HTTP
 
@@ -192,6 +192,15 @@ export const WaitBeforeResetCopied = Command.define("WaitBeforeResetCopied", {
   messages: [Message.CompletedWaitBeforeResetCopied],
   execute: ({ copy }) =>
     Effect.sleep(Duration.millis(RESET_COPIED_MS)).pipe(Effect.as(Message.CompletedWaitBeforeResetCopied({ copy }))),
+})
+
+export const WaitBeforeResetTypeAhead = Command.define("WaitBeforeResetTypeAhead", {
+  args: { keys: Schema.Number },
+  messages: [Message.CompletedWaitBeforeResetTypeAhead],
+  execute: ({ keys }) =>
+    Effect.sleep(Duration.millis(RESET_TYPE_AHEAD_MS)).pipe(
+      Effect.as(Message.CompletedWaitBeforeResetTypeAhead({ keys })),
+    ),
 })
 
 export const WaitBeforeDisarmDelete = Command.define("WaitBeforeDisarmDelete", {

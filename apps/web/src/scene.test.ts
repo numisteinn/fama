@@ -29,6 +29,7 @@ import {
   ScrollPickerItem,
   StoreSetting,
   StoreConnection,
+  WaitBeforeResetTypeAhead,
 } from "~/command"
 import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
@@ -156,9 +157,11 @@ describe("menus", () => {
       Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
       keydown(voiceMenu, "s"),
       Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
       expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-2"),
       keydown(voiceMenu, "S"),
       Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
       expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-3"),
       keydown(voiceMenu, "Enter"),
       Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),

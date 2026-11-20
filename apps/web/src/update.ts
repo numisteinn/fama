@@ -25,6 +25,7 @@ import {
   UploadEpisode,
   WaitBeforeDisarmDelete,
   WaitBeforeResetCopied,
+  WaitBeforeResetTypeAhead,
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
 import {
@@ -78,6 +79,7 @@ export const init = (flags: Flags): UpdateReturn => {
       armedDeletes: [],
       rowErrors: {},
       picker: Picker.Closed(),
+      typeAheadKeys: 0,
       settingsDialog: Dialog.init({ id: "settings" }),
       settingsDraft: connection,
       feed: Feed.Loading(),
@@ -222,14 +224,52 @@ const pickerItemCount = (model: Model, pickerId: PickerId): number => pickerItem
 /** A single printable character, as the menus' type-ahead takes it. */
 export const isTypeAheadKey = (key: string): boolean => key.length === 1 && key !== " "
 
-/** The next item after `from` whose text starts with `key`, wrapping around, like base-ui's menu type-ahead. */
-const typeAheadIndex = (texts: ReadonlyArray<string>, from: number, key: string): Option.Option<number> => {
-  const needle = key.toLocaleLowerCase()
-  for (let step = 1; step <= texts.length; step++) {
-    const index = (from + step + texts.length) % texts.length
+/** The first item from `start` on whose text starts with `prefix`, wrapping around. */
+const findPrefix = (texts: ReadonlyArray<string>, start: number, prefix: string): Option.Option<number> => {
+  const needle = prefix.toLocaleLowerCase()
+  for (let step = 0; step < texts.length; step++) {
+    const index = (start + step) % texts.length
     if (texts[index]?.toLocaleLowerCase().startsWith(needle)) return Option.some(index)
   }
   return Option.none()
+}
+
+/**
+ * Type-ahead, like base-ui's menus. Keys typed within 750 ms make one prefix: `S`, `t`, `e` goes to Steinn.
+ * The same letter again moves to the next item that starts with it.
+ */
+const typeAhead = (key: string): Step => (model) => {
+  if (model.picker._tag === "Closed") return { model }
+  const open = model.picker
+  const typedText = open.typedText + key
+  const keys = model.typeAheadKeys + 1
+  const texts = pickerItemTexts(model, open.pickerId)
+  const from = Option.getOrElse(open.maybeActiveIndex, () => -1)
+  const isRepeat = [...typedText].every((char) => char.toLocaleLowerCase() === key.toLocaleLowerCase())
+  const maybeMatch = isRepeat
+    ? findPrefix(texts, from + 1, key)
+    : findPrefix(texts, Math.max(0, from), typedText)
+  return {
+    model: modifyFields(model, {
+      picker: () =>
+        Picker.Open({
+          ...open,
+          typedText,
+          maybeActiveIndex: Option.orElse(maybeMatch, () => open.maybeActiveIndex),
+        }),
+      typeAheadKeys: () => keys,
+    }),
+    commands: [
+      WaitBeforeResetTypeAhead({ keys }),
+      ...Option.toArray(Option.map(maybeMatch, (index) => ScrollPickerItem({ pickerId: open.pickerId, index }))),
+    ],
+  }
+}
+
+const resetTypeAhead = (keys: number): Step => (model) => {
+  const picker = model.picker
+  if (picker._tag === "Closed" || keys !== model.typeAheadKeys) return { model }
+  return { model: modifyFields(model, { picker: () => Picker.Open({ ...picker, typedText: "" }) }) }
 }
 
 /** The index of the checked item in a menu. */
@@ -252,7 +292,7 @@ export const pickerCheckedIndex = (model: Model, pickerId: PickerId): number => 
 const openPicker =
   (pickerId: PickerId, maybeActiveIndex: Option.Option<number>): Step =>
   (model) => ({
-    model: modifyFields(model, { picker: () => Picker.Open({ pickerId, maybeActiveIndex }) }),
+    model: modifyFields(model, { picker: () => Picker.Open({ pickerId, maybeActiveIndex, typedText: "" }) }),
     commands: [
       FocusPicker({ pickerId }),
       ...Option.toArray(Option.map(maybeActiveIndex, (index) => ScrollPickerItem({ pickerId, index }))),
@@ -284,7 +324,14 @@ const pressPickerTriggerKey = (pickerId: PickerId, key: string): Step => (model)
 }
 
 const activate = (pickerId: PickerId, index: number): Step => (model) => ({
-  model: modifyFields(model, { picker: () => Picker.Open({ pickerId, maybeActiveIndex: Option.some(index) }) }),
+  model: modifyFields(model, {
+    picker: (picker) =>
+      Picker.Open({
+        pickerId,
+        maybeActiveIndex: Option.some(index),
+        typedText: picker._tag === "Open" ? picker.typedText : "",
+      }),
+  }),
   commands: [ScrollPickerItem({ pickerId, index })],
 })
 
@@ -311,11 +358,7 @@ const pressPickerKey = (key: string): Step => (model) => {
         onSome: (index) => selectPickerItem(pickerId, index)(model),
       })
     default:
-      if (!isTypeAheadKey(key)) return { model }
-      return Option.match(typeAheadIndex(pickerItemTexts(model, pickerId), from, key), {
-        onNone: () => ({ model }),
-        onSome: (index) => activate(pickerId, index)(model),
-      })
+      return isTypeAheadKey(key) ? typeAhead(key)(model) : { model }
   }
 }
 
@@ -570,6 +613,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     CompletedFocusPickerTrigger: () => ({ model }),
     CompletedScrollPickerItem: () => ({ model }),
     CompletedAnchorPicker: () => ({ model }),
+    CompletedWaitBeforeResetTypeAhead: ({ keys }) => resetTypeAhead(keys)(model),
 
     ClickedPlayEpisode: ({ episodeId }) =>
       Option.match(Option.fromNullishOr(episodes(model).find((item) => item.id === episodeId)), {
