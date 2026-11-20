@@ -312,13 +312,14 @@ describe("menus", () => {
   test("a list with a doubled first letter does not cycle: l, l searches for `ll`, as in base-ui", () => {
     story(
       update,
-      given({ ...baseModel(), voices: named(["Lara", "Llama", "Lukas"]) }),
+      // Lena sits between Lara and Llama, so a cycle (Lena) and an `ll` search (Llama) give different results.
+      given({ ...baseModel(), voices: named(["Lara", "Lena", "Llama", "Lukas"]) }),
       message(Message.ClickedPickerTrigger({ pickerId: "Voice" })),
       Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
       typeKey("l"),
       model((next) => expect(activeIndex(next)).toBe(1)),
       typeLastKey("l", 2),
-      model((next) => expect(activeIndex(next)).toBe(2)),
+      model((next) => expect(activeIndex(next)).toBe(3)),
     )
   })
 
