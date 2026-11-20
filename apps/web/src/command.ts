@@ -194,8 +194,10 @@ export const CopyFeedUrl = Command.define("CopyFeedUrl", {
 // TIMERS
 
 export const WaitBeforeResetCopied = Command.define("WaitBeforeResetCopied", {
+  args: { copy: Schema.Number },
   messages: [Message.CompletedWaitBeforeResetCopied],
-  execute: Effect.sleep(Duration.millis(RESET_COPIED_MS)).pipe(Effect.as(Message.CompletedWaitBeforeResetCopied())),
+  execute: ({ copy }) =>
+    Effect.sleep(Duration.millis(RESET_COPIED_MS)).pipe(Effect.as(Message.CompletedWaitBeforeResetCopied({ copy }))),
 })
 
 export const WaitBeforeDisarmDelete = Command.define("WaitBeforeDisarmDelete", {

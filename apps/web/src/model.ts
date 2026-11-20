@@ -93,6 +93,8 @@ export const Model = Schema.Struct({
   settingsDraft: Connection,
   feed: Feed,
   isFeedUrlCopied: Schema.Boolean,
+  /** Counts the copies that showed Copied. A reset timer clears Copied only for its own copy. */
+  feedUrlCopies: Schema.Number,
 
   playback: Playback,
   rate: Schema.Number,

@@ -82,6 +82,7 @@ export const init = (flags: Flags): UpdateReturn => {
       settingsDraft: connection,
       feed: Feed.Loading(),
       isFeedUrlCopied: false,
+      feedUrlCopies: 0,
       playback: Playback.Stopped(),
       rate: flags.rate,
       savedPositions: flags.savedPositions,
@@ -580,12 +581,17 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       setFeed(connection, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
     ClickedCopyFeedUrl: () =>
       model.feed._tag === "Ready" ? { model, commands: [CopyFeedUrl({ url: model.feed.url })] } : { model },
-    SucceededCopyFeedUrl: () =>
-      model.isFeedUrlCopied
-        ? { model }
-        : { model: modifyFields(model, { isFeedUrlCopied: () => true }), commands: [WaitBeforeResetCopied()] },
+    SucceededCopyFeedUrl: () => {
+      if (model.isFeedUrlCopied) return { model }
+      const copy = model.feedUrlCopies + 1
+      return {
+        model: modifyFields(model, { isFeedUrlCopied: () => true, feedUrlCopies: () => copy }),
+        commands: [WaitBeforeResetCopied({ copy })],
+      }
+    },
     FailedCopyFeedUrl: () => ({ model }),
-    CompletedWaitBeforeResetCopied: () => ({ model: modifyFields(model, { isFeedUrlCopied: () => false }) }),
+    CompletedWaitBeforeResetCopied: ({ copy }) =>
+      copy === model.feedUrlCopies ? { model: modifyFields(model, { isFeedUrlCopied: () => false }) } : { model },
     CompletedStoreSetting: () => ({ model }),
 
     ClickedPlayPause: () => toggle(model),

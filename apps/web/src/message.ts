@@ -71,7 +71,7 @@ export const Message = defineMessageUnion({
   ClickedCopyFeedUrl: {},
   SucceededCopyFeedUrl: {},
   FailedCopyFeedUrl: {},
-  CompletedWaitBeforeResetCopied: {},
+  CompletedWaitBeforeResetCopied: { copy: Schema.Number },
   CompletedStoreSetting: {},
 
   // Player controls

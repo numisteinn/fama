@@ -4,6 +4,7 @@ import { Command, given, message, model, story } from "foldkit/story"
 import { describe, expect, test } from "vitest"
 import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
+  CopyFeedUrl,
   CreateEpisodeFromSource,
   DeleteEpisode,
   FetchEpisodes,
@@ -15,6 +16,7 @@ import {
   SavePosition,
   StoreSetting,
   WaitBeforeDisarmDelete,
+  WaitBeforeResetCopied,
 } from "~/command"
 import { Message } from "~/message"
 import { apiToken } from "~/api"
@@ -82,6 +84,31 @@ describe("settings", () => {
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
       message(Message.FailedFetchFeed({ connection: oldConnection, failure: { status: 500, message: "Boom" } })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+    )
+  })
+
+  test("Copy feed URL shows Copied until its own timer ends", () => {
+    story(
+      update,
+      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }) }),
+      message(Message.ClickedCopyFeedUrl()),
+      Command.resolve(CopyFeedUrl, Message.SucceededCopyFeedUrl()),
+      model((next) => expect(next.isFeedUrlCopied).toBe(true)),
+      Command.expectExact(WaitBeforeResetCopied({ copy: 1 })),
+      Command.resolve(WaitBeforeResetCopied, Message.CompletedWaitBeforeResetCopied({ copy: 1 })),
+      model((next) => expect(next.isFeedUrlCopied).toBe(false)),
+    )
+  })
+
+  test("the timer of an earlier copy does not clear the Copied of a later one", () => {
+    // Copy, close, reopen and copy again within 1.5 s: the first timer ends while the second copy shows Copied.
+    story(
+      update,
+      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }), isFeedUrlCopied: true, feedUrlCopies: 2 }),
+      message(Message.CompletedWaitBeforeResetCopied({ copy: 1 })),
+      model((next) => expect(next.isFeedUrlCopied).toBe(true)),
+      message(Message.CompletedWaitBeforeResetCopied({ copy: 2 })),
+      model((next) => expect(next.isFeedUrlCopied).toBe(false)),
     )
   })
 
