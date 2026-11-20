@@ -14,7 +14,7 @@ import {
   selector,
   type,
 } from "foldkit/scene"
-import { Redacted } from "effect"
+import { Option, Redacted } from "effect"
 import { describe, test, expect as expectValue } from "vitest"
 import { LoadChapter, ToggleAudio } from "~/audio"
 import {
@@ -25,6 +25,7 @@ import {
   FocusAddText,
   FocusPicker,
   FocusPickerTrigger,
+  ReadSavedPosition,
   SavePosition,
   ScrollPickerItem,
   StoreSetting,
@@ -179,6 +180,11 @@ describe("play and pause", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       resolveAttachKeys,
       click(role("button", { name: "Play Harbour Days" })),
+      Command.expectExact(ReadSavedPosition),
+      Command.resolve(
+        ReadSavedPosition,
+        Message.GotSavedPosition({ episodeId: harbourDays.id, maybePositionMs: Option.none() }),
+      ),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       Subscription.emit(Message.StartedAudio()),

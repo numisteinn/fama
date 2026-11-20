@@ -102,5 +102,7 @@ export const Message = defineMessageUnion({
   CompletedSetAudioRate: {},
   CompletedStopAudio: {},
   CompletedSavePosition: {},
+  /** The position storage holds for an episode when it starts, so a pause in another tab is honored. */
+  GotSavedPosition: { episodeId: EpisodeId, maybePositionMs: Schema.Option(Schema.Number) },
 })
 export type Message = typeof Message.Type

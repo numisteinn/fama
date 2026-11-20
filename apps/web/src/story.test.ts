@@ -13,6 +13,7 @@ import {
   FocusDeleteConfirm,
   FocusPicker,
   FocusPickerTrigger,
+  ReadSavedPosition,
   SavePosition,
   StoreSetting,
   WaitBeforeDisarmDelete,
@@ -25,6 +26,7 @@ import { apiToken } from "~/api"
 import { Feed, Picker, Playback } from "~/model"
 import type { Voice, VoiceRef } from "@fama/contracts"
 import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
+import { storedPosition } from "~/flags"
 import { update } from "~/update"
 
 const unauthorized = { status: 401, message: "The API token is wrong or missing" }
@@ -320,11 +322,54 @@ describe("add bar", () => {
 })
 
 describe("player", () => {
-  test("play resumes at the saved position, across chapters", () => {
+  /** Storage answers the start of Harbour Days. With no value it falls back to the Model, as when storage is blocked. */
+  const readSaved = (positionMs?: number) =>
+    Command.resolve(
+      ReadSavedPosition,
+      Message.GotSavedPosition({ episodeId: harbourDays.id, maybePositionMs: Option.fromNullishOr(positionMs) }),
+    )
+
+  test("play reads the latest saved position from storage, not the one read at boot", () => {
+    // Another tab paused at 30 s after this tab booted with 5 s.
+    story(
+      update,
+      given(withEpisodes(baseModel({ [harbourDays.id]: 5_000 }), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      model((next) => expect(next.playback).toEqual(Playback.Stopped())),
+      Command.expectExact(ReadSavedPosition({ episodeId: harbourDays.id })),
+      readSaved(30_000),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
+      }),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("ReadSavedPosition reads the value storage holds now", () => {
+    localStorage.setItem("fama.position.harbour-days", "30000")
+    expect(storedPosition(harbourDays.id)).toEqual(Option.some(30_000))
+    localStorage.removeItem("fama.position.harbour-days")
+    expect(storedPosition(harbourDays.id)).toEqual(Option.none())
+  })
+
+  test("with storage blocked, play falls back to the position saved in this session", () => {
     story(
       update,
       given(withEpisodes(baseModel({ [harbourDays.id]: 30_000 }), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("play resumes at the saved position, across chapters", () => {
+    story(
+      update,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(30_000),
       model((next) => {
         expect(next.playback).toEqual(
           Playback.Loaded({
@@ -345,8 +390,9 @@ describe("player", () => {
   test("a finished episode starts from the top", () => {
     story(
       update,
-      given(withEpisodes(baseModel({ [harbourDays.id]: 45_000 }), [harbourDays])),
+      given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(45_000),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
@@ -357,6 +403,7 @@ describe("player", () => {
       update,
       given(withEpisodes(baseModel(), [runningHarbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
@@ -376,6 +423,7 @@ describe("player", () => {
       update,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.ClickedSkip({ deltaMs: 15_000 })),
       Command.expectExact(SeekAudio, SavePosition),
@@ -390,6 +438,7 @@ describe("player", () => {
       update,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -413,6 +462,7 @@ describe("player", () => {
       update,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -434,6 +484,7 @@ describe("player", () => {
       update,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readSaved(),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.ClickedConfirmDelete({ episodeId: harbourDays.id })),
       Command.resolve(DeleteEpisode, Message.SucceededDeleteEpisode({ episodeId: harbourDays.id })),

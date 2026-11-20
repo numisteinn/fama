@@ -102,7 +102,10 @@ export const Model = Schema.Struct({
 
   playback: Playback,
   rate: Schema.Number,
-  /** Position on the whole timeline, by episode id. Mirrors `fama.position.<id>`. */
+  /**
+   * Position on the whole timeline, by episode id, as this tab saved it to `fama.position.<id>`.
+   * A start reads storage itself; this is the fallback when storage is blocked.
+   */
   savedPositions: Schema.Record(Schema.String, Schema.Number),
   lastSavedAtMs: Schema.Number,
   /** Slider value while the user drags it. */

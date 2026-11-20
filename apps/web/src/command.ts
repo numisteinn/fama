@@ -3,6 +3,7 @@ import { Duration, Effect, Redacted, Schema } from "effect"
 import { HttpClientRequest } from "effect/http"
 import { Command, Dom, File } from "foldkit"
 import { Connection, episodePath, send, sendJson } from "~/api"
+import { storedPosition } from "~/flags"
 import { Message } from "~/message"
 import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS, RESET_TYPE_AHEAD_MS } from "~/model"
 
@@ -115,6 +116,13 @@ export const StoreSetting = Command.define("StoreSetting", {
   args: { key: Schema.Literals(["fama.voice", "fama.speed", "fama.rate"]), value: Schema.NullOr(Schema.Union([Schema.String, Schema.Number])) },
   messages: [Message.CompletedStoreSetting],
   execute: ({ key, value }) => writeStorage(key, value).pipe(Effect.as(Message.CompletedStoreSetting())),
+})
+
+export const ReadSavedPosition = Command.define("ReadSavedPosition", {
+  args: { episodeId: EpisodeId },
+  messages: [Message.GotSavedPosition],
+  execute: ({ episodeId }) =>
+    Effect.sync(() => Message.GotSavedPosition({ episodeId, maybePositionMs: storedPosition(episodeId) })),
 })
 
 export const SavePosition = Command.define("SavePosition", {

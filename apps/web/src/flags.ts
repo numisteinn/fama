@@ -1,5 +1,5 @@
 import type { VoiceRef } from "@fama/contracts"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { type Connection, apiToken } from "~/api"
 import type { Flags } from "~/model"
 
@@ -32,6 +32,10 @@ function storedPositions(): Record<string, number> {
   }
   return positions
 }
+
+/** The position saved for an episode, read now. `None` when storage has none or is blocked. */
+export const storedPosition = (episodeId: string): Option.Option<number> =>
+  Option.fromNullishOr(asNumber(read(POSITION_PREFIX + episodeId)))
 
 /** The keys that hold the saved connection. */
 export const CONNECTION_KEYS: ReadonlyArray<string> = ["fama.token", "fama.origin"]

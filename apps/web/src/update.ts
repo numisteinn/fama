@@ -17,6 +17,7 @@ import {
   FocusDeleteConfirm,
   FocusPicker,
   FocusPickerTrigger,
+  ReadSavedPosition,
   RetryEpisode,
   SavePosition,
   ScrollPickerItem,
@@ -454,13 +455,31 @@ const toggle: Step = withLoaded(({ playback, episode }) => {
   return (model) => ({ model, commands: [ToggleAudio()] })
 })
 
-/** Plays `episode` from its saved position, or toggles it when it is already loaded. */
+const isLoadedEpisode = (model: Model, episodeId: EpisodeId) =>
+  model.playback._tag === "Loaded" && model.playback.episodeId === episodeId
+
+/**
+ * Toggles `episode` when it is already loaded. Otherwise reads its saved position from storage first,
+ * as the React app did, so a pause in another tab is where it resumes.
+ */
 const start =
   (episode: Episode): Step =>
   (model) => {
-    if (model.playback._tag === "Loaded" && model.playback.episodeId === episode.id) return toggle(model)
+    if (isLoadedEpisode(model, episode.id)) return toggle(model)
     if (episode.chapters.length === 0) return { model }
-    const saved = model.savedPositions[episode.id] ?? 0
+    return { model, commands: [ReadSavedPosition({ episodeId: episode.id })] }
+  }
+
+/**
+ * Plays an episode from the position storage holds. With storage blocked, the position saved in this
+ * session is used. A second click that raced the first finds the episode loaded and does nothing.
+ */
+const playFromSaved =
+  (episodeId: EpisodeId, maybePositionMs: Option.Option<number>): Step =>
+  (model) => {
+    const episode = episodes(model).find((item) => item.id === episodeId)
+    if (!episode || episode.chapters.length === 0 || isLoadedEpisode(model, episodeId)) return { model }
+    const saved = Option.getOrElse(maybePositionMs, () => model.savedPositions[episodeId] ?? 0)
     const isFinished = !isWorking(episode.job) && saved >= totalMs(episode.chapters) - FINISHED_MARGIN_MS
     const target = locate(episode.chapters, isFinished ? 0 : saved)
     return Update.combine(model, [savePosition, loadChapter(episode, target.index, target.offsetMs, true)])
@@ -710,4 +729,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     CompletedSetAudioRate: () => ({ model }),
     CompletedStopAudio: () => ({ model }),
     CompletedSavePosition: () => ({ model }),
+    GotSavedPosition: ({ episodeId, maybePositionMs }) => playFromSaved(episodeId, maybePositionMs)(model),
   })
