@@ -90,7 +90,7 @@ export type LoadedPlayback = Extract<Playback, { _tag: "Loaded" }>
 export const Model = Schema.Struct({
   connection: Connection,
   /**
-   * Goes up on every connection change: a token or server saved here or in another tab. Library and feed
+   * Goes up on every connection change: a token or server saved here or in another tab. Library
    * responses carry the generation they were fetched for; a response from an older one is dropped.
    */
   connectionGeneration: Schema.Number,
@@ -121,6 +121,8 @@ export const Model = Schema.Struct({
   settingsDialog: Dialog.Model,
   settingsDraft: Connection,
   feed: Feed,
+  /** Counts feed requests. Each Settings open and each connection change makes a new one; only the latest result shows. */
+  feedRequests: Schema.Number,
   isFeedUrlCopied: Schema.Boolean,
   /** Counts the copies that showed Copied. A reset timer clears Copied only for its own copy. */
   feedUrlCopies: Schema.Number,

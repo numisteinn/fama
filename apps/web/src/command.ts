@@ -30,12 +30,12 @@ export const FetchVoices = Command.define("FetchVoices", {
 })
 
 export const FetchFeed = Command.define("FetchFeed", {
-  args: { connection: Connection, generation: Schema.Number },
+  args: { connection: Connection, request: Schema.Number },
   messages: [Message.SucceededFetchFeed, Message.FailedFetchFeed],
-  execute: ({ connection, generation }) =>
+  execute: ({ connection, request }) =>
     sendJson(FeedInfo, connection, "GET", "/api/feed").pipe(
-      Effect.map(({ url }) => Message.SucceededFetchFeed({ generation, url })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ generation, failure }))),
+      Effect.map(({ url }) => Message.SucceededFetchFeed({ request, url })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ request, failure }))),
     ),
 })
 

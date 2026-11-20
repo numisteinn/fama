@@ -86,6 +86,7 @@ export const init = (flags: Flags): UpdateReturn => {
     settingsDialog: Dialog.init({ id: "settings" }),
     settingsDraft: connection,
     feed: Feed.Loading(),
+    feedRequests: 0,
     isFeedUrlCopied: false,
     feedUrlCopies: 0,
     playback: Playback.Stopped(),
@@ -104,9 +105,11 @@ export const init = (flags: Flags): UpdateReturn => {
 const fetchEpisodesCommand = (model: Model) =>
   FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration })
 
-/** The feed request for the current connection, tagged with its generation. */
-const fetchFeedCommand = (model: Model) =>
-  FetchFeed({ connection: model.connection, generation: model.connectionGeneration })
+/** A new feed request for the current connection. Results of earlier requests are dropped. */
+const fetchFeed = (model: Model): { model: Model; command: ReturnType<typeof FetchFeed> } => {
+  const next = modifyFields(model, { feedRequests: (requests) => requests + 1 })
+  return { model: next, command: FetchFeed({ connection: next.connection, request: next.feedRequests }) }
+}
 
 /** Moves to `connection` as a new generation, so every response fetched before is dropped. */
 const changeConnection = (model: Model, connection: Connection): Model =>
@@ -118,14 +121,16 @@ const isCurrent = (model: Model, generation: number) => generation === model.con
 // SETTINGS DIALOG
 
 const foldSettingsOutMessage = Dialog.OutMessage.match<Step>({
-  Opened: () => (model) => ({
-    model: modifyFields(model, {
-      settingsDraft: () => model.connection,
-      feed: () => Feed.Loading(),
-      isFeedUrlCopied: () => false,
-    }),
-    commands: [fetchFeedCommand(model)],
-  }),
+  Opened: () => (model) => {
+    const feed = fetchFeed(
+      modifyFields(model, {
+        settingsDraft: () => model.connection,
+        feed: () => Feed.Loading(),
+        isFeedUrlCopied: () => false,
+      }),
+    )
+    return { model: feed.model, commands: [feed.command] }
+  },
   Closed: () => unchanged,
 })
 
@@ -153,31 +158,28 @@ const saveSettings: Step = (model) => {
   return Update.combine(model, [
     (stepModel) => {
       if (!isChanged) return { model: stepModel, commands: [StoreConnection({ connection })] }
-      const changed = changeConnection(stepModel, connection)
+      const feed = fetchFeed(changeConnection(stepModel, connection))
       return {
-        model: changed,
-        commands: [StoreConnection({ connection }), fetchEpisodesCommand(changed), fetchFeedCommand(changed)],
+        model: feed.model,
+        commands: [StoreConnection({ connection }), fetchEpisodesCommand(feed.model), feed.command],
       }
     },
     closeSettings,
   ])
 }
 
-/** Shows a feed result, unless it was fetched for an older connection generation. */
-const setFeed = (generation: number, feed: Feed): Step => (model) =>
-  isCurrent(model, generation) ? { model: modifyFields(model, { feed: () => feed }) } : { model }
+/** Shows a feed result, unless a later feed request was made. */
+const setFeed = (request: number, feed: Feed): Step => (model) =>
+  request === model.feedRequests ? { model: modifyFields(model, { feed: () => feed }) } : { model }
 
 /** Follows a token or server saved in another tab, as the React app did: the library and an open feed refetch. */
 const followStoredConnection = (connection: Connection): Step => (model) => {
   if (isSameConnection(connection, model.connection)) return { model }
   const isFeedShown = model.settingsDialog.isOpen
-  const changed = modifyFields(changeConnection(model, connection), {
-    feed: (feed) => (isFeedShown ? Feed.Loading() : feed),
-  })
-  return {
-    model: changed,
-    commands: [fetchEpisodesCommand(changed), ...(isFeedShown ? [fetchFeedCommand(changed)] : [])],
-  }
+  const changed = changeConnection(model, connection)
+  if (!isFeedShown) return { model: changed, commands: [fetchEpisodesCommand(changed)] }
+  const feed = fetchFeed(modifyFields(changed, { feed: () => Feed.Loading() }))
+  return { model: feed.model, commands: [fetchEpisodesCommand(feed.model), feed.command] }
 }
 
 /**
@@ -731,9 +733,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     SubmittedSettings: () => saveSettings(model),
     ChangedStoredSettings: (settings) => followStoredSettings(settings)(model),
-    SucceededFetchFeed: ({ generation, url }) => setFeed(generation, Feed.Ready({ url }))(model),
-    FailedFetchFeed: ({ generation, failure }) =>
-      setFeed(generation, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
+    SucceededFetchFeed: ({ request, url }) => setFeed(request, Feed.Ready({ url }))(model),
+    FailedFetchFeed: ({ request, failure }) =>
+      setFeed(request, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
     ClickedCopyFeedUrl: () =>
       model.feed._tag === "Ready" ? { model, commands: [CopyFeedUrl({ url: model.feed.url })] } : { model },
     SucceededCopyFeedUrl: () => {

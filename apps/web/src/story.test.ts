@@ -40,7 +40,7 @@ describe("library", () => {
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Command.resolve(FetchFeed, Message.FailedFetchFeed({ generation: 0, failure: unauthorized })),
+      Command.resolve(FetchFeed, Message.FailedFetchFeed({ request: 1, failure: unauthorized })),
     )
     const stillUnauthorized = { ...baseModel(), maybeLibraryFailure: Option.some(unauthorized) }
     story(
@@ -102,10 +102,23 @@ describe("settings", () => {
   test("a late feed response for a previous connection does not replace the current feed", () => {
     story(
       update,
-      given({ ...baseModel(), connectionGeneration: 1, feed: Feed.Ready({ url: newFeed }) }),
-      message(Message.SucceededFetchFeed({ generation: 0, url: "http://localhost:8788/feed/old/rss.xml" })),
+      given({ ...baseModel(), connectionGeneration: 1, feedRequests: 1, feed: Feed.Ready({ url: newFeed }) }),
+      message(Message.SucceededFetchFeed({ request: 0, url: "http://localhost:8788/feed/old/rss.xml" })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-      message(Message.FailedFetchFeed({ generation: 0, failure: { status: 500, message: "Boom" } })),
+      message(Message.FailedFetchFeed({ request: 0, failure: { status: 500, message: "Boom" } })),
+      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+    )
+  })
+
+  test("a late feed failure from an earlier Settings open does not replace the feed of a later open", () => {
+    const open = (start: ReturnType<typeof baseModel>) => update(start, Message.ClickedSettings()).model
+    const first = open(baseModel())
+    const second = open({ ...first, settingsDialog: { ...first.settingsDialog, isOpen: false } })
+    story(
+      update,
+      given(second),
+      message(Message.SucceededFetchFeed({ request: second.feedRequests, url: newFeed })),
+      message(Message.FailedFetchFeed({ request: first.feedRequests, failure: { status: 500, message: "Boom" } })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
     )
   })
@@ -172,7 +185,7 @@ describe("settings", () => {
       }),
       Command.expectExact(FetchEpisodes, FetchFeed),
       Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [] })),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ generation: 1, url: newFeed })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: newFeed })),
     )
   })
 
@@ -235,7 +248,7 @@ describe("settings", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.SucceededFetchFeed({ generation: 0, url: newFeed })),
+      message(Message.SucceededFetchFeed({ request: 0, url: newFeed })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
     )
   })

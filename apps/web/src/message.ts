@@ -73,9 +73,9 @@ export const Message = defineMessageUnion({
     speed: Schema.Number,
     rate: Schema.Number,
   },
-  /** Feed results carry the connection generation they were fetched for, so a late one from an old connection is dropped. */
-  SucceededFetchFeed: { generation: Schema.Number, url: Schema.String },
-  FailedFetchFeed: { generation: Schema.Number, failure: ApiFailure },
+  /** Feed results carry the number of their request. Only the latest request's result shows. */
+  SucceededFetchFeed: { request: Schema.Number, url: Schema.String },
+  FailedFetchFeed: { request: Schema.Number, failure: ApiFailure },
   ClickedCopyFeedUrl: {},
   SucceededCopyFeedUrl: {},
   FailedCopyFeedUrl: {},
