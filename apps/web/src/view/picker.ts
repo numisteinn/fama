@@ -27,6 +27,27 @@ export interface PickerConfig {
 
 const GAP_PX = 6
 const EDGE_PX = 8
+/** The popup's own height cap, `max-h-[min(24rem,…)]` in POPUP_CLASS. */
+const MAX_POPUP_PX = 384
+
+/**
+ * The side the popup opens on. Like base-ui's flip: the other side when the preferred side is too short for
+ * the popup and the other side has more room.
+ */
+export const pickerSide = (placement: {
+  readonly side: "Top" | "Bottom"
+  readonly triggerTop: number
+  readonly triggerBottom: number
+  readonly viewportHeight: number
+  readonly contentHeight: number
+}): "Top" | "Bottom" => {
+  const below = placement.viewportHeight - placement.triggerBottom - GAP_PX - EDGE_PX
+  const above = placement.triggerTop - GAP_PX - EDGE_PX
+  const needed = Math.min(placement.contentHeight, MAX_POPUP_PX)
+  const [preferred, other] = placement.side === "Bottom" ? [below, above] : [above, below]
+  if (preferred >= needed || other <= preferred) return placement.side
+  return placement.side === "Bottom" ? "Top" : "Bottom"
+}
 
 /** Places the popup next to its trigger, like base-ui's positioner, and follows scroll and resize. */
 export const AnchorPicker = Mount.define("AnchorPicker", {
@@ -41,7 +62,14 @@ export const AnchorPicker = Mount.define("AnchorPicker", {
           const rect = trigger.getBoundingClientRect()
           const style = element.style
           style.position = "fixed"
-          if (side === "Bottom") {
+          const placed = pickerSide({
+            side,
+            triggerTop: rect.top,
+            triggerBottom: rect.bottom,
+            viewportHeight: window.innerHeight,
+            contentHeight: element.scrollHeight,
+          })
+          if (placed === "Bottom") {
             style.top = `${rect.bottom + GAP_PX}px`
             style.bottom = ""
             style.setProperty("--available-height", `${window.innerHeight - rect.bottom - GAP_PX - EDGE_PX}px`)
@@ -57,7 +85,7 @@ export const AnchorPicker = Mount.define("AnchorPicker", {
             style.right = `${Math.max(EDGE_PX, window.innerWidth - rect.right)}px`
             style.left = ""
           }
-          style.setProperty("--transform-origin", `${align === "Start" ? "left" : "right"} ${side === "Bottom" ? "top" : "bottom"}`)
+          style.setProperty("--transform-origin", `${align === "Start" ? "left" : "right"} ${placed === "Bottom" ? "top" : "bottom"}`)
         }
         place()
         window.addEventListener("resize", place)

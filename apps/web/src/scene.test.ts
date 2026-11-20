@@ -38,7 +38,7 @@ import { Playback, StoredPosition } from "~/model"
 import { apiToken } from "~/api"
 import { update } from "~/update"
 import { OpenFilePickerOnKey } from "~/view/addBar"
-import { AnchorPicker } from "~/view/picker"
+import { AnchorPicker, pickerSide } from "~/view/picker"
 import type { Voice, VoiceRef } from "@fama/contracts"
 import type { Message as AppMessage } from "~/message"
 import { view } from "~/view"
@@ -176,6 +176,23 @@ describe("menus", () => {
       Mount.expectEnded(AnchorPicker),
       expect(role("button", { name: "Voice: Steinn" })).toExist(),
     )
+  })
+})
+
+describe("menu placement", () => {
+  // A 46-voice menu is taller than the 384 px cap, so it needs 384 px.
+  const voiceMenu = { contentHeight: 1_500, triggerTop: 0, triggerBottom: 0, viewportHeight: 500 }
+
+  test("a menu near the bottom of a short window opens above its trigger", () => {
+    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", triggerTop: 400, triggerBottom: 432 })).toBe("Top")
+  })
+
+  test("a menu keeps its side when that side has room, or more room than the other", () => {
+    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", triggerTop: 60, triggerBottom: 92 })).toBe("Bottom")
+    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", viewportHeight: 300, triggerTop: 100, triggerBottom: 132 })).toBe(
+      "Bottom",
+    )
+    expectValue(pickerSide({ ...voiceMenu, side: "Top", triggerTop: 440, triggerBottom: 472 })).toBe("Top")
   })
 })
 
