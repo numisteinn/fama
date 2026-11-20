@@ -8,6 +8,18 @@ export function totalMs(chapters: ReadonlyArray<Chapter>): number {
   return chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
 }
 
+/** The Position slider moves in whole seconds. */
+export const SCRUB_STEP_MS = 1000
+
+/**
+ * The position a slider value stands for. A range input cannot reach a max that is not a whole step, so its
+ * last step stands for the very end, as the React slider's full right did.
+ */
+export function scrubTargetMs(chapters: ReadonlyArray<Chapter>, valueMs: number): number {
+  const total = totalMs(chapters)
+  return valueMs >= Math.floor(total / SCRUB_STEP_MS) * SCRUB_STEP_MS ? total : valueMs
+}
+
 export function chapterStartMs(chapters: ReadonlyArray<Chapter>, index: number): number {
   return totalMs(chapters.slice(0, index))
 }

@@ -4,7 +4,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { formatClock, formatRate } from "~/lib/format"
 import { Message } from "~/message"
 import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current } from "~/model"
-import { chapterStartMs, totalMs } from "~/timeline"
+import { chapterStartMs, SCRUB_STEP_MS, totalMs } from "~/timeline"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -170,7 +170,7 @@ const scrubber = (model: Model, playback: LoadedPlayback, episode: Episode, h: H
             h.Type("range"),
             h.Min("0"),
             h.Max(String(max)),
-            h.Step("1000"),
+            h.Step(String(SCRUB_STEP_MS)),
             h.Value(String(value)),
             h.AriaValuenow(value),
             h.AriaValuetext(formatClock(value)),

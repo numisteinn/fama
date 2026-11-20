@@ -572,6 +572,32 @@ describe("player", () => {
     )
   })
 
+  test("dragging the paused slider fully right reaches the very end, so the next Play starts from the top", () => {
+    const paused = {
+      ...withEpisodes(baseModel(), [harbourDays]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        offsetMs: 1_000,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    // The range input steps in whole seconds, so its full right for 46,525 ms is 46,000.
+    const released = update(paused, Message.CommittedScrub({ value: "46000" })).model
+    expect(released.playback).toEqual(
+      Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 1,
+        offsetMs: 19_700,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: true,
+      }),
+    )
+  })
+
   test("Pause on A while Play on B still reads storage: B's late read does not start B", () => {
     const tideTables = { ...harbourDays, id: "tide-tables" as EpisodeId, title: "Tide Tables" }
     const playingA = {

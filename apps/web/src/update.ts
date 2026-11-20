@@ -54,7 +54,7 @@ import {
   sortedVoices,
   toDraft,
 } from "~/model"
-import { chapterStartMs, locate, totalMs } from "~/timeline"
+import { chapterStartMs, locate, scrubTargetMs, totalMs } from "~/timeline"
 
 export type Services = AudioPlayer | HttpClient.HttpClient
 type UpdateReturn = Update.Return<Model, Message, Services>
@@ -755,7 +755,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedSkip: ({ deltaMs }) => skip(deltaMs)(model),
     UpdatedScrub: ({ value }) => ({ model: modifyFields(model, { maybeScrubMs: () => Option.some(Number(value)) }) }),
     CommittedScrub: ({ value }) =>
-      seek(Number(value))(modifyFields(model, { maybeScrubMs: () => Option.none() })),
+      withLoaded(({ episode }) => seek(scrubTargetMs(episode.chapters, Number(value))))(
+        modifyFields(model, { maybeScrubMs: () => Option.none() }),
+      ),
     PressedPlayerShortcut: ({ shortcut: name }) => shortcut(name)(model),
     PressedMediaPlay: () => (isPlaying(model) ? { model } : toggle(model)),
     PressedMediaPause: () => (isPlaying(model) ? toggle(model) : { model }),
