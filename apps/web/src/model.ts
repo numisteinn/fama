@@ -89,6 +89,11 @@ export type LoadedPlayback = Extract<Playback, { _tag: "Loaded" }>
 
 export const Model = Schema.Struct({
   connection: Connection,
+  /**
+   * Goes up on every connection change: a token or server saved here or in another tab. Library and feed
+   * responses carry the generation they were fetched for; a response from an older one is dropped.
+   */
+  connectionGeneration: Schema.Number,
   /** `None` until the first load finishes. */
   maybeEpisodes: Schema.Option(Schema.Array(Episode)),
   maybeLibraryFailure: Schema.Option(ApiFailure),

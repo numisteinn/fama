@@ -11,9 +11,9 @@ export type PlayerShortcut = typeof PlayerShortcut.Type
 
 export const Message = defineMessageUnion({
   // Library
-  /** Library results carry the connection they were fetched for, so a late one from an old connection is dropped. */
-  SucceededFetchEpisodes: { connection: Connection, episodes: Schema.Array(Episode) },
-  FailedFetchEpisodes: { connection: Connection, failure: ApiFailure },
+  /** Library results carry the connection generation they were fetched for, so a late one from an old connection is dropped. */
+  SucceededFetchEpisodes: { generation: Schema.Number, episodes: Schema.Array(Episode) },
+  FailedFetchEpisodes: { generation: Schema.Number, failure: ApiFailure },
   SucceededFetchVoices: { voices: Schema.Array(Voice) },
   FailedFetchVoices: {},
   ClickedTryAgain: {},
@@ -73,9 +73,9 @@ export const Message = defineMessageUnion({
     speed: Schema.Number,
     rate: Schema.Number,
   },
-  /** Feed results carry the connection they were fetched for, so a late one from an old connection is dropped. */
-  SucceededFetchFeed: { connection: Connection, url: Schema.String },
-  FailedFetchFeed: { connection: Connection, failure: ApiFailure },
+  /** Feed results carry the connection generation they were fetched for, so a late one from an old connection is dropped. */
+  SucceededFetchFeed: { generation: Schema.Number, url: Schema.String },
+  FailedFetchFeed: { generation: Schema.Number, failure: ApiFailure },
   ClickedCopyFeedUrl: {},
   SucceededCopyFeedUrl: {},
   FailedCopyFeedUrl: {},

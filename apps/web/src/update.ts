@@ -66,38 +66,54 @@ const unchanged: Step = (model) => ({ model })
 
 export const init = (flags: Flags): UpdateReturn => {
   const connection = { origin: flags.origin, token: flags.token }
-  return {
-    model: {
-      connection,
-      maybeEpisodes: Option.none(),
-      maybeLibraryFailure: Option.none(),
-      voices: [],
-      addText: "",
-      maybeAttachedFile: Option.none(),
-      isAdding: false,
-      maybeAddError: Option.none(),
-      maybeVoice: Option.fromNullishOr(flags.voice),
-      speed: flags.speed,
-      fileDragDepth: 0,
-      armedDeletes: [],
-      rowErrors: {},
-      picker: Picker.Closed(),
-      typeAheadKeys: 0,
-      settingsDialog: Dialog.init({ id: "settings" }),
-      settingsDraft: connection,
-      feed: Feed.Loading(),
-      isFeedUrlCopied: false,
-      feedUrlCopies: 0,
-      playback: Playback.Stopped(),
-      playIntents: 0,
-      rate: flags.rate,
-      savedPositions: flags.savedPositions,
-      lastSavedAtMs: 0,
-      maybeScrubMs: Option.none(),
-    },
-    commands: [FetchEpisodes({ connection }), FetchVoices({ connection }), FocusAddText()],
+  const model: Model = {
+    connection,
+    connectionGeneration: 0,
+    maybeEpisodes: Option.none(),
+    maybeLibraryFailure: Option.none(),
+    voices: [],
+    addText: "",
+    maybeAttachedFile: Option.none(),
+    isAdding: false,
+    maybeAddError: Option.none(),
+    maybeVoice: Option.fromNullishOr(flags.voice),
+    speed: flags.speed,
+    fileDragDepth: 0,
+    armedDeletes: [],
+    rowErrors: {},
+    picker: Picker.Closed(),
+    typeAheadKeys: 0,
+    settingsDialog: Dialog.init({ id: "settings" }),
+    settingsDraft: connection,
+    feed: Feed.Loading(),
+    isFeedUrlCopied: false,
+    feedUrlCopies: 0,
+    playback: Playback.Stopped(),
+    playIntents: 0,
+    rate: flags.rate,
+    savedPositions: flags.savedPositions,
+    lastSavedAtMs: 0,
+    maybeScrubMs: Option.none(),
   }
+  return { model, commands: [fetchEpisodesCommand(model), FetchVoices({ connection }), FocusAddText()] }
 }
+
+// CONNECTION
+
+/** The library request for the current connection, tagged with its generation. */
+const fetchEpisodesCommand = (model: Model) =>
+  FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration })
+
+/** The feed request for the current connection, tagged with its generation. */
+const fetchFeedCommand = (model: Model) =>
+  FetchFeed({ connection: model.connection, generation: model.connectionGeneration })
+
+/** Moves to `connection` as a new generation, so every response fetched before is dropped. */
+const changeConnection = (model: Model, connection: Connection): Model =>
+  modifyFields(model, { connection: () => connection, connectionGeneration: (generation) => generation + 1 })
+
+/** A response fetched for the current connection generation. */
+const isCurrent = (model: Model, generation: number) => generation === model.connectionGeneration
 
 // SETTINGS DIALOG
 
@@ -108,7 +124,7 @@ const foldSettingsOutMessage = Dialog.OutMessage.match<Step>({
       feed: () => Feed.Loading(),
       isFeedUrlCopied: () => false,
     }),
-    commands: [FetchFeed({ connection: model.connection })],
+    commands: [fetchFeedCommand(model)],
   }),
   Closed: () => unchanged,
 })
@@ -135,31 +151,32 @@ const saveSettings: Step = (model) => {
     Redacted.value(connection.token) !== Redacted.value(model.connection.token) ||
     connection.origin !== model.connection.origin
   return Update.combine(model, [
-    (stepModel) => ({
-      model: modifyFields(stepModel, { connection: () => connection }),
-      commands: [
-        StoreConnection({ connection }),
-        ...(isChanged ? [FetchEpisodes({ connection }), FetchFeed({ connection })] : []),
-      ],
-    }),
+    (stepModel) => {
+      if (!isChanged) return { model: stepModel, commands: [StoreConnection({ connection })] }
+      const changed = changeConnection(stepModel, connection)
+      return {
+        model: changed,
+        commands: [StoreConnection({ connection }), fetchEpisodesCommand(changed), fetchFeedCommand(changed)],
+      }
+    },
     closeSettings,
   ])
 }
 
-/** Shows a feed result, unless it was fetched for a connection that is no longer current. */
-const setFeed = (connection: Connection, feed: Feed): Step => (model) =>
-  isSameConnection(connection, model.connection) ? { model: modifyFields(model, { feed: () => feed }) } : { model }
+/** Shows a feed result, unless it was fetched for an older connection generation. */
+const setFeed = (generation: number, feed: Feed): Step => (model) =>
+  isCurrent(model, generation) ? { model: modifyFields(model, { feed: () => feed }) } : { model }
 
 /** Follows a token or server saved in another tab, as the React app did: the library and an open feed refetch. */
 const followStoredConnection = (connection: Connection): Step => (model) => {
   if (isSameConnection(connection, model.connection)) return { model }
   const isFeedShown = model.settingsDialog.isOpen
+  const changed = modifyFields(changeConnection(model, connection), {
+    feed: (feed) => (isFeedShown ? Feed.Loading() : feed),
+  })
   return {
-    model: modifyFields(model, {
-      connection: () => connection,
-      feed: (feed) => (isFeedShown ? Feed.Loading() : feed),
-    }),
-    commands: [FetchEpisodes({ connection }), ...(isFeedShown ? [FetchFeed({ connection })] : [])],
+    model: changed,
+    commands: [fetchEpisodesCommand(changed), ...(isFeedShown ? [fetchFeedCommand(changed)] : [])],
   }
 }
 
@@ -184,7 +201,7 @@ const followStoredSettings =
 
 // LIBRARY
 
-const fetchEpisodes: Step = (model) => ({ model, commands: [FetchEpisodes({ connection: model.connection })] })
+const fetchEpisodes: Step = (model) => ({ model, commands: [fetchEpisodesCommand(model)] })
 
 /** Replaces the episode list, then applies the playback rules that depend on it. */
 const withEpisodes =
@@ -602,12 +619,12 @@ const isPlaying = (model: Model) => model.playback._tag === "Loaded" && model.pl
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    SucceededFetchEpisodes: ({ connection, episodes: list }) =>
-      isSameConnection(connection, model.connection)
+    SucceededFetchEpisodes: ({ generation, episodes: list }) =>
+      isCurrent(model, generation)
         ? withEpisodes(() => list)(modifyFields(model, { maybeLibraryFailure: () => Option.none() }))
         : { model },
-    FailedFetchEpisodes: ({ connection, failure }) => {
-      if (!isSameConnection(connection, model.connection)) return { model }
+    FailedFetchEpisodes: ({ generation, failure }) => {
+      if (!isCurrent(model, generation)) return { model }
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
       const failed = modifyFields(model, { maybeLibraryFailure: () => Option.some(failure) })
       return failure.status === 401 && !wasUnauthorized ? openSettings(failed) : { model: failed }
@@ -714,10 +731,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     }),
     SubmittedSettings: () => saveSettings(model),
     ChangedStoredSettings: (settings) => followStoredSettings(settings)(model),
-    SucceededFetchFeed: ({ connection, url }) =>
-      setFeed(connection, Feed.Ready({ url }))(model),
-    FailedFetchFeed: ({ connection, failure }) =>
-      setFeed(connection, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
+    SucceededFetchFeed: ({ generation, url }) => setFeed(generation, Feed.Ready({ url }))(model),
+    FailedFetchFeed: ({ generation, failure }) =>
+      setFeed(generation, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
     ClickedCopyFeedUrl: () =>
       model.feed._tag === "Ready" ? { model, commands: [CopyFeedUrl({ url: model.feed.url })] } : { model },
     SucceededCopyFeedUrl: () => {

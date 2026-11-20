@@ -36,34 +36,34 @@ describe("library", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.FailedFetchEpisodes({ connection, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Command.resolve(FetchFeed, Message.FailedFetchFeed({ connection, failure: unauthorized })),
+      Command.resolve(FetchFeed, Message.FailedFetchFeed({ generation: 0, failure: unauthorized })),
     )
     const stillUnauthorized = { ...baseModel(), maybeLibraryFailure: Option.some(unauthorized) }
     story(
       update,
       given(stillUnauthorized),
-      message(Message.FailedFetchEpisodes({ connection, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(false)),
       Command.expectNone(),
     )
   })
 
   test("a late library response for a previous connection is dropped: a 401 does not reopen Settings", () => {
-    const oldConnection = { origin: "", token: apiToken("old-token") }
+    // The connection changed once since the request went out.
     story(
       update,
-      given(withEpisodes(baseModel(), [harbourDays])),
-      message(Message.FailedFetchEpisodes({ connection: oldConnection, failure: unauthorized })),
+      given({ ...withEpisodes(baseModel(), [harbourDays]), connectionGeneration: 1 }),
+      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
       model((next) => {
         expect(next.settingsDialog.isOpen).toBe(false)
         expect(next.maybeLibraryFailure).toEqual(Option.none())
       }),
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ connection: oldConnection, episodes: [queuedArticle] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [queuedArticle] })),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
@@ -73,8 +73,8 @@ describe("library", () => {
       update,
       given(withEpisodes(baseModel(), [queuedArticle])),
       message(Message.TickedPoll()),
-      Command.expectExact(FetchEpisodes),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ connection, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 0 })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes).map((item) => item.title)).toEqual(["Harbour Days"])),
     )
   })
@@ -97,17 +97,39 @@ describe("settings", () => {
   /** What the storage Subscription sends when another tab saves a setting. */
   const storedSettings = (fields: Partial<Omit<Extract<Message, { _tag: "ChangedStoredSettings" }>, "_tag">>) =>
     Message.ChangedStoredSettings({ connection, maybeVoice: Option.none(), speed: 1, rate: 1, ...fields })
-  const oldConnection = { origin: "", token: apiToken("old-token") }
   const newFeed = "http://localhost:8788/feed/new/rss.xml"
 
   test("a late feed response for a previous connection does not replace the current feed", () => {
     story(
       update,
-      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }) }),
-      message(Message.SucceededFetchFeed({ connection: oldConnection, url: "http://localhost:8788/feed/old/rss.xml" })),
+      given({ ...baseModel(), connectionGeneration: 1, feed: Feed.Ready({ url: newFeed }) }),
+      message(Message.SucceededFetchFeed({ generation: 0, url: "http://localhost:8788/feed/old/rss.xml" })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-      message(Message.FailedFetchFeed({ connection: oldConnection, failure: { status: 500, message: "Boom" } })),
+      message(Message.FailedFetchFeed({ generation: 0, failure: { status: 500, message: "Boom" } })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+    )
+  })
+
+  test("switching A to B and back to A drops a library response fetched before the switch", () => {
+    const tokenB = { origin: "", token: apiToken("token-b") }
+    // A poll for A is in flight when another tab saves B, and then A again.
+    const polledA = update(withEpisodes(baseModel(), [harbourDays]), Message.TickedPoll())
+    const pollA = polledA.commands?.find((command) => command.name === FetchEpisodes.name) as
+      | ReturnType<typeof FetchEpisodes>
+      | undefined
+    if (!pollA) throw new Error("the poll issued no FetchEpisodes")
+    story(
+      update,
+      given(polledA.model),
+      message(storedSettings({ connection: tokenB })),
+      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1 })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [harbourDays] })),
+      message(storedSettings({ connection })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 2 })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 2, episodes: [harbourDays] })),
+      // The poll for A from before the switch returns now, with an older list.
+      message(Message.SucceededFetchEpisodes({ generation: pollA.args.generation, episodes: [queuedArticle] })),
+      model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
 
@@ -149,8 +171,8 @@ describe("settings", () => {
         expect(next.feed).toEqual(Feed.Loading())
       }),
       Command.expectExact(FetchEpisodes, FetchFeed),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ connection: otherTab, episodes: [] })),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection: otherTab, url: newFeed })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [] })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ generation: 1, url: newFeed })),
     )
   })
 
@@ -213,7 +235,7 @@ describe("settings", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.SucceededFetchFeed({ connection, url: newFeed })),
+      message(Message.SucceededFetchFeed({ generation: 0, url: newFeed })),
       model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
     )
   })
@@ -584,7 +606,7 @@ describe("player", () => {
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ connection, episodes: [harbourDays] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(false)

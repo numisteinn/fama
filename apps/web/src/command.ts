@@ -10,12 +10,12 @@ import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS, RESET_TYPE_AHEAD_MS } from
 // HTTP
 
 export const FetchEpisodes = Command.define("FetchEpisodes", {
-  args: { connection: Connection },
+  args: { connection: Connection, generation: Schema.Number },
   messages: [Message.SucceededFetchEpisodes, Message.FailedFetchEpisodes],
-  execute: ({ connection }) =>
+  execute: ({ connection, generation }) =>
     sendJson(EpisodeList, connection, "GET", "/api/episodes").pipe(
-      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ connection, episodes })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ connection, failure }))),
+      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ generation, episodes })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ generation, failure }))),
     ),
 })
 
@@ -30,12 +30,12 @@ export const FetchVoices = Command.define("FetchVoices", {
 })
 
 export const FetchFeed = Command.define("FetchFeed", {
-  args: { connection: Connection },
+  args: { connection: Connection, generation: Schema.Number },
   messages: [Message.SucceededFetchFeed, Message.FailedFetchFeed],
-  execute: ({ connection }) =>
+  execute: ({ connection, generation }) =>
     sendJson(FeedInfo, connection, "GET", "/api/feed").pipe(
-      Effect.map(({ url }) => Message.SucceededFetchFeed({ connection, url })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ connection, failure }))),
+      Effect.map(({ url }) => Message.SucceededFetchFeed({ generation, url })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ generation, failure }))),
     ),
 })
 
