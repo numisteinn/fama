@@ -4,7 +4,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { formatClock, formatRate } from "~/lib/format"
 import { Message } from "~/message"
 import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current } from "~/model"
-import { chapterStartMs, SCRUB_STEP_MS, totalMs } from "~/timeline"
+import { chapterStartMs, SCRUB_STEP_MS, scrubMaxMs, totalMs } from "~/timeline"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -156,12 +156,14 @@ const skipIcon = (direction: "Back" | "Forward", seconds: number, h: HtmlBuilder
 const scrubber = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBuilder<Message>): Html => {
   const durationMs = totalMs(episode.chapters)
   const positionMs = chapterStartMs(episode.chapters, playback.chapter) + playback.offsetMs
-  const max = Math.max(1, durationMs)
-  const value = Math.min(Option.getOrElse(model.maybeScrubMs, () => positionMs), max)
+  const max = scrubMaxMs(episode.chapters)
+  // At the end, the thumb sits on the extra last stop; the clock and aria-valuenow show the real position.
+  const value = Option.getOrElse(model.maybeScrubMs, () => (positionMs >= durationMs ? max : positionMs))
+  const shownMs = Math.min(value, durationMs)
   return h.div(
     [h.Class("col-span-2 flex w-full items-center gap-3 text-xs text-muted-foreground tabular-nums sm:col-span-1")],
     [
-      h.span([h.Class("w-12 text-right")], [formatClock(value)]),
+      h.span([h.Class("w-12 text-right")], [formatClock(shownMs)]),
       h.div(
         [h.Role("group"), h.AriaLabel("Position"), h.Class("flex-1")],
         [
@@ -171,8 +173,8 @@ const scrubber = (model: Model, playback: LoadedPlayback, episode: Episode, h: H
             h.Max(String(max)),
             h.Step(String(SCRUB_STEP_MS)),
             h.Value(String(value)),
-            h.AriaValuenow(value),
-            h.AriaValuetext(formatClock(value)),
+            h.AriaValuenow(shownMs),
+            h.AriaValuetext(formatClock(shownMs)),
             h.OnInput((next) => Message.UpdatedScrub({ value: next })),
             h.OnChange((next) => Message.CommittedScrub({ value: next })),
             h.Class("scrubber"),

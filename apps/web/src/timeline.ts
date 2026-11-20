@@ -12,12 +12,17 @@ export function totalMs(chapters: ReadonlyArray<Chapter>): number {
 export const SCRUB_STEP_MS = 1000
 
 /**
- * The position a slider value stands for. A range input cannot reach a max that is not a whole step, so its
- * last step stands for the very end, as the React slider's full right did.
+ * The slider's max: the duration rounded up to a whole step. A range input cannot reach a max that is not a
+ * whole step, so this extra stop stands for the very end, and every whole second before it stays a stop,
+ * as in the React slider.
  */
+export function scrubMaxMs(chapters: ReadonlyArray<Chapter>): number {
+  return Math.max(SCRUB_STEP_MS, Math.ceil(totalMs(chapters) / SCRUB_STEP_MS) * SCRUB_STEP_MS)
+}
+
+/** The position a slider value stands for: the value, with the extra last stop at the very end. */
 export function scrubTargetMs(chapters: ReadonlyArray<Chapter>, valueMs: number): number {
-  const total = totalMs(chapters)
-  return valueMs >= Math.floor(total / SCRUB_STEP_MS) * SCRUB_STEP_MS ? total : valueMs
+  return Math.min(valueMs, totalMs(chapters))
 }
 
 export function chapterStartMs(chapters: ReadonlyArray<Chapter>, index: number): number {
