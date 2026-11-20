@@ -190,6 +190,24 @@ describe("menus", () => {
     )
   })
 
+  test("a key with no match clears the prefix, so the next key starts a new search", () => {
+    story(
+      update,
+      given(voiceMenu("", 0)),
+      message(Message.PressedPickerKey({ key: "x" })),
+      model((next) => {
+        expect(activeIndex(next)).toBe(0)
+        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")
+      }),
+      // An empty prefix has nothing to reset, so `s` right after `x` starts a new search.
+      Command.expectNone(),
+      message(Message.PressedPickerKey({ key: "s" })),
+      model((next) => expect(activeIndex(next)).toBe(2)),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
+    )
+  })
+
   test("the same letter again cycles through the items that start with it", () => {
     story(
       update,

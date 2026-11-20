@@ -236,7 +236,8 @@ const findPrefix = (texts: ReadonlyArray<string>, start: number, prefix: string)
 
 /**
  * Type-ahead, like base-ui's menus. Keys typed within 750 ms make one prefix: `S`, `t`, `e` goes to Steinn.
- * The same letter again moves to the next item that starts with it.
+ * The same letter again moves to the next item that starts with it. A key with no match clears the
+ * prefix, so the next key starts a new search.
  */
 const typeAhead = (key: string): Step => (model) => {
   if (model.picker._tag === "Closed") return { model }
@@ -249,18 +250,19 @@ const typeAhead = (key: string): Step => (model) => {
   const maybeMatch = isRepeat
     ? findPrefix(texts, from + 1, key)
     : findPrefix(texts, Math.max(0, from), typedText)
+  const nextTypedText = Option.isSome(maybeMatch) ? typedText : ""
   return {
     model: modifyFields(model, {
       picker: () =>
         Picker.Open({
           ...open,
-          typedText,
+          typedText: nextTypedText,
           maybeActiveIndex: Option.orElse(maybeMatch, () => open.maybeActiveIndex),
         }),
       typeAheadKeys: () => keys,
     }),
     commands: [
-      WaitBeforeResetTypeAhead({ keys }),
+      ...(nextTypedText === "" ? [] : [WaitBeforeResetTypeAhead({ keys })]),
       ...Option.toArray(Option.map(maybeMatch, (index) => ScrollPickerItem({ pickerId: open.pickerId, index }))),
     ],
   }
