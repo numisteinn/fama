@@ -20,12 +20,11 @@ export const playerBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<
 const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBuilder<Message>): Html => {
   const chapter = episode.chapters[playback.chapter]
   return h.footer(
+    [h.Class("fixed inset-x-0 bottom-0 z-30 border-t border-border pb-[env(safe-area-inset-bottom)]")],
     [
-      h.Class(
-        "fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl",
-      ),
-    ],
-    [
+      // The blur sits on its own layer. A backdrop filter on the footer itself would make the footer the
+      // containing block of the menus' fixed backdrop and popup, so a click on the library would go through.
+      h.div([h.AriaHidden(true), h.Class("absolute inset-0 -z-10 bg-background/90 backdrop-blur-xl")], []),
       h.div(
         [
           h.Class(
