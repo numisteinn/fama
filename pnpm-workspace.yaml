@@ -9,6 +9,11 @@ catalog:
   vitest: 5.1.1
   react: 19.3.0
 
+overrides:
+  "@effect/platform-browser": 4.1.4
+  "@effect/platform-node": 4.1.4
+  "@effect/platform-node-shared": 4.1.4
+
 allowBuilds:
   esbuild: true
   workerd: true

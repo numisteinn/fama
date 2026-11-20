@@ -77,3 +77,75 @@
     caret-color: var(--foreground);
   }
 }
+
+/* The Position slider: a native range input drawn like the old base-ui slider. */
+@layer components {
+  .scrubber {
+    display: block;
+    width: 100%;
+    height: 1.5rem;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+    touch-action: none;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  .scrubber:focus-visible {
+    outline: none;
+  }
+  .scrubber::-webkit-slider-runnable-track {
+    height: 0.25rem;
+    border-radius: 9999px;
+    background: linear-gradient(to right, var(--foreground) var(--fill, 0%), var(--faint) var(--fill, 0%));
+  }
+  .scrubber::-moz-range-track {
+    height: 0.25rem;
+    border-radius: 9999px;
+    background: linear-gradient(to right, var(--foreground) var(--fill, 0%), var(--faint) var(--fill, 0%));
+  }
+  .scrubber::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    margin-top: -0.25rem;
+    border: none;
+    border-radius: 9999px;
+    background: var(--foreground);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+    opacity: 0;
+    transition: opacity 150ms;
+  }
+  .scrubber::-moz-range-thumb {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: none;
+    border-radius: 9999px;
+    background: var(--foreground);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+    opacity: 0;
+    transition: opacity 150ms;
+  }
+  .scrubber:hover::-webkit-slider-thumb,
+  .scrubber:active::-webkit-slider-thumb,
+  .scrubber:focus-visible::-webkit-slider-thumb {
+    opacity: 1;
+  }
+  .scrubber:hover::-moz-range-thumb,
+  .scrubber:active::-moz-range-thumb,
+  .scrubber:focus-visible::-moz-range-thumb {
+    opacity: 1;
+  }
+  .scrubber:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+  @media (pointer: coarse) {
+    .scrubber::-webkit-slider-thumb {
+      opacity: 1;
+    }
+    .scrubber::-moz-range-thumb {
+      opacity: 1;
+    }
+  }
+}
