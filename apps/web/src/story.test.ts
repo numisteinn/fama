@@ -1,6 +1,6 @@
 import { Dialog } from "@foldkit/ui"
 import { Effect, Option, Redacted } from "effect"
-import { Command, type StorySimulation, given, message, model, story } from "foldkit/story"
+import { Command, type StorySimulation, given, message, model, steps, story } from "foldkit/story"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
@@ -230,10 +230,62 @@ describe("menus", () => {
   const voiceMenu = (typedText: string, active: number) => ({
     ...baseModel(),
     voices,
-    picker: Picker.Open({ pickerId: "Voice", maybeActiveIndex: Option.some(active), typedText }),
+    // The prefix started with nothing highlighted.
+    picker: Picker.Open({ pickerId: "Voice", maybeActiveIndex: Option.some(active), typedText, typeAheadFrom: -1 }),
     typeAheadKeys: typedText.length,
   })
   const activeIndex = (next: { picker: Picker }) => next.picker._tag === "Open" && Option.getOrNull(next.picker.maybeActiveIndex)
+  /** Voices with these names, all in one language, so the Voice menu is Auto and then the names in order. */
+  const named = (names: ReadonlyArray<string>): ReadonlyArray<Voice> =>
+    names.map((name) => ({ id: `kokoro:${name.toLowerCase()}` as VoiceRef, engine: "kokoro", name, language: "en", gender: null }))
+  /**
+   * A key in the open menu that highlights an item. The next key comes within 750 ms, so this key's reset
+   * timer ends after it, stale: a Story must resolve it first, so it resolves with a key count no key has.
+   */
+  const typeKey = (key: string) =>
+    steps(
+      message(Message.PressedPickerKey({ key })),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: -1 })),
+    )
+  /** The last key of a prefix: 750 ms pass and its reset timer, the `keys`th, clears the prefix. */
+  const typeLastKey = (key: string, keys: number) =>
+    steps(
+      message(Message.PressedPickerKey({ key })),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys })),
+    )
+
+  test("after cycling with a repeated letter, the next key extends it: s, s, k goes to Sky", () => {
+    story(
+      update,
+      given({ ...baseModel(), voices: named(["Santa", "Sarah", "Sky"]) }),
+      message(Message.ClickedPickerTrigger({ pickerId: "Voice" })),
+      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
+      typeKey("s"),
+      model((next) => expect(activeIndex(next)).toBe(1)),
+      typeKey("s"),
+      model((next) => expect(activeIndex(next)).toBe(2)),
+      typeLastKey("k", 3),
+      model((next) => {
+        expect(activeIndex(next)).toBe(3)
+        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")
+      }),
+    )
+  })
+
+  test("a list with a doubled first letter does not cycle: l, l searches for `ll`, as in base-ui", () => {
+    story(
+      update,
+      given({ ...baseModel(), voices: named(["Lara", "Llama", "Lukas"]) }),
+      message(Message.ClickedPickerTrigger({ pickerId: "Voice" })),
+      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
+      typeKey("l"),
+      model((next) => expect(activeIndex(next)).toBe(1)),
+      typeLastKey("l", 2),
+      model((next) => expect(activeIndex(next)).toBe(2)),
+    )
+  })
 
   test("keys typed close together make one prefix: S, t, e goes to Steinn", () => {
     story(

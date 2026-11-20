@@ -32,10 +32,18 @@ export const isWorking = (job: JobState) => job._tag === "Queued" || job._tag ==
 export const PickerId = Schema.Literals(["Voice", "VoiceSpeed", "PlaybackSpeed", "Chapters"])
 export type PickerId = typeof PickerId.Type
 
-/** At most one menu is open. `maybeActiveIndex` is the highlighted item. `typedText` is the type-ahead so far. */
+/**
+ * At most one menu is open. `maybeActiveIndex` is the highlighted item. `typedText` is the type-ahead so far,
+ * and `typeAheadFrom` the index it searches after, as base-ui's `prevIndexRef`.
+ */
 export const Picker = defineTaggedUnion({
   Closed: {},
-  Open: { pickerId: PickerId, maybeActiveIndex: Schema.Option(Schema.Number), typedText: Schema.String },
+  Open: {
+    pickerId: PickerId,
+    maybeActiveIndex: Schema.Option(Schema.Number),
+    typedText: Schema.String,
+    typeAheadFrom: Schema.Number,
+  },
 })
 export type Picker = typeof Picker.Type
 

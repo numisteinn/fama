@@ -249,28 +249,35 @@ export const isTypeAheadKey = (key: string): boolean => key.length === 1 && key 
 const findPrefix = (texts: ReadonlyArray<string>, start: number, prefix: string): Option.Option<number> => {
   const needle = prefix.toLocaleLowerCase()
   for (let step = 0; step < texts.length; step++) {
-    const index = (start + step) % texts.length
+    const index = (((start + step) % texts.length) + texts.length) % texts.length
     if (texts[index]?.toLocaleLowerCase().startsWith(needle)) return Option.some(index)
   }
   return Option.none()
 }
 
+/** No item starts with a doubled letter (`Llama`), so a repeated letter may cycle, as base-ui decides. */
+const canCycle = (texts: ReadonlyArray<string>): boolean =>
+  texts.every((text) => !text || text[0]?.toLocaleLowerCase() !== text[1]?.toLocaleLowerCase())
+
 /**
- * Type-ahead, like base-ui's menus. Keys typed within 750 ms make one prefix: `S`, `t`, `e` goes to Steinn.
- * The same letter again moves to the next item that starts with it. A key with no match clears the
- * prefix, so the next key starts a new search; a Space with no match keeps it, as base-ui did.
+ * Type-ahead, ported from base-ui's `useTypeahead`. Keys typed within 750 ms make one prefix, searched
+ * after the item that was highlighted when it started: `S`, `t`, `e` goes to Steinn. The same letter
+ * again starts a one-letter prefix after the last match, so it cycles, and the next key extends that
+ * prefix: `s`, `s`, `k` goes to Sky. Unlike base-ui, `s` then `S` also counts as the same letter.
+ * A key with no match clears the prefix, so the next key starts a new search; a Space with no match
+ * keeps it.
  */
 const typeAhead = (key: string): Step => (model) => {
   if (model.picker._tag === "Closed") return { model }
   const open = model.picker
-  const typedText = open.typedText + key
   const keys = model.typeAheadKeys + 1
   const texts = pickerItemTexts(model, open.pickerId)
-  const from = Option.getOrElse(open.maybeActiveIndex, () => -1)
-  const isRepeat = [...typedText].every((char) => char.toLocaleLowerCase() === key.toLocaleLowerCase())
-  const maybeMatch = isRepeat
-    ? findPrefix(texts, from + 1, key)
-    : findPrefix(texts, Math.max(0, from), typedText)
+  const active = Option.getOrElse(open.maybeActiveIndex, () => -1)
+  const isNewPrefix = open.typedText === ""
+  const isCycle = open.typedText.toLocaleLowerCase() === key.toLocaleLowerCase() && canCycle(texts)
+  const from = isNewPrefix || isCycle ? active : open.typeAheadFrom
+  const typedText = (isCycle ? "" : open.typedText) + key
+  const maybeMatch = findPrefix(texts, from + 1, typedText)
   const nextTypedText = Option.isSome(maybeMatch) || key === " " ? typedText : ""
   return {
     model: modifyFields(model, {
@@ -278,6 +285,7 @@ const typeAhead = (key: string): Step => (model) => {
         Picker.Open({
           ...open,
           typedText: nextTypedText,
+          typeAheadFrom: from,
           maybeActiveIndex: Option.orElse(maybeMatch, () => open.maybeActiveIndex),
         }),
       typeAheadKeys: () => keys,
@@ -315,7 +323,9 @@ export const pickerCheckedIndex = (model: Model, pickerId: PickerId): number => 
 const openPicker =
   (pickerId: PickerId, maybeActiveIndex: Option.Option<number>): Step =>
   (model) => ({
-    model: modifyFields(model, { picker: () => Picker.Open({ pickerId, maybeActiveIndex, typedText: "" }) }),
+    model: modifyFields(model, {
+      picker: () => Picker.Open({ pickerId, maybeActiveIndex, typedText: "", typeAheadFrom: -1 }),
+    }),
     commands: [
       FocusPicker({ pickerId }),
       ...Option.toArray(Option.map(maybeActiveIndex, (index) => ScrollPickerItem({ pickerId, index }))),
@@ -349,11 +359,9 @@ const pressPickerTriggerKey = (pickerId: PickerId, key: string): Step => (model)
 const activate = (pickerId: PickerId, index: number): Step => (model) => ({
   model: modifyFields(model, {
     picker: (picker) =>
-      Picker.Open({
-        pickerId,
-        maybeActiveIndex: Option.some(index),
-        typedText: picker._tag === "Open" ? picker.typedText : "",
-      }),
+      picker._tag === "Open"
+        ? Picker.Open({ ...picker, pickerId, maybeActiveIndex: Option.some(index) })
+        : Picker.Open({ pickerId, maybeActiveIndex: Option.some(index), typedText: "", typeAheadFrom: -1 }),
   }),
   commands: [ScrollPickerItem({ pickerId, index })],
 })
