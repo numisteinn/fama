@@ -1,4 +1,4 @@
-import { Episode, EpisodeId, Voice } from "@fama/contracts"
+import { Episode, EpisodeId, Voice, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Schema } from "effect"
 import { File } from "foldkit"
@@ -66,8 +66,13 @@ export const Message = defineMessageUnion({
   UpdatedTokenDraft: { value: ApiToken },
   UpdatedOriginDraft: { value: Schema.String },
   SubmittedSettings: {},
-  /** Another tab saved a token or server. */
-  ChangedStoredConnection: { connection: Connection },
+  /** Another tab saved a token, server, Voice, Voice speed or Playback speed. Carries all of them, as stored now. */
+  ChangedStoredSettings: {
+    connection: Connection,
+    maybeVoice: Schema.Option(VoiceRef),
+    speed: Schema.Number,
+    rate: Schema.Number,
+  },
   /** Feed results carry the connection they were fetched for, so a late one from an old connection is dropped. */
   SucceededFetchFeed: { connection: Connection, url: Schema.String },
   FailedFetchFeed: { connection: Connection, failure: ApiFailure },

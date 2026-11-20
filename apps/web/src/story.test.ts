@@ -27,6 +27,7 @@ import { Feed, Picker, Playback } from "~/model"
 import type { Voice, VoiceRef } from "@fama/contracts"
 import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
 import { storedPosition } from "~/flags"
+import { storageEventMessage } from "~/subscription"
 import { update } from "~/update"
 
 const unauthorized = { status: 401, message: "The API token is wrong or missing" }
@@ -94,6 +95,9 @@ describe("library", () => {
 })
 
 describe("settings", () => {
+  /** What the storage Subscription sends when another tab saves a setting. */
+  const storedSettings = (fields: Partial<Omit<Extract<Message, { _tag: "ChangedStoredSettings" }>, "_tag">>) =>
+    Message.ChangedStoredSettings({ connection, maybeVoice: Option.none(), speed: 1, rate: 1, ...fields })
   const oldConnection = { origin: "", token: apiToken("old-token") }
   const newFeed = "http://localhost:8788/feed/new/rss.xml"
 
@@ -139,7 +143,7 @@ describe("settings", () => {
     story(
       update,
       given({ ...open, settingsDialog: { ...open.settingsDialog, isOpen: true }, feed: Feed.Ready({ url: newFeed }) }),
-      message(Message.ChangedStoredConnection({ connection: otherTab })),
+      message(storedSettings({ connection: otherTab })),
       model((next) => {
         expect(next.connection.origin).toBe("")
         expect(Redacted.value(next.connection.token)).toBe("token-from-another-tab")
@@ -151,11 +155,57 @@ describe("settings", () => {
     )
   })
 
-  test("a storage event with the same connection does nothing", () => {
+  test("a Voice, Voice speed and Playback speed saved in another tab reach the add bar and the audio", () => {
+    const sarah = "kokoro:af_sarah" as VoiceRef
+    story(
+      update,
+      given({ ...baseModel(), addText: "A short note." }),
+      message(storedSettings({ maybeVoice: Option.some(sarah), speed: 1.2, rate: 2 })),
+      model((next) => {
+        expect(next.maybeVoice).toEqual(Option.some(sarah))
+        expect(next.speed).toBe(1.2)
+        expect(next.rate).toBe(2)
+      }),
+      Command.expectExact(SetAudioRate({ rate: 2 })),
+      Command.resolve(SetAudioRate, Message.CompletedSetAudioRate()),
+      message(Message.SubmittedAddForm()),
+      Command.expectExact(
+        CreateEpisodeFromSource({
+          connection,
+          input: { source: { _tag: "Text", title: null, text: "A short note." }, voice: sarah, speed: 1.2 },
+        }),
+      ),
+      Command.resolve(CreateEpisodeFromSource, Message.SucceededCreateEpisode({ episode: queuedArticle })),
+      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+    )
+  })
+
+  test("the storage Subscription follows the token, server, Voice, Voice speed and Playback speed keys", () => {
+    localStorage.setItem("fama.voice", JSON.stringify("kokoro:af_sarah"))
+    localStorage.setItem("fama.speed", "1.2")
+    localStorage.setItem("fama.rate", "2")
+    try {
+      for (const key of ["fama.token", "fama.origin", "fama.voice", "fama.speed", "fama.rate", null]) {
+        const maybeMessage = storageEventMessage(key)
+        expect(Option.isSome(maybeMessage)).toBe(true)
+        const changed = Option.getOrThrow(maybeMessage)
+        expect(changed._tag === "ChangedStoredSettings" && [Option.getOrNull(changed.maybeVoice), changed.speed, changed.rate]).toEqual([
+          "kokoro:af_sarah",
+          1.2,
+          2,
+        ])
+      }
+      expect(storageEventMessage("fama.position.harbour-days")).toEqual(Option.none())
+    } finally {
+      localStorage.clear()
+    }
+  })
+
+  test("a storage event with the same settings does nothing", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.ChangedStoredConnection({ connection: { origin: "", token: apiToken("dev-api-token") } })),
+      message(storedSettings({ connection: { origin: "", token: apiToken("dev-api-token") } })),
       Command.expectNone(),
     )
   })

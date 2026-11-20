@@ -1,4 +1,4 @@
-import type { Episode, EpisodeId } from "@fama/contracts"
+import type { Episode, EpisodeId, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
@@ -159,6 +159,25 @@ const followStoredConnection = (connection: Connection): Step => (model) => {
     commands: [FetchEpisodes({ connection }), ...(isFeedShown ? [FetchFeed({ connection })] : [])],
   }
 }
+
+/**
+ * Follows settings saved in another tab, as the React app did. The add bar takes the Voice and Voice speed,
+ * and a new Playback speed applies to the audio now.
+ */
+const followStoredSettings =
+  (settings: { connection: Connection; maybeVoice: Option.Option<VoiceRef>; speed: number; rate: number }): Step =>
+  (model) =>
+    Update.combine(model, [
+      followStoredConnection(settings.connection),
+      (stepModel) => ({
+        model: modifyFields(stepModel, {
+          maybeVoice: () => settings.maybeVoice,
+          speed: () => settings.speed,
+          rate: () => settings.rate,
+        }),
+        commands: settings.rate === stepModel.rate ? [] : [SetAudioRate({ rate: settings.rate })],
+      }),
+    ])
 
 // LIBRARY
 
@@ -681,7 +700,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: modifyFields(model, { settingsDraft: (draft) => modifyFields(draft, { origin: () => value }) }),
     }),
     SubmittedSettings: () => saveSettings(model),
-    ChangedStoredConnection: ({ connection }) => followStoredConnection(connection)(model),
+    ChangedStoredSettings: (settings) => followStoredSettings(settings)(model),
     SucceededFetchFeed: ({ connection, url }) =>
       setFeed(connection, Feed.Ready({ url }))(model),
     FailedFetchFeed: ({ connection, failure }) =>

@@ -1,7 +1,7 @@
 import { Duration, Effect, Option, Queue, Schema, Stream } from "effect"
 import { Dom, Subscription } from "foldkit"
 import { AudioPlayer } from "~/audio"
-import { CONNECTION_KEYS, storedConnection } from "~/flags"
+import { SETTING_KEYS, storedSettings } from "~/flags"
 import { Message } from "~/message"
 import { type Model, POLL_MS, SKIP_BACK_MS, SKIP_FORWARD_MS, current, episodes, isWorking } from "~/model"
 import { chapterStartMs, totalMs } from "~/timeline"
@@ -64,6 +64,10 @@ const mediaActionMessage = (action: MediaSessionAction, details: MediaSessionAct
 
 const isLoaded = (model: Model) => Option.isSome(current(model))
 
+/** The Message for a `storage` event with `key`. A `null` key is a clear. Other keys, such as positions, are ignored. */
+export const storageEventMessage = (key: string | null): Option.Option<Message> =>
+  key === null || SETTING_KEYS.includes(key) ? Option.some(Message.ChangedStoredSettings(storedSettings())) : Option.none()
+
 export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((entry) => ({
   /** Refetch every 2 s while a job is Queued or Running. */
   poll: entry(
@@ -93,15 +97,12 @@ export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((e
     ),
   ),
 
-  /** A token or server saved in another tab. `storage` fires only in the other tabs; a `null` key is a clear. */
-  storedConnection: Subscription.persistentEntry(
+  /** Settings saved in another tab. `storage` fires only in the other tabs. */
+  storedSettings: Subscription.persistentEntry(
     Dom.streamFromEventFilterMap({
       target: window,
       type: "storage",
-      filterMapEvent: (event) =>
-        event.key === null || CONNECTION_KEYS.includes(event.key)
-          ? Option.some(Message.ChangedStoredConnection({ connection: storedConnection() }))
-          : Option.none(),
+      filterMapEvent: (event) => storageEventMessage(event.key),
     }),
   ),
 

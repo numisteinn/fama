@@ -37,23 +37,33 @@ function storedPositions(): Record<string, number> {
 export const storedPosition = (episodeId: string): Option.Option<number> =>
   Option.fromNullishOr(asNumber(read(POSITION_PREFIX + episodeId)))
 
-/** The keys that hold the saved connection. */
-export const CONNECTION_KEYS: ReadonlyArray<string> = ["fama.token", "fama.origin"]
+/** The keys that hold the settings another tab can change: token, server, Voice, Voice speed and Playback speed. */
+export const SETTING_KEYS: ReadonlyArray<string> = ["fama.token", "fama.origin", "fama.voice", "fama.speed", "fama.rate"]
 
-/** The saved token and server. */
-export const storedConnection = (): Connection => ({
-  token: apiToken(asString(read("fama.token")) ?? ""),
-  origin: (asString(read("fama.origin")) ?? "").trim().replace(/\/+$/, ""),
+/** The saved settings, read now, under the same keys and JSON encoding as the React app. */
+export const storedSettings = (): {
+  connection: Connection
+  maybeVoice: Option.Option<VoiceRef>
+  speed: number
+  rate: number
+} => ({
+  connection: {
+    token: apiToken(asString(read("fama.token")) ?? ""),
+    origin: (asString(read("fama.origin")) ?? "").trim().replace(/\/+$/, ""),
+  },
+  maybeVoice: Option.fromNullishOr(asString(read("fama.voice")) as VoiceRef | undefined),
+  speed: asNumber(read("fama.speed")) ?? 1,
+  rate: asNumber(read("fama.rate")) ?? 1,
 })
 
-/** Settings from localStorage, under the same keys and JSON encoding as before. */
+/** Settings from localStorage at boot. */
 export const flags: Effect.Effect<Flags> = Effect.sync(() => {
-  const voice = read("fama.voice")
+  const { connection, maybeVoice, speed, rate } = storedSettings()
   return {
-    ...storedConnection(),
-    voice: typeof voice === "string" ? (voice as VoiceRef) : null,
-    speed: asNumber(read("fama.speed")) ?? 1,
-    rate: asNumber(read("fama.rate")) ?? 1,
+    ...connection,
+    voice: Option.getOrNull(maybeVoice),
+    speed,
+    rate,
     savedPositions: storedPositions(),
   }
 })
