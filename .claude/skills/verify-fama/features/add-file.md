@@ -38,6 +38,7 @@ Preconditions:
 ## Gotchas
 
 - The web `<input type=file>` is hidden and has no accessible name. Target it with the selector `input[type=file]`, not with the `Attach file` button. The button opens a native picker that the preview tools cannot answer.
+- `Attach file` is a `<label for="file-input">` with role `button`, so the browser opens the picker inside the click (Safari refuses a picker opened later). Enter and Space open it too. Check it with `preview_evaluate`: the element with `aria-label="Attach file"` is a `LABEL` whose `htmlFor` is `file-input`.
 - The worker drops EPUB chapters under 40 words and treats a short first section as front matter. A fixture with tiny chapters loses them. `make-fixtures.py` keeps each chapter long enough.
 - The upload limit is 100 MB, and the API reads the whole upload into memory.
 - `file-ios-pick` needs the fixture in the simulator's Files app first. `agent-device` cannot add files, and `simctl addmedia` only adds photos and videos. Until a way to seed Files is written down here, report `file-ios-pick` and `file-ios-share` as not driven, with this precondition as the reason.

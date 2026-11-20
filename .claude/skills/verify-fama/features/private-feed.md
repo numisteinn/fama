@@ -23,7 +23,7 @@ Preconditions:
 - Baseline from `README.md`.
 - At least two Ready episodes, for example `The Quiet Harbour` ([Add a link](./add-link.md)) and `Harbour Days` ([Add a file](./add-file.md)), and one episode that is not Ready (add one with `fama-verify up --no-worker`, or add one and read the feed before the worker finishes).
 
-- **Web, URL.** Choose `Settings`. The `Podcast feed` row shows `http://localhost:8788/feed/dev-feed-token/rss.xml`. Choose `Copy feed URL`. The button name becomes `Copied`.
+- **Web, URL.** Choose `Settings`. The `Podcast feed` row shows `http://localhost:8788/feed/dev-feed-token/rss.xml`. Choose `Copy feed URL`. The button name becomes `Copied`, and goes back to `Copy feed URL` about 1.5 s later. Copy, close, reopen and copy again within 1.5 s: the second `Copied` still lasts its full 1.5 s.
 - **URL from the API.** Run `fama-verify feed`. It prints the same URL.
 - **Items.** Run `curl -s "$(fama-verify feed)" > $EVIDENCE/feed/feed.xml` and `grep -oE '<title>[^<]*</title>|<enclosure [^>]*>' $EVIDENCE/feed/feed.xml`. The channel title is `Fama`. There is one item for each Ready episode, newest first, each with an `<enclosure ... type="audio/x-m4a"/>`. No item exists for the episode that is not Ready.
 - **XML is valid.** Run `python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse(sys.argv[1])" $EVIDENCE/feed/feed.xml`. Exit code `0`.

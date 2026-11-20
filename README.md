@@ -55,7 +55,7 @@ cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <F
 |---|---|
 | `packages/contracts` | The HTTP contract as Effect Schema. `docs/api.md` is the same contract in words. |
 | `apps/api` | Cloudflare Worker: API, D1, R2, RSS feed. |
-| `apps/web` | Vite + React web app. |
+| `apps/web` | Vite + Foldkit web app (The Elm Architecture on Effect). |
 | `apps/mobile` | Expo iOS app. |
 | `worker` | Python worker: extraction and TTS. |
 
