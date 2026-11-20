@@ -3,7 +3,7 @@ import { Dialog } from "@foldkit/ui"
 import { Schema } from "effect"
 import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
-import { ApiFailure, ApiToken } from "~/api"
+import { ApiFailure, ApiToken, Connection } from "~/api"
 import { PickerId } from "~/model"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
@@ -65,8 +65,9 @@ export const Message = defineMessageUnion({
   UpdatedTokenDraft: { value: ApiToken },
   UpdatedOriginDraft: { value: Schema.String },
   SubmittedSettings: {},
-  SucceededFetchFeed: { url: Schema.String },
-  FailedFetchFeed: { failure: ApiFailure },
+  /** Feed results carry the connection they were fetched for, so a late one from an old connection is dropped. */
+  SucceededFetchFeed: { connection: Connection, url: Schema.String },
+  FailedFetchFeed: { connection: Connection, failure: ApiFailure },
   ClickedCopyFeedUrl: {},
   SucceededCopyFeedUrl: {},
   FailedCopyFeedUrl: {},

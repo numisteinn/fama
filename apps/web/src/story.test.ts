@@ -17,8 +17,9 @@ import {
   WaitBeforeDisarmDelete,
 } from "~/command"
 import { Message } from "~/message"
-import { Playback } from "~/model"
-import { baseModel, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
+import { apiToken } from "~/api"
+import { Feed, Playback } from "~/model"
+import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
 import { update } from "~/update"
 
 const unauthorized = { status: 401, message: "The API token is wrong or missing" }
@@ -32,7 +33,7 @@ describe("library", () => {
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Command.resolve(FetchFeed, Message.FailedFetchFeed({ failure: unauthorized })),
+      Command.resolve(FetchFeed, Message.FailedFetchFeed({ connection, failure: unauthorized })),
     )
     const stillUnauthorized = { ...baseModel(), maybeLibraryFailure: Option.some(unauthorized) }
     story(
@@ -65,6 +66,31 @@ describe("library", () => {
       Command.resolve(FocusDeleteConfirm, Message.CompletedFocusDeleteConfirm()),
       Command.resolve(WaitBeforeDisarmDelete, Message.CompletedWaitBeforeDisarmDelete({ episodeId: harbourDays.id })),
       model((next) => expect(next.armedDeletes).toEqual([])),
+    )
+  })
+})
+
+describe("settings", () => {
+  const oldConnection = { origin: "", token: apiToken("old-token") }
+  const newFeed = "http://localhost:8788/feed/new/rss.xml"
+
+  test("a late feed response for a previous connection does not replace the current feed", () => {
+    story(
+      update,
+      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }) }),
+      message(Message.SucceededFetchFeed({ connection: oldConnection, url: "http://localhost:8788/feed/old/rss.xml" })),
+      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+      message(Message.FailedFetchFeed({ connection: oldConnection, failure: { status: 500, message: "Boom" } })),
+      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
+    )
+  })
+
+  test("a feed response for the current connection shows the feed", () => {
+    story(
+      update,
+      given(baseModel()),
+      message(Message.SucceededFetchFeed({ connection, url: newFeed })),
+      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
     )
   })
 })

@@ -4,7 +4,7 @@ import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
 import { Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
-import { apiToken } from "~/api"
+import { type Connection, apiToken, isSameConnection } from "~/api"
 import { type AudioPlayer, LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
   ClickFileInput,
@@ -138,6 +138,10 @@ const saveSettings: Step = (model) => {
     closeSettings,
   ])
 }
+
+/** Shows a feed result, unless it was fetched for a connection that is no longer current. */
+const setFeed = (connection: Connection, feed: Feed): Step => (model) =>
+  isSameConnection(connection, model.connection) ? { model: modifyFields(model, { feed: () => feed }) } : { model }
 
 // LIBRARY
 
@@ -570,12 +574,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: modifyFields(model, { settingsDraft: (draft) => modifyFields(draft, { origin: () => value }) }),
     }),
     SubmittedSettings: () => saveSettings(model),
-    SucceededFetchFeed: ({ url }) => ({ model: modifyFields(model, { feed: () => Feed.Ready({ url }) }) }),
-    FailedFetchFeed: ({ failure }) => ({
-      model: modifyFields(model, {
-        feed: () => (failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message })),
-      }),
-    }),
+    SucceededFetchFeed: ({ connection, url }) =>
+      setFeed(connection, Feed.Ready({ url }))(model),
+    FailedFetchFeed: ({ connection, failure }) =>
+      setFeed(connection, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
     ClickedCopyFeedUrl: () =>
       model.feed._tag === "Ready" ? { model, commands: [CopyFeedUrl({ url: model.feed.url })] } : { model },
     SucceededCopyFeedUrl: () =>

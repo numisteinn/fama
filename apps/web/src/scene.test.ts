@@ -23,8 +23,9 @@ import {
   SavePosition,
   StoreConnection,
 } from "~/command"
-import { baseModel, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
+import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
+import { apiToken } from "~/api"
 import { update } from "~/update"
 import type { Message as AppMessage } from "~/message"
 import { view } from "~/view"
@@ -54,6 +55,8 @@ describe("add a link", () => {
 })
 
 describe("settings", () => {
+  const savedConnection = { origin: "", token: apiToken("-2") }
+
   test("Save stores the token, refetches, and closes the dialog", () => {
     scene(
       { update, view },
@@ -61,7 +64,7 @@ describe("settings", () => {
       click(role("button", { name: "Settings" })),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
       Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ url: "http://localhost:8788/feed/t/rss.xml" })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection, url: "http://localhost:8788/feed/t/rss.xml" })),
       expect(role("dialog", { name: "Settings" })).toExist(),
       expect(role("button", { name: "Copy feed URL" })).toBeEnabled(),
       type(role("textbox", { name: "API token" }), "-2"),
@@ -69,7 +72,7 @@ describe("settings", () => {
       Command.expectExact(StoreConnection, FetchEpisodes, FetchFeed, Dialog.CloseDialog),
       Command.resolve(StoreConnection, Message.CompletedStoreSetting()),
       Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ episodes: [] })),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ url: "http://localhost:8788/feed/t/rss.xml" })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection: savedConnection, url: "http://localhost:8788/feed/t/rss.xml" })),
       Command.resolve(Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()),
       Mount.expectEnded(Dialog.AcquireResources),
       expect(role("dialog", { name: "Settings" })).toBeAbsent(),
@@ -88,7 +91,7 @@ describe("settings", () => {
       click(role("button", { name: "Settings" })),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
       Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ url: "http://localhost:8788/feed/t/rss.xml" })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection, url: "http://localhost:8788/feed/t/rss.xml" })),
       type(role("textbox", { name: "API token" }), "typed-secret"),
       expect(role("textbox", { name: "API token" })).toHaveValue("typed-secret"),
     )

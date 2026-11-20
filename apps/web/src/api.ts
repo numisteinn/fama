@@ -12,6 +12,10 @@ export const apiToken = (value: string): ApiToken => Redacted.make(value, { labe
 export const Connection = Schema.Struct({ origin: Schema.String, token: ApiToken })
 export type Connection = typeof Connection.Type
 
+/** Two connections reach the same server with the same token. */
+export const isSameConnection = (a: Connection, b: Connection): boolean =>
+  a.origin === b.origin && Redacted.value(a.token) === Redacted.value(b.token)
+
 /** A request that did not work. Status 0 means no HTTP response. */
 export const ApiFailure = Schema.Struct({ status: Schema.Number, message: Schema.String })
 export type ApiFailure = typeof ApiFailure.Type

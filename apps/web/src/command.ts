@@ -33,8 +33,8 @@ export const FetchFeed = Command.define("FetchFeed", {
   messages: [Message.SucceededFetchFeed, Message.FailedFetchFeed],
   execute: ({ connection }) =>
     sendJson(FeedInfo, connection, "GET", "/api/feed").pipe(
-      Effect.map(({ url }) => Message.SucceededFetchFeed({ url })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ failure }))),
+      Effect.map(({ url }) => Message.SucceededFetchFeed({ connection, url })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchFeed({ connection, failure }))),
     ),
 })
 
