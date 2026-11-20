@@ -34,7 +34,7 @@ describe("library", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.FailedFetchEpisodes({ failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ connection, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
@@ -44,9 +44,25 @@ describe("library", () => {
     story(
       update,
       given(stillUnauthorized),
-      message(Message.FailedFetchEpisodes({ failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ connection, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(false)),
       Command.expectNone(),
+    )
+  })
+
+  test("a late library response for a previous connection is dropped: a 401 does not reopen Settings", () => {
+    const oldConnection = { origin: "", token: apiToken("old-token") }
+    story(
+      update,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.FailedFetchEpisodes({ connection: oldConnection, failure: unauthorized })),
+      model((next) => {
+        expect(next.settingsDialog.isOpen).toBe(false)
+        expect(next.maybeLibraryFailure).toEqual(Option.none())
+      }),
+      Command.expectNone(),
+      message(Message.SucceededFetchEpisodes({ connection: oldConnection, episodes: [queuedArticle] })),
+      model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
 
@@ -56,7 +72,7 @@ describe("library", () => {
       given(withEpisodes(baseModel(), [queuedArticle])),
       message(Message.TickedPoll()),
       Command.expectExact(FetchEpisodes),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ episodes: [harbourDays] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ connection, episodes: [harbourDays] })),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes).map((item) => item.title)).toEqual(["Harbour Days"])),
     )
   })
@@ -128,7 +144,7 @@ describe("settings", () => {
         expect(next.feed).toEqual(Feed.Loading())
       }),
       Command.expectExact(FetchEpisodes, FetchFeed),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ episodes: [] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ connection: otherTab, episodes: [] })),
       Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection: otherTab, url: newFeed })),
     )
   })
@@ -345,7 +361,7 @@ describe("player", () => {
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ episodes: [harbourDays] })),
+      message(Message.SucceededFetchEpisodes({ connection, episodes: [harbourDays] })),
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(false)

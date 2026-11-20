@@ -104,7 +104,7 @@ describe("settings", () => {
       click(role("button", { name: "Save" })),
       Command.expectExact(StoreConnection, FetchEpisodes, FetchFeed, Dialog.CloseDialog),
       Command.resolve(StoreConnection, Message.CompletedStoreSetting()),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ episodes: [] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ connection: savedConnection, episodes: [] })),
       Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection: savedConnection, url: "http://localhost:8788/feed/t/rss.xml" })),
       Command.resolve(Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()),
       Mount.expectEnded(Dialog.AcquireResources),

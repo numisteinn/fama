@@ -11,8 +11,9 @@ export type PlayerShortcut = typeof PlayerShortcut.Type
 
 export const Message = defineMessageUnion({
   // Library
-  SucceededFetchEpisodes: { episodes: Schema.Array(Episode) },
-  FailedFetchEpisodes: { failure: ApiFailure },
+  /** Library results carry the connection they were fetched for, so a late one from an old connection is dropped. */
+  SucceededFetchEpisodes: { connection: Connection, episodes: Schema.Array(Episode) },
+  FailedFetchEpisodes: { connection: Connection, failure: ApiFailure },
   SucceededFetchVoices: { voices: Schema.Array(Voice) },
   FailedFetchVoices: {},
   ClickedTryAgain: {},

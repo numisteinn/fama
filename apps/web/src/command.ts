@@ -13,8 +13,8 @@ export const FetchEpisodes = Command.define("FetchEpisodes", {
   messages: [Message.SucceededFetchEpisodes, Message.FailedFetchEpisodes],
   execute: ({ connection }) =>
     sendJson(EpisodeList, connection, "GET", "/api/episodes").pipe(
-      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ episodes })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ failure }))),
+      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ connection, episodes })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ connection, failure }))),
     ),
 })
 

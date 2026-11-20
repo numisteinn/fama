@@ -551,9 +551,12 @@ const isPlaying = (model: Model) => model.playback._tag === "Loaded" && model.pl
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    SucceededFetchEpisodes: ({ episodes: list }) =>
-      withEpisodes(() => list)(modifyFields(model, { maybeLibraryFailure: () => Option.none() })),
-    FailedFetchEpisodes: ({ failure }) => {
+    SucceededFetchEpisodes: ({ connection, episodes: list }) =>
+      isSameConnection(connection, model.connection)
+        ? withEpisodes(() => list)(modifyFields(model, { maybeLibraryFailure: () => Option.none() }))
+        : { model },
+    FailedFetchEpisodes: ({ connection, failure }) => {
+      if (!isSameConnection(connection, model.connection)) return { model }
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
       const failed = modifyFields(model, { maybeLibraryFailure: () => Option.some(failure) })
       return failure.status === 401 && !wasUnauthorized ? openSettings(failed) : { model: failed }
