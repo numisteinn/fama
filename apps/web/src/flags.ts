@@ -1,6 +1,6 @@
 import type { VoiceRef } from "@fama/contracts"
 import { Effect } from "effect"
-import { apiToken } from "~/api"
+import { type Connection, apiToken } from "~/api"
 import type { Flags } from "~/model"
 
 const POSITION_PREFIX = "fama.position."
@@ -33,12 +33,20 @@ function storedPositions(): Record<string, number> {
   return positions
 }
 
+/** The keys that hold the saved connection. */
+export const CONNECTION_KEYS: ReadonlyArray<string> = ["fama.token", "fama.origin"]
+
+/** The saved token and server. */
+export const storedConnection = (): Connection => ({
+  token: apiToken(asString(read("fama.token")) ?? ""),
+  origin: (asString(read("fama.origin")) ?? "").trim().replace(/\/+$/, ""),
+})
+
 /** Settings from localStorage, under the same keys and JSON encoding as before. */
 export const flags: Effect.Effect<Flags> = Effect.sync(() => {
   const voice = read("fama.voice")
   return {
-    token: apiToken(asString(read("fama.token")) ?? ""),
-    origin: (asString(read("fama.origin")) ?? "").trim().replace(/\/+$/, ""),
+    ...storedConnection(),
     voice: typeof voice === "string" ? (voice as VoiceRef) : null,
     speed: asNumber(read("fama.speed")) ?? 1,
     rate: asNumber(read("fama.rate")) ?? 1,

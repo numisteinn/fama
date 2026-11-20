@@ -65,6 +65,8 @@ export const Message = defineMessageUnion({
   UpdatedTokenDraft: { value: ApiToken },
   UpdatedOriginDraft: { value: Schema.String },
   SubmittedSettings: {},
+  /** Another tab saved a token or server. */
+  ChangedStoredConnection: { connection: Connection },
   /** Feed results carry the connection they were fetched for, so a late one from an old connection is dropped. */
   SucceededFetchFeed: { connection: Connection, url: Schema.String },
   FailedFetchFeed: { connection: Connection, failure: ApiFailure },

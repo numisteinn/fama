@@ -144,6 +144,19 @@ const saveSettings: Step = (model) => {
 const setFeed = (connection: Connection, feed: Feed): Step => (model) =>
   isSameConnection(connection, model.connection) ? { model: modifyFields(model, { feed: () => feed }) } : { model }
 
+/** Follows a token or server saved in another tab, as the React app did: the library and an open feed refetch. */
+const followStoredConnection = (connection: Connection): Step => (model) => {
+  if (isSameConnection(connection, model.connection)) return { model }
+  const isFeedShown = model.settingsDialog.isOpen
+  return {
+    model: modifyFields(model, {
+      connection: () => connection,
+      feed: (feed) => (isFeedShown ? Feed.Loading() : feed),
+    }),
+    commands: [FetchEpisodes({ connection }), ...(isFeedShown ? [FetchFeed({ connection })] : [])],
+  }
+}
+
 // LIBRARY
 
 const fetchEpisodes: Step = (model) => ({ model, commands: [FetchEpisodes({ connection: model.connection })] })
@@ -575,6 +588,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       model: modifyFields(model, { settingsDraft: (draft) => modifyFields(draft, { origin: () => value }) }),
     }),
     SubmittedSettings: () => saveSettings(model),
+    ChangedStoredConnection: ({ connection }) => followStoredConnection(connection)(model),
     SucceededFetchFeed: ({ connection, url }) =>
       setFeed(connection, Feed.Ready({ url }))(model),
     FailedFetchFeed: ({ connection, failure }) =>

@@ -1,6 +1,7 @@
 import { Duration, Effect, Option, Queue, Schema, Stream } from "effect"
 import { Dom, Subscription } from "foldkit"
 import { AudioPlayer } from "~/audio"
+import { CONNECTION_KEYS, storedConnection } from "~/flags"
 import { Message } from "~/message"
 import { type Model, POLL_MS, SKIP_BACK_MS, SKIP_FORWARD_MS, current, episodes, isWorking } from "~/model"
 import { chapterStartMs, totalMs } from "~/timeline"
@@ -89,6 +90,18 @@ export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((e
       }),
       Dom.streamFromEvent({ target: window, type: "pagehide", mapEvent: () => Message.HidPage() }),
     ),
+  ),
+
+  /** A token or server saved in another tab. `storage` fires only in the other tabs; a `null` key is a clear. */
+  storedConnection: Subscription.persistentEntry(
+    Dom.streamFromEventFilterMap({
+      target: window,
+      type: "storage",
+      filterMapEvent: (event) =>
+        event.key === null || CONNECTION_KEYS.includes(event.key)
+          ? Option.some(Message.ChangedStoredConnection({ connection: storedConnection() }))
+          : Option.none(),
+    }),
   ),
 
   /** A file dragged anywhere over the window shows the drop overlay. */

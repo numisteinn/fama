@@ -1,5 +1,5 @@
 import { Dialog } from "@foldkit/ui"
-import { Option } from "effect"
+import { Option, Redacted } from "effect"
 import { Command, given, message, model, story } from "foldkit/story"
 import { describe, expect, test } from "vitest"
 import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
@@ -109,6 +109,33 @@ describe("settings", () => {
       model((next) => expect(next.isFeedUrlCopied).toBe(true)),
       message(Message.CompletedWaitBeforeResetCopied({ copy: 2 })),
       model((next) => expect(next.isFeedUrlCopied).toBe(false)),
+    )
+  })
+
+  test("a token saved in another tab refetches the library, and the feed while Settings is open", () => {
+    const otherTab = { origin: "", token: apiToken("token-from-another-tab") }
+    const open = baseModel()
+    story(
+      update,
+      given({ ...open, settingsDialog: { ...open.settingsDialog, isOpen: true }, feed: Feed.Ready({ url: newFeed }) }),
+      message(Message.ChangedStoredConnection({ connection: otherTab })),
+      model((next) => {
+        expect(next.connection.origin).toBe("")
+        expect(Redacted.value(next.connection.token)).toBe("token-from-another-tab")
+        expect(next.feed).toEqual(Feed.Loading())
+      }),
+      Command.expectExact(FetchEpisodes, FetchFeed),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ episodes: [] })),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ connection: otherTab, url: newFeed })),
+    )
+  })
+
+  test("a storage event with the same connection does nothing", () => {
+    story(
+      update,
+      given(baseModel()),
+      message(Message.ChangedStoredConnection({ connection: { origin: "", token: apiToken("dev-api-token") } })),
+      Command.expectNone(),
     )
   })
 
