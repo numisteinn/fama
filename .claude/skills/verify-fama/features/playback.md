@@ -29,11 +29,12 @@ Preconditions:
 - At least one Ready episode with two chapters. Make one with [Add a file](./add-file.md) and `harbour-days.epub` (chapters `Morning`, `Evening`, about 46 s).
 
 - **Web, start.** Choose `Play Harbour Days`. Run `preview_act {action: "click", locator: 'role=button[name="Play Harbour Days"]'}`. The row button becomes `Pause Harbour Days`. The player bar shows `Harbour Days` and `Morning`, and button `Pause`. The network log has a `206` for `.../chapters/000.m4a`.
-- **Web, moving clock.** Run `preview_snapshot` twice, about 3 s apart. The slider inside group `Position` has a larger value (ms) the second time, and the elapsed text changes.
+- **Web, moving clock.** Run `preview_snapshot` twice, about 3 s apart. The range input inside group `Position` has a larger `aria-valuenow` (exact ms) the second time, and the elapsed text left of it changes. The text right of it is the total length.
 - **Web, skip.** Choose `Forward 30 seconds`. The position jumps by about 30000 ms and the chapter text changes to `Evening` (because `Morning` is about 27 s). Choose `Back 15 seconds`. The position drops by about 15000 ms.
 - **Web, ended.** Play to the end of the last chapter (or `Forward 30 seconds` until the slider is at its max and the player shows `Play`). Choose `Forward 30 seconds`, then `Play`. Playback starts again from `Morning` at 0:00, not from the start of the last chapter.
 - **Web, speed.** Choose `Playback speed: 1×` and pick another rate. The button label changes, and the clock moves faster in the next two snapshots.
-- **Web, chapters.** Choose `Chapters`, then the `Evening` item. The chapter text shows `Evening`.
+- **Web, chapters.** Choose `Chapters`, then the item `2 Evening` (items are named `<n> <title>`; typing `2` also highlights it). The chapter text shows `Evening`, and playback starts.
+- **Web, menu over the library.** With `Chapters` open, a click on a library row closes the menu and starts nothing (`document.elementFromPoint` over the row is the menu backdrop `div.fixed.inset-0`).
 - **Web, download.** Read the href of link `Download`. `curl -s -D - -o /dev/null http://localhost:8788<href>` returns `200` or `206` with `audio/x-m4a`.
 - **Web, pause.** Choose `Pause`. Two snapshots show the same slider value.
 - **iPhone, start.** Run `$AD press 'label="Harbour Days"' --settle`, then `$AD snapshot -i`. The player shows `Close player`, the title, `Pause`, the elapsed text (for example `0:14`) and the remaining text (for example `-0:16`).
