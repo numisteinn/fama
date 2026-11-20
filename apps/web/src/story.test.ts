@@ -1,7 +1,7 @@
 import { Dialog } from "@foldkit/ui"
-import { Option, Redacted } from "effect"
-import { Command, given, message, model, story } from "foldkit/story"
-import { describe, expect, test } from "vitest"
+import { Effect, Option, Redacted } from "effect"
+import { Command, type StorySimulation, given, message, model, story } from "foldkit/story"
+import { afterEach, describe, expect, test, vi } from "vitest"
 import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
   CopyFeedUrl,
@@ -26,7 +26,6 @@ import { apiToken } from "~/api"
 import { Feed, Picker, Playback } from "~/model"
 import type { Voice, VoiceRef } from "@fama/contracts"
 import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
-import { storedPosition } from "~/flags"
 import { storageEventMessage } from "~/subscription"
 import { update } from "~/update"
 
@@ -372,22 +371,39 @@ describe("add bar", () => {
 })
 
 describe("player", () => {
-  /** Storage answers the start of Harbour Days. With no value it falls back to the Model, as when storage is blocked. */
-  const readSaved = (positionMs?: number) =>
-    Command.resolve(
-      ReadSavedPosition,
-      Message.GotSavedPosition({ episodeId: harbourDays.id, maybePositionMs: Option.fromNullishOr(positionMs) }),
-    )
+  /** The ReadSavedPosition Commands update returned, oldest first, so a step can run their real storage read. */
+  const issuedReads: Array<ReturnType<typeof ReadSavedPosition>> = []
+  const updateKeepingReads: typeof update = (current, sent) => {
+    const result = update(current, sent)
+    for (const command of result.commands ?? []) {
+      if (command.name === ReadSavedPosition.name) issuedReads.push(command as ReturnType<typeof ReadSavedPosition>)
+    }
+    return result
+  }
+  /** Runs the oldest ReadSavedPosition against the real localStorage and feeds its Message back. */
+  const readStorage = <M, Msg, Out>(simulation: StorySimulation<M, Msg, Out>): StorySimulation<M, Msg, Out> => {
+    const command = issuedReads.shift()
+    if (!command) throw new Error("update issued no ReadSavedPosition")
+    return Command.resolve(command, Effect.runSync(command.effect))(simulation)
+  }
+  const savePositionInStorage = (positionMs: number) =>
+    localStorage.setItem(`fama.position.${harbourDays.id}`, JSON.stringify(positionMs))
+
+  afterEach(() => {
+    localStorage.clear()
+    issuedReads.length = 0
+  })
 
   test("play reads the latest saved position from storage, not the one read at boot", () => {
     // Another tab paused at 30 s after this tab booted with 5 s.
+    savePositionInStorage(30_000)
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel({ [harbourDays.id]: 5_000 }), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       model((next) => expect(next.playback).toEqual(Playback.Stopped())),
-      Command.expectExact(ReadSavedPosition({ episodeId: harbourDays.id })),
-      readSaved(30_000),
+      Command.expectExact(ReadSavedPosition),
+      readStorage,
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
@@ -396,30 +412,50 @@ describe("player", () => {
     )
   })
 
-  test("ReadSavedPosition reads the value storage holds now", () => {
-    localStorage.setItem("fama.position.harbour-days", "30000")
-    expect(storedPosition(harbourDays.id)).toEqual(Option.some(30_000))
-    localStorage.removeItem("fama.position.harbour-days")
-    expect(storedPosition(harbourDays.id)).toEqual(Option.none())
-  })
-
-  test("with storage blocked, play falls back to the position saved in this session", () => {
+  test("with no position in storage, play starts at 0, even after this session saved one", () => {
+    // The user cleared site data while Fama was open.
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel({ [harbourDays.id]: 30_000 }), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
-      model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)),
+      readStorage,
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+      }),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
   })
 
+  test("with storage unreadable, play falls back to the position saved in this session", () => {
+    savePositionInStorage(5_000)
+    const blocked = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new DOMException("Storage is blocked", "SecurityError")
+    })
+    try {
+      story(
+        updateKeepingReads,
+        given(withEpisodes(baseModel({ [harbourDays.id]: 30_000 }), [harbourDays])),
+        message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+        readStorage,
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
+        }),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    } finally {
+      blocked.mockRestore()
+    }
+  })
+
   test("play resumes at the saved position, across chapters", () => {
+    savePositionInStorage(30_000)
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(30_000),
+      readStorage,
       model((next) => {
         expect(next.playback).toEqual(
           Playback.Loaded({
@@ -438,11 +474,12 @@ describe("player", () => {
   })
 
   test("a finished episode starts from the top", () => {
+    savePositionInStorage(45_000)
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(45_000),
+      readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
@@ -450,10 +487,10 @@ describe("player", () => {
 
   test("the end of a chapter waits for the next one, then plays it when it renders", () => {
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [runningHarbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
+      readStorage,
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
@@ -470,10 +507,10 @@ describe("player", () => {
 
   test("a skip inside the chapter seeks and saves the position", () => {
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
+      readStorage,
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.ClickedSkip({ deltaMs: 15_000 })),
       Command.expectExact(SeekAudio, SavePosition),
@@ -485,10 +522,10 @@ describe("player", () => {
 
   test("after the end, Forward 30 seconds keeps the episode ended, so Play starts from the top", () => {
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
+      readStorage,
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -509,10 +546,10 @@ describe("player", () => {
 
   test("a seek back from the end leaves the ended state, so Play resumes there", () => {
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
+      readStorage,
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -531,10 +568,10 @@ describe("player", () => {
 
   test("deleting the loaded episode stops the audio", () => {
     story(
-      update,
+      updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readSaved(),
+      readStorage,
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.ClickedConfirmDelete({ episodeId: harbourDays.id })),
       Command.resolve(DeleteEpisode, Message.SucceededDeleteEpisode({ episodeId: harbourDays.id })),

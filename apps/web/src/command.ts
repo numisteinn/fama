@@ -122,7 +122,7 @@ export const ReadSavedPosition = Command.define("ReadSavedPosition", {
   args: { episodeId: EpisodeId },
   messages: [Message.GotSavedPosition],
   execute: ({ episodeId }) =>
-    Effect.sync(() => Message.GotSavedPosition({ episodeId, maybePositionMs: storedPosition(episodeId) })),
+    Effect.sync(() => Message.GotSavedPosition({ episodeId, stored: storedPosition(episodeId) })),
 })
 
 export const SavePosition = Command.define("SavePosition", {

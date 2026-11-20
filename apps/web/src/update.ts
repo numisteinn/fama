@@ -44,6 +44,7 @@ import {
   SKIP_BACK_MS,
   SKIP_FORWARD_MS,
   SPEEDS,
+  StoredPosition,
   current,
   episodes,
   isWorking,
@@ -490,15 +491,20 @@ const start =
   }
 
 /**
- * Plays an episode from the position storage holds. With storage blocked, the position saved in this
- * session is used. A second click that raced the first finds the episode loaded and does nothing.
+ * Plays an episode from the position storage holds; with none there, from 0. Only when storage cannot
+ * be read is the position saved in this session used. A second click that raced the first finds the
+ * episode loaded and does nothing.
  */
 const playFromSaved =
-  (episodeId: EpisodeId, maybePositionMs: Option.Option<number>): Step =>
+  (episodeId: EpisodeId, stored: StoredPosition): Step =>
   (model) => {
     const episode = episodes(model).find((item) => item.id === episodeId)
     if (!episode || episode.chapters.length === 0 || isLoadedEpisode(model, episodeId)) return { model }
-    const saved = Option.getOrElse(maybePositionMs, () => model.savedPositions[episodeId] ?? 0)
+    const saved = StoredPosition.match(stored, {
+      Saved: ({ positionMs }) => positionMs,
+      NotSaved: () => 0,
+      Unreadable: () => model.savedPositions[episodeId] ?? 0,
+    })
     const isFinished = !isWorking(episode.job) && saved >= totalMs(episode.chapters) - FINISHED_MARGIN_MS
     const target = locate(episode.chapters, isFinished ? 0 : saved)
     return Update.combine(model, [savePosition, loadChapter(episode, target.index, target.offsetMs, true)])
@@ -748,5 +754,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     CompletedSetAudioRate: () => ({ model }),
     CompletedStopAudio: () => ({ model }),
     CompletedSavePosition: () => ({ model }),
-    GotSavedPosition: ({ episodeId, maybePositionMs }) => playFromSaved(episodeId, maybePositionMs)(model),
+    GotSavedPosition: ({ episodeId, stored }) => playFromSaved(episodeId, stored)(model),
   })

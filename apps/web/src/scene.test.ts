@@ -34,6 +34,7 @@ import {
 } from "~/command"
 import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
+import { StoredPosition } from "~/model"
 import { apiToken } from "~/api"
 import { update } from "~/update"
 import { OpenFilePickerOnKey } from "~/view/addBar"
@@ -183,7 +184,7 @@ describe("play and pause", () => {
       Command.expectExact(ReadSavedPosition),
       Command.resolve(
         ReadSavedPosition,
-        Message.GotSavedPosition({ episodeId: harbourDays.id, maybePositionMs: Option.none() }),
+        Message.GotSavedPosition({ episodeId: harbourDays.id, stored: StoredPosition.NotSaved() }),
       ),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),

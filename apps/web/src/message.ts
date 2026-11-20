@@ -4,7 +4,7 @@ import { Schema } from "effect"
 import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
-import { PickerId } from "~/model"
+import { PickerId, StoredPosition } from "~/model"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
 export type PlayerShortcut = typeof PlayerShortcut.Type
@@ -108,6 +108,6 @@ export const Message = defineMessageUnion({
   CompletedStopAudio: {},
   CompletedSavePosition: {},
   /** The position storage holds for an episode when it starts, so a pause in another tab is honored. */
-  GotSavedPosition: { episodeId: EpisodeId, maybePositionMs: Schema.Option(Schema.Number) },
+  GotSavedPosition: { episodeId: EpisodeId, stored: StoredPosition },
 })
 export type Message = typeof Message.Type

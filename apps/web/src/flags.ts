@@ -1,7 +1,7 @@
 import type { VoiceRef } from "@fama/contracts"
 import { Effect, Option } from "effect"
 import { type Connection, apiToken } from "~/api"
-import type { Flags } from "~/model"
+import { type Flags, StoredPosition } from "~/model"
 
 const POSITION_PREFIX = "fama.position."
 
@@ -33,9 +33,22 @@ function storedPositions(): Record<string, number> {
   return positions
 }
 
-/** The position saved for an episode, read now. `None` when storage has none or is blocked. */
-export const storedPosition = (episodeId: string): Option.Option<number> =>
-  Option.fromNullishOr(asNumber(read(POSITION_PREFIX + episodeId)))
+/** The position saved for an episode, read now. A broken value counts as not saved, as in the React app. */
+export const storedPosition = (episodeId: string): StoredPosition => {
+  let raw: string | null
+  try {
+    raw = localStorage.getItem(POSITION_PREFIX + episodeId)
+  } catch {
+    return StoredPosition.Unreadable()
+  }
+  if (raw === null) return StoredPosition.NotSaved()
+  try {
+    const positionMs = asNumber(JSON.parse(raw))
+    return positionMs === undefined ? StoredPosition.NotSaved() : StoredPosition.Saved({ positionMs })
+  } catch {
+    return StoredPosition.NotSaved()
+  }
+}
 
 /** The keys that hold the settings another tab can change: token, server, Voice, Voice speed and Playback speed. */
 export const SETTING_KEYS: ReadonlyArray<string> = ["fama.token", "fama.origin", "fama.voice", "fama.speed", "fama.rate"]

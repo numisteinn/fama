@@ -39,6 +39,17 @@ export const Picker = defineTaggedUnion({
 })
 export type Picker = typeof Picker.Type
 
+/**
+ * What storage holds for an episode's position when it starts. `NotSaved` starts at 0, as after the
+ * user cleared site data. Only `Unreadable` storage falls back to the position this session saved.
+ */
+export const StoredPosition = defineTaggedUnion({
+  Saved: { positionMs: Schema.Number },
+  NotSaved: {},
+  Unreadable: {},
+})
+export type StoredPosition = typeof StoredPosition.Type
+
 /** The private podcast feed URL in Settings. */
 export const Feed = defineTaggedUnion({
   Loading: {},
@@ -104,7 +115,7 @@ export const Model = Schema.Struct({
   rate: Schema.Number,
   /**
    * Position on the whole timeline, by episode id, as this tab saved it to `fama.position.<id>`.
-   * A start reads storage itself; this is the fallback when storage is blocked.
+   * A start reads storage itself; this is the fallback only when storage cannot be read.
    */
   savedPositions: Schema.Record(Schema.String, Schema.Number),
   lastSavedAtMs: Schema.Number,
