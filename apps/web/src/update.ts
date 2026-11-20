@@ -237,7 +237,7 @@ const findPrefix = (texts: ReadonlyArray<string>, start: number, prefix: string)
 /**
  * Type-ahead, like base-ui's menus. Keys typed within 750 ms make one prefix: `S`, `t`, `e` goes to Steinn.
  * The same letter again moves to the next item that starts with it. A key with no match clears the
- * prefix, so the next key starts a new search.
+ * prefix, so the next key starts a new search; a Space with no match keeps it, as base-ui did.
  */
 const typeAhead = (key: string): Step => (model) => {
   if (model.picker._tag === "Closed") return { model }
@@ -250,7 +250,7 @@ const typeAhead = (key: string): Step => (model) => {
   const maybeMatch = isRepeat
     ? findPrefix(texts, from + 1, key)
     : findPrefix(texts, Math.max(0, from), typedText)
-  const nextTypedText = Option.isSome(maybeMatch) ? typedText : ""
+  const nextTypedText = Option.isSome(maybeMatch) || key === " " ? typedText : ""
   return {
     model: modifyFields(model, {
       picker: () =>
@@ -339,8 +339,12 @@ const activate = (pickerId: PickerId, index: number): Step => (model) => ({
 
 const pressPickerKey = (key: string): Step => (model) => {
   if (model.picker._tag === "Closed") return { model }
-  const { pickerId, maybeActiveIndex } = model.picker
+  const { pickerId, maybeActiveIndex, typedText } = model.picker
   const count = pickerItemCount(model, pickerId)
+  const selectActive: Step = Option.match(maybeActiveIndex, {
+    onNone: () => unchanged,
+    onSome: (index) => selectPickerItem(pickerId, index),
+  })
   if (key === "Escape" || key === "Tab") return closePicker(true)(model)
   if (count === 0) return { model }
   const from = Option.getOrElse(maybeActiveIndex, () => -1)
@@ -354,11 +358,10 @@ const pressPickerKey = (key: string): Step => (model) => {
     case "End":
       return activate(pickerId, count - 1)(model)
     case "Enter":
+      return selectActive(model)
     case " ":
-      return Option.match(maybeActiveIndex, {
-        onNone: () => ({ model }),
-        onSome: (index) => selectPickerItem(pickerId, index)(model),
-      })
+      // Inside a typed prefix, Space is part of the search (`The E`), as in base-ui.
+      return typedText === "" ? selectActive(model) : typeAhead(key)(model)
     default:
       return isTypeAheadKey(key) ? typeAhead(key)(model) : { model }
   }

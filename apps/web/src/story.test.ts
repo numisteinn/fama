@@ -208,6 +208,52 @@ describe("menus", () => {
     )
   })
 
+  test("Space inside a typed prefix extends the search; with no prefix it selects", () => {
+    const spaced: ReadonlyArray<Voice> = ["Heart", "The Beginning", "The End"].map((name) => ({
+      id: `kokoro:${name.toLowerCase().replace(" ", "_")}` as VoiceRef,
+      engine: "kokoro",
+      name,
+      language: "en",
+      gender: null,
+    }))
+    const spacedMenu = (typedText: string, active: number) => ({
+      ...voiceMenu(typedText, active),
+      voices: spaced,
+    })
+    story(
+      update,
+      given(spacedMenu("the", 2)),
+      message(Message.PressedPickerKey({ key: " " })),
+      model((next) => {
+        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("the ")
+        expect(activeIndex(next)).toBe(2)
+      }),
+      Command.expectExact(WaitBeforeResetTypeAhead({ keys: 4 }), ScrollPickerItem),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 4 })),
+    )
+    story(
+      update,
+      given(spacedMenu("the ", 2)),
+      message(Message.PressedPickerKey({ key: "E" })),
+      model((next) => expect(activeIndex(next)).toBe(3)),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 5 })),
+    )
+    story(
+      update,
+      given(spacedMenu("", 3)),
+      message(Message.PressedPickerKey({ key: " " })),
+      model((next) => {
+        expect(next.picker._tag).toBe("Closed")
+        expect(Option.getOrNull(next.maybeVoice)).toBe("kokoro:the_end")
+      }),
+      Command.expectExact(FocusPickerTrigger, StoreSetting),
+      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
+      Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
+    )
+  })
+
   test("the same letter again cycles through the items that start with it", () => {
     story(
       update,
