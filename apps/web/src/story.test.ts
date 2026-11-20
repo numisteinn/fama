@@ -24,7 +24,7 @@ import {
 import { Message } from "~/message"
 import { apiToken } from "~/api"
 import { Feed, Picker, Playback } from "~/model"
-import type { Voice, VoiceRef } from "@fama/contracts"
+import type { EpisodeId, Voice, VoiceRef } from "@fama/contracts"
 import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
 import { storageEventMessage } from "~/subscription"
 import { update } from "~/update"
@@ -534,6 +534,43 @@ describe("player", () => {
       readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("Pause on A while Play on B still reads storage: B's late read does not start B", () => {
+    const tideTables = { ...harbourDays, id: "tide-tables" as EpisodeId, title: "Tide Tables" }
+    const playingA = {
+      ...withEpisodes(baseModel(), [harbourDays, tideTables]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        offsetMs: 1_000,
+        isPlaying: true,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    // Play on B. Its storage read is still running when the user clicks Pause on A.
+    const clickedB = update(playingA, Message.ClickedPlayEpisode({ episodeId: tideTables.id }))
+    const readB = clickedB.commands?.find((command) => command.name === ReadSavedPosition.name) as
+      | ReturnType<typeof ReadSavedPosition>
+      | undefined
+    if (!readB) throw new Error("Play on B issued no ReadSavedPosition")
+    story(
+      update,
+      given(clickedB.model),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      Command.expectExact(ToggleAudio),
+      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      message(Message.PausedAudio()),
+      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      // B's read returns now, late.
+      message(Effect.runSync(readB.effect)),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.episodeId).toBe(harbourDays.id)
+        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+      }),
+      Command.expectNone(),
     )
   })
 

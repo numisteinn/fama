@@ -89,6 +89,7 @@ export const init = (flags: Flags): UpdateReturn => {
       isFeedUrlCopied: false,
       feedUrlCopies: 0,
       playback: Playback.Stopped(),
+      playIntents: 0,
       rate: flags.rate,
       savedPositions: flags.savedPositions,
       lastSavedAtMs: 0,
@@ -465,10 +466,16 @@ const loadChapter =
     }
   }
 
+/** A playback action of the user. A start still reading storage is no longer the latest intent. */
+const intend =
+  (step: Step): Step =>
+  (model) =>
+    step(modifyFields(model, { playIntents: (count) => count + 1 }))
+
 const toggle: Step = withLoaded(({ playback, episode }) => {
-  if (playback.isWaiting) return setPlayback({ isWaiting: false })
-  if (playback.isEnded) return loadChapter(episode, 0, 0, true)
-  return (model) => ({ model, commands: [ToggleAudio()] })
+  if (playback.isWaiting) return intend(setPlayback({ isWaiting: false }))
+  if (playback.isEnded) return intend(loadChapter(episode, 0, 0, true))
+  return intend((model) => ({ model, commands: [ToggleAudio()] }))
 })
 
 const isLoadedEpisode = (model: Model, episodeId: EpisodeId) =>
@@ -483,17 +490,21 @@ const start =
   (model) => {
     if (isLoadedEpisode(model, episode.id)) return toggle(model)
     if (episode.chapters.length === 0) return { model }
-    return { model, commands: [ReadSavedPosition({ episodeId: episode.id })] }
+    return intend((started) => ({
+      model: started,
+      commands: [ReadSavedPosition({ episodeId: episode.id, intent: started.playIntents })],
+    }))(model)
   }
 
 /**
  * Plays an episode from the position storage holds; with none there, from 0. Only when storage cannot
- * be read is the position saved in this session used. A second click that raced the first finds the
- * episode loaded and does nothing.
+ * be read is the position saved in this session used. A result whose start is no longer the latest
+ * playback intent is dropped: a later Pause, Play or seek wins.
  */
 const playFromSaved =
-  (episodeId: EpisodeId, stored: StoredPosition): Step =>
+  (episodeId: EpisodeId, intent: number, stored: StoredPosition): Step =>
   (model) => {
+    if (intent !== model.playIntents) return { model }
     const episode = episodes(model).find((item) => item.id === episodeId)
     if (!episode || episode.chapters.length === 0 || isLoadedEpisode(model, episodeId)) return { model }
     const saved = StoredPosition.match(stored, {
@@ -529,13 +540,13 @@ const seek = (ms: number): Step =>
           loadChapter(episode, target.index, target.offsetMs, willPlay),
           setPlayback({ isEnded }),
         ])
-    return Update.combine([move, savePositionAt(episode.id, clamped)])
+    return intend(Update.combine([move, savePositionAt(episode.id, clamped)]))
   })
 
 const skip = (deltaMs: number): Step =>
   withLoaded(({ playback, episode }) => seek(globalMs(playback, episode) + deltaMs))
 
-const playChapter = (index: number): Step => withLoaded(({ episode }) => loadChapter(episode, index, 0, true))
+const playChapter = (index: number): Step => withLoaded(({ episode }) => intend(loadChapter(episode, index, 0, true)))
 
 const endChapter: Step = withLoaded(({ playback, episode }) => {
   const next = playback.chapter + 1
@@ -750,5 +761,5 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     CompletedSetAudioRate: () => ({ model }),
     CompletedStopAudio: () => ({ model }),
     CompletedSavePosition: () => ({ model }),
-    GotSavedPosition: ({ episodeId, stored }) => playFromSaved(episodeId, stored)(model),
+    GotSavedPosition: ({ episodeId, intent, stored }) => playFromSaved(episodeId, intent, stored)(model),
   })

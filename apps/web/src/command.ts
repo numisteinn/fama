@@ -119,10 +119,10 @@ export const StoreSetting = Command.define("StoreSetting", {
 })
 
 export const ReadSavedPosition = Command.define("ReadSavedPosition", {
-  args: { episodeId: EpisodeId },
+  args: { episodeId: EpisodeId, intent: Schema.Number },
   messages: [Message.GotSavedPosition],
-  execute: ({ episodeId }) =>
-    Effect.sync(() => Message.GotSavedPosition({ episodeId, stored: storedPosition(episodeId) })),
+  execute: ({ episodeId, intent }) =>
+    Effect.sync(() => Message.GotSavedPosition({ episodeId, intent, stored: storedPosition(episodeId) })),
 })
 
 export const SavePosition = Command.define("SavePosition", {

@@ -218,7 +218,7 @@ describe("play and pause", () => {
       Command.expectExact(ReadSavedPosition),
       Command.resolve(
         ReadSavedPosition,
-        Message.GotSavedPosition({ episodeId: harbourDays.id, stored: StoredPosition.NotSaved() }),
+        Message.GotSavedPosition({ episodeId: harbourDays.id, intent: 1, stored: StoredPosition.NotSaved() }),
       ),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),

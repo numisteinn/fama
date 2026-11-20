@@ -121,6 +121,11 @@ export const Model = Schema.Struct({
   feedUrlCopies: Schema.Number,
 
   playback: Playback,
+  /**
+   * Counts the user's playback actions: Play, Pause, skip, seek, chapter. A start reads storage first;
+   * its result plays only if no later action came, so it is still the latest intent.
+   */
+  playIntents: Schema.Number,
   rate: Schema.Number,
   /**
    * Position on the whole timeline, by episode id, as this tab saved it to `fama.position.<id>`.

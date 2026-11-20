@@ -107,7 +107,10 @@ export const Message = defineMessageUnion({
   CompletedSetAudioRate: {},
   CompletedStopAudio: {},
   CompletedSavePosition: {},
-  /** The position storage holds for an episode when it starts, so a pause in another tab is honored. */
-  GotSavedPosition: { episodeId: EpisodeId, stored: StoredPosition },
+  /**
+   * The position storage holds for an episode when it starts, so a pause in another tab is honored.
+   * `intent` is the playback action that started it.
+   */
+  GotSavedPosition: { episodeId: EpisodeId, intent: Schema.Number, stored: StoredPosition },
 })
 export type Message = typeof Message.Type
