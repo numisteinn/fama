@@ -4,6 +4,7 @@ import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
 import { Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
+import { apiToken } from "~/api"
 import { type AudioPlayer, LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
 import {
   ClickFileInput,
@@ -120,7 +121,7 @@ const closeSettings: Step = Update.foldChildStep({ update: Dialog.close, ...sett
 /** Saves the token and server and closes the dialog. A changed connection refetches; a new 401 opens it again. */
 const saveSettings: Step = (model) => {
   const connection = {
-    token: Redacted.make(Redacted.value(model.settingsDraft.token).trim()),
+    token: apiToken(Redacted.value(model.settingsDraft.token).trim()),
     origin: model.settingsDraft.origin.trim().replace(/\/+$/, ""),
   }
   const isChanged =
@@ -562,7 +563,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     GotSettingsDialogMessage: ({ message: dialogMessage }) => foldSettingsDialog(model, dialogMessage),
     UpdatedTokenDraft: ({ value }) => ({
       model: modifyFields(model, {
-        settingsDraft: (draft) => modifyFields(draft, { token: () => Redacted.make(value) }),
+        settingsDraft: (draft) => modifyFields(draft, { token: () => value }),
       }),
     }),
     UpdatedOriginDraft: ({ value }) => ({

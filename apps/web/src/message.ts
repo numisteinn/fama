@@ -3,7 +3,7 @@ import { Dialog } from "@foldkit/ui"
 import { Schema } from "effect"
 import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
-import { ApiFailure } from "~/api"
+import { ApiFailure, ApiToken } from "~/api"
 import { PickerId } from "~/model"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
@@ -61,7 +61,8 @@ export const Message = defineMessageUnion({
   // Settings
   ClickedSettings: {},
   GotSettingsDialogMessage: { message: Dialog.Message },
-  UpdatedTokenDraft: { value: Schema.String },
+  /** Redacted from the input handler on, so DevTools history never holds the token. */
+  UpdatedTokenDraft: { value: ApiToken },
   UpdatedOriginDraft: { value: Schema.String },
   SubmittedSettings: {},
   SucceededFetchFeed: { url: Schema.String },

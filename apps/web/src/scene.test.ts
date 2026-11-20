@@ -12,7 +12,8 @@ import {
   scene,
   type,
 } from "foldkit/scene"
-import { describe, test } from "vitest"
+import { Redacted } from "effect"
+import { describe, test, expect as expectValue } from "vitest"
 import { LoadChapter, ToggleAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
@@ -25,6 +26,7 @@ import {
 import { baseModel, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
 import { update } from "~/update"
+import type { Message as AppMessage } from "~/message"
 import { view } from "~/view"
 
 const linkOrText = role("textbox", { name: "Link or text" })
@@ -72,6 +74,28 @@ describe("settings", () => {
       Mount.expectEnded(Dialog.AcquireResources),
       expect(role("dialog", { name: "Settings" })).toBeAbsent(),
     )
+  })
+
+  test("the token Message is Redacted from the moment it is built", () => {
+    const seen: Array<AppMessage> = []
+    const recordingUpdate: typeof update = (model, message) => {
+      seen.push(message)
+      return update(model, message)
+    }
+    scene(
+      { update: recordingUpdate, view },
+      given(withEpisodes(baseModel(), [])),
+      click(role("button", { name: "Settings" })),
+      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
+      Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
+      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ url: "http://localhost:8788/feed/t/rss.xml" })),
+      type(role("textbox", { name: "API token" }), "typed-secret"),
+      expect(role("textbox", { name: "API token" })).toHaveValue("typed-secret"),
+    )
+    const tokenMessages = seen.filter((message) => message._tag === "UpdatedTokenDraft")
+    expectValue(tokenMessages.length).toBeGreaterThan(0)
+    for (const message of tokenMessages) expectValue(Redacted.isRedacted(message.value)).toBe(true)
+    expectValue(JSON.stringify(tokenMessages)).not.toContain("typed-secret")
   })
 })
 

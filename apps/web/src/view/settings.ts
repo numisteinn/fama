@@ -1,6 +1,7 @@
 import { Dialog } from "@foldkit/ui"
 import { Redacted } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
+import { apiToken } from "~/api"
 import { Message } from "~/message"
 import type { Model } from "~/model"
 import { buttonClass } from "~/view/button"
@@ -50,7 +51,7 @@ export const settingsDialog = (model: Model, h: HtmlBuilder<Message>): Html =>
                           h.Type("password"),
                           h.Autocomplete("off"),
                           h.Value(Redacted.value(model.settingsDraft.token)),
-                          h.OnInput((value) => Message.UpdatedTokenDraft({ value })),
+                          h.OnInput((value) => Message.UpdatedTokenDraft({ value: apiToken(value) })),
                         ]),
                         field("settings-server", "Server", h, [
                           h.Type("url"),

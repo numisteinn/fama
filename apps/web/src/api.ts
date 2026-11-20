@@ -5,6 +5,9 @@ import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/h
 export const ApiToken = Schema.Redacted(Schema.String, { label: "API token", disallowJsonEncode: true })
 export type ApiToken = typeof ApiToken.Type
 
+/** Wraps a token the way `ApiToken` expects: Redacted, with its label. */
+export const apiToken = (value: string): ApiToken => Redacted.make(value, { label: "API token" })
+
 /** Where requests go. An empty origin is the page's own origin, which is the production setup. */
 export const Connection = Schema.Struct({ origin: Schema.String, token: ApiToken })
 export type Connection = typeof Connection.Type

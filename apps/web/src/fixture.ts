@@ -1,9 +1,10 @@
 import type { Episode, EpisodeId, VoiceRef } from "@fama/contracts"
-import { Option, Redacted } from "effect"
+import { Option } from "effect"
+import { apiToken } from "~/api"
 import type { Model } from "~/model"
 import { init } from "~/update"
 
-export const connection = { origin: "", token: Redacted.make("dev-api-token") }
+export const connection = { origin: "", token: apiToken("dev-api-token") }
 
 /** A fresh Model, as `init` makes it from empty storage plus a stored token. */
 export const baseModel = (savedPositions: Record<string, number> = {}): Model =>

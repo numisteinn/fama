@@ -1,5 +1,6 @@
 import type { VoiceRef } from "@fama/contracts"
-import { Effect, Redacted } from "effect"
+import { Effect } from "effect"
+import { apiToken } from "~/api"
 import type { Flags } from "~/model"
 
 const POSITION_PREFIX = "fama.position."
@@ -36,7 +37,7 @@ function storedPositions(): Record<string, number> {
 export const flags: Effect.Effect<Flags> = Effect.sync(() => {
   const voice = read("fama.voice")
   return {
-    token: Redacted.make(asString(read("fama.token")) ?? ""),
+    token: apiToken(asString(read("fama.token")) ?? ""),
     origin: (asString(read("fama.origin")) ?? "").trim().replace(/\/+$/, ""),
     voice: typeof voice === "string" ? (voice as VoiceRef) : null,
     speed: asNumber(read("fama.speed")) ?? 1,
