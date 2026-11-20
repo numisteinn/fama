@@ -3,7 +3,7 @@ import { Option } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { formatClock, formatRate } from "~/lib/format"
 import { Message } from "~/message"
-import { type LoadedPlayback, type Model, RATES, SKIP_BACK_MS, SKIP_FORWARD_MS, current } from "~/model"
+import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current } from "~/model"
 import { chapterStartMs, totalMs } from "~/timeline"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass } from "~/view/button"
@@ -55,7 +55,6 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
                 side: "Top",
                 triggerClass: buttonClass({ size: "sm" }, "w-14 justify-self-start tabular-nums"),
                 triggerContent: [formatRate(model.rate)],
-                options: RATES.map((value) => ({ label: formatRate(value) })),
                 checkedIndex: pickerCheckedIndex(model, "PlaybackSpeed"),
               }),
               h.div([h.Class("flex items-center gap-1 sm:hidden")], skipButtons(h, [])),
@@ -70,15 +69,6 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
                         align: "End",
                         triggerClass: buttonClass({ size: "icon-sm" }),
                         triggerContent: [Icon.listMusic()],
-                        options: episode.chapters.map((item) => ({
-                          label: h.span(
-                            [h.Class("flex gap-3")],
-                            [
-                              h.span([h.Class("w-5 text-right text-muted-foreground tabular-nums")], [String(item.index + 1)]),
-                              h.span([h.Class("truncate")], [item.title]),
-                            ],
-                          ),
-                        })),
                         checkedIndex: pickerCheckedIndex(model, "Chapters"),
                       })
                     : []),

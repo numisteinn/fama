@@ -5,7 +5,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 type Child = Html | string
 import { pickerItemId, pickerMenuId, pickerTriggerId } from "~/command"
 import { Message } from "~/message"
-import type { Model, PickerId } from "~/model"
+import { type Model, type PickerId, type PickerItem, pickerItems } from "~/model"
 import { isTypeAheadKey } from "~/update"
 import * as Icon from "~/view/icon"
 
@@ -14,19 +14,12 @@ import * as Icon from "~/view/icon"
  * Same roles and names as the base-ui `Menu.RadioGroup` it replaces.
  */
 
-export interface PickerOption {
-  readonly label: Child
-  /** Starts a new group with this heading. */
-  readonly group?: string
-}
-
 export interface PickerConfig {
   readonly pickerId: PickerId
   /** Accessible name of the trigger and the menu. */
   readonly label: string
   readonly triggerClass: string
   readonly triggerContent: ReadonlyArray<Child>
-  readonly options: ReadonlyArray<PickerOption>
   readonly checkedIndex: number
   readonly side?: "Top" | "Bottom"
   readonly align?: "Start" | "End"
@@ -90,11 +83,27 @@ const triggerKey = (pickerId: PickerId) => (key: string) =>
     ? Option.some(Message.PressedPickerTriggerKey({ pickerId, key }))
     : Option.none()
 
+/**
+ * An item's label. A chapter number sits in its own column; the space between the columns is a text
+ * node, so the DOM text and the accessible name read `2 Evening`, which is the text type-ahead matches.
+ */
+const itemLabel = (item: PickerItem, h: HtmlBuilder<Message>): Child =>
+  item.number === undefined
+    ? item.name
+    : h.span(
+        [h.Class("flex gap-3")],
+        [
+          h.span([h.Class("w-5 text-right text-muted-foreground tabular-nums")], [String(item.number)]),
+          " ",
+          h.span([h.Class("truncate")], [item.name]),
+        ],
+      )
+
 const MENU_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End", "Enter", " ", "Escape", "Tab"])
 
 /** The trigger, then (while open) the backdrop and the popup, as siblings so no wrapper enters the tree. */
 export const picker = (model: Model, h: HtmlBuilder<Message>, config: PickerConfig): ReadonlyArray<Html> => {
-  const { pickerId, label, options, checkedIndex } = config
+  const { pickerId, label, checkedIndex } = config
   const maybeOpen = model.picker._tag === "Open" && model.picker.pickerId === pickerId ? Option.some(model.picker) : Option.none()
   const isOpen = Option.isSome(maybeOpen)
   const maybeActiveIndex = Option.flatMap(maybeOpen, (open) => open.maybeActiveIndex)
@@ -116,7 +125,7 @@ export const picker = (model: Model, h: HtmlBuilder<Message>, config: PickerConf
   )
   if (!isOpen) return [trigger]
 
-  const items = options.map((option, index) => {
+  const items = pickerItems(model, pickerId).map((option, index) => {
     const isChecked = index === checkedIndex
     const isActive = Option.exists(maybeActiveIndex, (active) => active === index)
     const item = h.div(
@@ -130,7 +139,7 @@ export const picker = (model: Model, h: HtmlBuilder<Message>, config: PickerConf
         h.Class(ITEM_CLASS),
       ],
       [
-        h.span([h.Class("flex-1 truncate")], [option.label]),
+        h.span([h.Class("flex-1 truncate")], [itemLabel(option, h)]),
         ...(isChecked ? [h.span([h.Class("absolute right-2.5")], [Icon.check("size-3.5")])] : []),
       ],
     )

@@ -4,6 +4,7 @@ import { Option, Schema } from "effect"
 import { File } from "foldkit"
 import { defineTaggedUnion } from "foldkit/schema"
 import { ApiFailure, ApiToken, Connection } from "~/api"
+import { formatRate } from "~/lib/format"
 
 // CONSTANTS
 
@@ -195,3 +196,42 @@ export const sortedVoices = (voices: ReadonlyArray<Voice>): Array<Voice> =>
 
 export const selectedVoice = (model: Model): Option.Option<Voice> =>
   Option.flatMap(model.maybeVoice, (id) => Option.fromNullishOr(model.voices.find((voice) => voice.id === id)))
+
+// MENUS
+
+/** One menu item as it shows. `number` leads a chapter; `group` starts a new group with this heading. */
+export interface PickerItem {
+  readonly name: string
+  readonly number?: number
+  readonly group?: string
+}
+
+/** The text an item shows and its accessible name: `2 Evening` for a chapter. Type-ahead matches it. */
+export const pickerItemText = (item: PickerItem): string =>
+  item.number === undefined ? item.name : `${item.number} ${item.name}`
+
+/** The items of a menu, in order. The view shows them and type-ahead searches them, so the two cannot differ. */
+export const pickerItems = (model: Model, pickerId: PickerId): ReadonlyArray<PickerItem> => {
+  switch (pickerId) {
+    case "Voice": {
+      const voices = sortedVoices(model.voices)
+      return [
+        { name: "Auto" },
+        ...voices.map((voice, index) => {
+          const language = languageName(voice.language)
+          const previous = index === 0 ? undefined : languageName(voices[index - 1]!.language)
+          return language === previous ? { name: voice.name } : { name: voice.name, group: language }
+        }),
+      ]
+    }
+    case "VoiceSpeed":
+      return SPEEDS.map((speed) => ({ name: formatRate(speed) }))
+    case "PlaybackSpeed":
+      return RATES.map((rate) => ({ name: formatRate(rate) }))
+    case "Chapters":
+      return Option.match(current(model), {
+        onNone: () => [],
+        onSome: ({ episode }) => episode.chapters.map((chapter) => ({ name: chapter.title, number: chapter.index + 1 })),
+      })
+  }
+}

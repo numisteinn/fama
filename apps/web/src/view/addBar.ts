@@ -4,11 +4,11 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { ADD_TEXT_ID, FILE_INPUT_ID } from "~/command"
 import { formatRate } from "~/lib/format"
 import { Message } from "~/message"
-import { ACCEPT, type Model, SPEEDS, languageName, selectedVoice, sortedVoices, toDraft } from "~/model"
+import { ACCEPT, type Model, selectedVoice, toDraft } from "~/model"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
-import { type PickerOption, picker } from "~/view/picker"
+import { picker } from "~/view/picker"
 
 /**
  * Enter and Space on the Attach file label open the file picker, as a click on it does.
@@ -31,18 +31,6 @@ export const OpenFilePickerOnKey = Mount.define("OpenFilePickerOnKey", {
       (onKeyDown) => Effect.sync(() => element.removeEventListener("keydown", onKeyDown)),
     ).pipe(Effect.as(Message.CompletedMountFilePickerKeys())),
 })
-
-const voiceOptions = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<PickerOption> => {
-  const voices = sortedVoices(model.voices)
-  return [
-    { label: "Auto" },
-    ...voices.map((voice, index) => {
-      const language = languageName(voice.language)
-      const previous = index === 0 ? undefined : languageName(voices[index - 1]!.language)
-      return language === previous ? { label: voice.name } : { label: voice.name, group: language }
-    }),
-  ]
-}
 
 /** Paste a link or text, or attach a file, then add it. */
 export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
@@ -125,7 +113,6 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
             label: `Voice: ${voiceName}`,
             triggerClass: buttonClass({ size: "sm" }, "max-w-48"),
             triggerContent: [h.span([h.Class("truncate")], [voiceName]), Icon.chevronDown("size-3.5")],
-            options: voiceOptions(model, h),
             checkedIndex: pickerCheckedIndex(model, "Voice"),
           }),
           ...picker(model, h, {
@@ -133,7 +120,6 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
             label: `Voice speed: ${formatRate(model.speed)}`,
             triggerClass: buttonClass({ size: "sm" }),
             triggerContent: [Icon.gauge(), h.span([h.Class("tabular-nums")], [formatRate(model.speed)])],
-            options: SPEEDS.map((value) => ({ label: formatRate(value) })),
             checkedIndex: pickerCheckedIndex(model, "VoiceSpeed"),
           }),
           ...Option.match(model.maybeAddError, {

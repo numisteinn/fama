@@ -34,7 +34,7 @@ import {
 } from "~/command"
 import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
-import { StoredPosition } from "~/model"
+import { Playback, StoredPosition } from "~/model"
 import { apiToken } from "~/api"
 import { update } from "~/update"
 import { OpenFilePickerOnKey } from "~/view/addBar"
@@ -170,6 +170,40 @@ describe("menus", () => {
       Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
       Mount.expectEnded(AnchorPicker),
       expect(role("button", { name: "Voice: Steinn" })).toExist(),
+    )
+  })
+})
+
+describe("chapters menu", () => {
+  test("typing a chapter number highlights that chapter, as the item shows it", () => {
+    const loaded = {
+      ...withEpisodes(baseModel(), [harbourDays]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        offsetMs: 0,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    const chaptersMenu = role("menu")
+    scene(
+      { update, view },
+      given(loaded),
+      resolveAttachKeys,
+      click(role("button", { name: "Chapters" })),
+      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
+      Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
+      expect(role("menuitemradio", { name: "1 Morning" })).toExist(),
+      expect(role("menuitemradio", { name: "2 Evening" })).toExist(),
+      keydown(chaptersMenu, "2"),
+      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
+      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
+      expect(chaptersMenu).toHaveAttr("aria-activedescendant", "chapters-item-1"),
+      keydown(chaptersMenu, "Escape"),
+      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
+      Mount.expectEnded(AnchorPicker),
     )
   })
 })

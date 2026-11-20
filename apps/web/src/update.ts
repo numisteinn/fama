@@ -48,11 +48,12 @@ import {
   current,
   episodes,
   isWorking,
+  pickerItemText,
+  pickerItems,
   selectedVoice,
   sortedVoices,
   toDraft,
 } from "~/model"
-import { formatRate } from "~/lib/format"
 import { chapterStartMs, locate, totalMs } from "~/timeline"
 
 export type Services = AudioPlayer | HttpClient.HttpClient
@@ -223,24 +224,11 @@ const submitAdd: Step = (model) => {
 
 // MENUS
 
-/** The text of each item in a menu, in order. Type-ahead matches against it. */
-const pickerItemTexts = (model: Model, pickerId: PickerId): ReadonlyArray<string> => {
-  switch (pickerId) {
-    case "Voice":
-      return ["Auto", ...sortedVoices(model.voices).map((voice) => voice.name)]
-    case "VoiceSpeed":
-      return SPEEDS.map(formatRate)
-    case "PlaybackSpeed":
-      return RATES.map(formatRate)
-    case "Chapters":
-      return Option.match(current(model), {
-        onNone: () => [],
-        onSome: ({ episode }) => episode.chapters.map((chapter) => chapter.title),
-      })
-  }
-}
+/** The text of each item in a menu, in order, as the menu shows it. Type-ahead matches against it. */
+const pickerItemTexts = (model: Model, pickerId: PickerId): ReadonlyArray<string> =>
+  pickerItems(model, pickerId).map(pickerItemText)
 
-const pickerItemCount = (model: Model, pickerId: PickerId): number => pickerItemTexts(model, pickerId).length
+const pickerItemCount = (model: Model, pickerId: PickerId): number => pickerItems(model, pickerId).length
 
 /** A single printable character, as the menus' type-ahead takes it. */
 export const isTypeAheadKey = (key: string): boolean => key.length === 1 && key !== " "
