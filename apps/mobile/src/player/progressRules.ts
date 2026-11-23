@@ -89,3 +89,47 @@ export function startMs(
   // The end of the chapters of a running job is not the end of the episode.
   return episode.job._tag === "Ready" && isFinished(saved, totalMs) ? 0 : saved
 }
+
+/**
+ * The Play rule. A Play pressed while library requests are in flight waits for their answers, so it starts from the
+ * newer of the device's and the server's position, and not from one another device moved on from: a Play from the
+ * old position would stamp it over the newer entry. It waits for as many answers as requests were in flight; by
+ * then each of them answered, or a fresher one did. A failed request is an answer too. A second Play of the same
+ * episode does not wait again, so a slow request never leaves Play dead. A pause, a seek or another Play takes the
+ * waiting Play back.
+ */
+export function makePlayGate() {
+  let inFlight = 0
+  let held: { readonly episodeId: string; readonly awaiting: number; readonly run: () => void } | null = null
+  return {
+    /** A library request went out. */
+    refreshStarted() {
+      inFlight += 1
+    },
+    /** A library request answered, with a list or a failure. Call it after the list merged with the device's progress. */
+    refreshSettled() {
+      inFlight = Math.max(0, inFlight - 1)
+      if (!held) return
+      if (held.awaiting > 1) {
+        held = { ...held, awaiting: held.awaiting - 1 }
+        return
+      }
+      const { run } = held
+      held = null
+      run()
+    },
+    /** The listener plays `episodeId`: `run` starts it, now or after the answers. */
+    play(episodeId: string, run: () => void) {
+      if (inFlight > 0 && held?.episodeId !== episodeId) {
+        held = { episodeId, awaiting: inFlight, run }
+        return
+      }
+      held = null
+      run()
+    },
+    /** A pause or a seek: a waiting Play is off. */
+    cancel() {
+      held = null
+    },
+  }
+}

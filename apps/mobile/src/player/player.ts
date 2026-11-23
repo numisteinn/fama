@@ -4,7 +4,7 @@ import { isActive } from "../lib/format"
 import { jsonFile } from "../lib/jsonFile"
 import { FamaPlayer, type NativeStatus, type Track } from "./native"
 import { progress } from "./progress"
-import { IDLE_TRACKER, type Moment, type Tracker, startMs, track } from "./progressRules"
+import { IDLE_TRACKER, type Moment, type Tracker, makePlayGate, startMs, track } from "./progressRules"
 
 // One native player per app, so its state lives in one module-level store.
 
@@ -32,6 +32,12 @@ let tracker: Tracker = IDLE_TRACKER
 let loadedEpisode: Episode | null = null
 
 const statusListeners = new Set<() => void>()
+
+/**
+ * Holds a Play that was pressed while the library loads. The library reports each request and each answer, after
+ * it merged the list with the device's progress, so the Play starts from the newer position (see `makePlayGate`).
+ */
+export const playGate = makePlayGate()
 
 /** The native status in whole-episode milliseconds. The native player speaks seconds. */
 const momentOf = (next: NativeStatus): Moment => ({
@@ -95,32 +101,41 @@ function tracksOf(episode: Episode, source: TrackSource): Track[] {
   }))
 }
 
+/**
+ * Loads an episode at the newer of the device's and the server's position. A finished episode starts over.
+ * Loading saves nothing for the new episode; only the listener's play and moves do.
+ */
+async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean) {
+  if (status.episodeId === episode.id) {
+    if (autoplay && !status.playing) await FamaPlayer.play()
+    return
+  }
+  saveNow()
+  const position = startMs(progress.get(episode.id), episode) / 1000
+  loadedEpisode = episode
+  loadedChapters = episode.chapters.length
+  prefs = { ...prefs, lastEpisodeId: episode.id }
+  prefsFile.write(prefs)
+  await FamaPlayer.load({
+    episodeId: episode.id,
+    title: episode.title,
+    artist: episode.author,
+    artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
+    tracks: tracksOf(episode, source),
+    position,
+    rate: prefs.rate,
+    autoplay,
+  })
+}
+
 export const player = {
   /**
-   * Loads an episode at the newer of the device's and the server's position. A finished episode starts over.
-   * Loading saves nothing for the new episode; only the listener's play and moves do.
+   * Loads an episode (see `loadNow`). With `autoplay` it is a Play: pressed while the library loads, it waits for
+   * the answer. Without it (the restore after launch) it loads at once.
    */
   async load(episode: Episode, source: TrackSource, autoplay: boolean) {
-    if (status.episodeId === episode.id) {
-      if (autoplay && !status.playing) await FamaPlayer.play()
-      return
-    }
-    saveNow()
-    const position = startMs(progress.get(episode.id), episode) / 1000
-    loadedEpisode = episode
-    loadedChapters = episode.chapters.length
-    prefs = { ...prefs, lastEpisodeId: episode.id }
-    prefsFile.write(prefs)
-    await FamaPlayer.load({
-      episodeId: episode.id,
-      title: episode.title,
-      artist: episode.author,
-      artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
-      tracks: tracksOf(episode, source),
-      position,
-      rate: prefs.rate,
-      autoplay,
-    })
+    if (!autoplay) return loadNow(episode, source, false)
+    playGate.play(episode.id, () => void loadNow(episode, source, true))
   },
   /** Feeds chapters that appeared while the job runs. */
   async sync(episode: Episode, source: TrackSource) {
@@ -130,9 +145,23 @@ export const player = {
     loadedChapters = episode.chapters.length
     await FamaPlayer.updateTracks(tracksOf(episode, source))
   },
-  toggle: () => (status.playing ? FamaPlayer.pause() : FamaPlayer.play()),
-  skip: (delta: number) => FamaPlayer.skip(delta),
-  seek: (position: number) => FamaPlayer.seek(position),
+  /** Pauses, or plays. A Play pressed while the library loads waits for the answer; a pause takes it back. */
+  toggle() {
+    if (status.playing) {
+      playGate.cancel()
+      void FamaPlayer.pause()
+    } else {
+      playGate.play(status.episodeId ?? "", () => void FamaPlayer.play())
+    }
+  },
+  skip(delta: number) {
+    playGate.cancel()
+    return FamaPlayer.skip(delta)
+  },
+  seek(position: number) {
+    playGate.cancel()
+    return FamaPlayer.seek(position)
+  },
   async setRate(rate: number) {
     prefs = { ...prefs, rate }
     prefsFile.write(prefs)

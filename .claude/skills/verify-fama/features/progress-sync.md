@@ -13,6 +13,7 @@ A listener's position in an episode follows them between the web app and the iPh
 - `sync-ios-passive` an app relaunch restores the last episode paused and sends no `PUT`.
 - `sync-ios-resume` after the web moves an episode, an iPhone relaunch restores it at the web's position.
 - `sync-ios-follow` a loaded, paused episode on the iPhone moves to a newer server position when the app comes back to the front.
+- `sync-ios-foreground` a Play tapped while the iPhone app loads the library (it just came to the front) waits for the answer, then starts at the newer of the phone's and the server's position. A failed load plays from the phone's position; so does a second tap. A pause, a skip or a seek takes the waiting Play back. Unit tests only (`makePlayGate` in `apps/mobile/src/player/progressRules.test.ts`): it needs a real foreground, as `sync-ios-follow` does.
 - `sync-offline` an entry the server never got (offline listening) goes out on the next library load. Unit tests only (`apps/mobile/src/player/progressRules.test.ts`, the web `progress sync` stories).
 
 ## How to get to it (user POV)

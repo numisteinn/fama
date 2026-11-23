@@ -1,6 +1,15 @@
 import type { Episode } from "@fama/contracts"
 import { describe, expect, test } from "vitest"
-import { IDLE_TRACKER, type Moment, type Tracker, planSync, startMs, takesAnswer, track } from "./progressRules"
+import {
+  IDLE_TRACKER,
+  type Moment,
+  type Tracker,
+  makePlayGate,
+  planSync,
+  startMs,
+  takesAnswer,
+  track,
+} from "./progressRules"
 
 const at = (positionMs: number, updatedAt: string) => ({ positionMs, updatedAt })
 const older = at(10_000, "2026-11-23T09:00:00.000Z")
@@ -120,5 +129,81 @@ describe("startMs", () => {
 
   test("the end of the audio of a running job is not finished", () => {
     expect(startMs(at(26_825, newer.updatedAt), { ...running, progress: null })).toBe(26_825)
+  })
+})
+
+describe("makePlayGate", () => {
+  /** A gate and the plays it started, in order. */
+  const gateWithLog = () => {
+    const started: Array<string> = []
+    const gate = makePlayGate()
+    return { gate, started, play: (episodeId: string) => gate.play(episodeId, () => started.push(episodeId)) }
+  }
+
+  test("with no library request in flight, Play starts at once", () => {
+    const { started, play } = gateWithLog()
+    play("e1")
+    expect(started).toEqual(["e1"])
+  })
+
+  test("Play pressed while the library loads starts when the answer came, a failed one too", () => {
+    // The app came back to the front: the refresh is out when the listener taps Play.
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    play("e1")
+    expect(started).toEqual([])
+    // The caller merges the list with the device's progress, or catches the failure, then settles.
+    gate.refreshSettled()
+    expect(started).toEqual(["e1"])
+    gate.refreshSettled()
+    expect(started).toEqual(["e1"])
+  })
+
+  test("with two requests in flight, Play waits for both answers", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    gate.refreshStarted()
+    play("e1")
+    gate.refreshSettled()
+    expect(started).toEqual([])
+    gate.refreshSettled()
+    expect(started).toEqual(["e1"])
+  })
+
+  test("a request sent after the Play does not make it wait longer", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    play("e1")
+    gate.refreshStarted()
+    gate.refreshSettled()
+    expect(started).toEqual(["e1"])
+  })
+
+  test("a second Play of the same episode does not wait again", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    play("e1")
+    play("e1")
+    expect(started).toEqual(["e1"])
+    gate.refreshSettled()
+    expect(started).toEqual(["e1"])
+  })
+
+  test("a pause or a seek takes the waiting Play back", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    play("e1")
+    gate.cancel()
+    gate.refreshSettled()
+    expect(started).toEqual([])
+  })
+
+  test("a Play of another episode replaces the waiting one", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshStarted()
+    play("e1")
+    play("e2")
+    gate.refreshSettled()
+    expect(started).toEqual(["e2"])
   })
 })

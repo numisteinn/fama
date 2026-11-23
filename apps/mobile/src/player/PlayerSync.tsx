@@ -9,7 +9,7 @@ import { useTrackSource } from "./usePlayback"
 
 /**
  * Keeps the native player in step with the library: new chapters, and the last episode after launch, loaded
- * without play. Syncs listening progress on every library load and saves it when the app goes to the background.
+ * without play. Saves listening progress when the app goes to the background. The library syncs it on every load.
  */
 export function PlayerSync() {
   const { api } = useSettings()
@@ -19,11 +19,6 @@ export function PlayerSync() {
   const restored = useRef(false)
 
   useEffect(() => progress.connect(api), [api])
-
-  // Every list the server sent: pending local entries go out, newer server entries come in.
-  useEffect(() => {
-    if (loaded) progress.sync(episodes)
-  }, [loaded, episodes])
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
