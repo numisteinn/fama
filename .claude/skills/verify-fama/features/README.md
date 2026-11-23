@@ -34,5 +34,6 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Add a link](./add-link.md): paste a web article link on the web or the iPhone, and get a narrated episode with the real title, the detected language and the default voice.
 - [Add a file](./add-file.md): attach a PDF, EPUB, Markdown or text file, and get one chapter for each table-of-contents entry.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
+- [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode and streamable book files.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.
