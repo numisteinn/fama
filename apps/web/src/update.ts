@@ -497,8 +497,13 @@ const savePositionAt = (episodeId: EpisodeId, positionMs: number): Step => (mode
     ? { model }
     : { model, commands: [SaveProgress({ episodeId, positionMs })] }
 
-/** Saves the position of the loaded episode now. */
-const savePosition: Step = withLoaded(({ playback, episode }) => savePositionAt(episode.id, globalMs(playback, episode)))
+/**
+ * Saves the position of the loaded episode now. While its Play waits for the library, nothing is stamped: the
+ * position the tab holds may be one another device moved on from, also when the audio started by itself.
+ */
+const savePosition: Step = withLoaded(({ playback, episode }) => (model) =>
+  isPlayPending(model, episode.id) ? { model } : savePositionAt(episode.id, globalMs(playback, episode))(model),
+)
 
 const isSameProgress = (a: EpisodeProgress, b: EpisodeProgress) =>
   a.positionMs === b.positionMs && a.updatedAt === b.updatedAt
@@ -519,24 +524,24 @@ const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Ste
 /**
  * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
  * A loaded, paused episode rests there, so the next Play resumes where the other device stopped. With `isPlayDue`,
- * a Play waited for this entry: the episode plays from there now.
+ * a Play waited for this entry: the loaded episode plays from there now.
  */
 const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress, isPlayDue = false): Step => (model) => {
   const local = model.localProgress[episodeId]
   if (local && isSameProgress(local, progress)) return { model }
   const playback = model.playback
-  const isLoadedPaused =
-    playback._tag === "Loaded" && playback.episodeId === episodeId && !playback.isPlaying && !playback.isWaiting
+  const isLoaded = playback._tag === "Loaded" && playback.episodeId === episodeId
+  const isPaused = isLoaded && !playback.isPlaying && !playback.isWaiting
   return Update.combine(model, [
     (stepModel) => ({
       model: modifyFields(stepModel, { localProgress: Record.set(episodeId, progress) }),
       commands: [StoreProgress({ episodeId, progress })],
     }),
-    !isLoadedPaused
-      ? unchanged
-      : isPlayDue
-        ? withLoaded(({ episode }) => playFrom(episode, progress.positionMs))
-        : restAt(progress.positionMs),
+    isPlayDue && isLoaded
+      ? withLoaded(({ episode }) => playFrom(episode, progress.positionMs))
+      : isPaused
+        ? restAt(progress.positionMs)
+        : unchanged,
   ])
 }
 

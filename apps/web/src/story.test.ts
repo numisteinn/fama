@@ -1100,6 +1100,29 @@ describe("player", () => {
       )
     })
 
+    test("audio that starts by itself while the Play waits is not stamped, and the answer moves it to the phone's position", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // The audio element reports play and time though the tab sent it no command.
+        message(Message.StartedAudio()),
+        message(Message.UpdatedAudioTime({ offsetMs: 11_000, atMs: 6_000 })),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 46_000 - 26_825, atMs: 12_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 46_000 })),
+        saved(46_000),
+      )
+    })
+
     test("with two requests in flight, the Play waits for both answers", () => {
       // A poll went out, then the tab came back: the poll's answer may be older than the phone's save.
       const polling = update(update(paused, Message.TickedPoll()).model, Message.BecameVisible()).model
