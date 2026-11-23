@@ -4,7 +4,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Run `fama-verify up` from the repo root. Each run starts from an empty library on `http://localhost:8788`.
+- Run `fama-verify up` from the repo root. Each run starts from an empty library on `http://localhost:8788`, owned by the seeded user `dev-user` (client token `dev-api-token`, feed token `dev-feed-token`). The worker uses `dev-worker-token`.
 - Run `fama-verify doctor`. It must print `healthy`, and the build commit must match the current commit.
 - Web: a T3 preview tab you opened on port 8788, with `dev-api-token` saved in Settings.
 - iPhone: `fama-verify metro`, `dev.fama.app` opened with `agent-device`, `Server URL` set to `http://localhost:8788` (old value recorded), status `Connected`.
