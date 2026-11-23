@@ -15,18 +15,24 @@ type Downloads = {
 
 const DownloadsContext = createContext<Downloads | null>(null)
 
-const episodeDir = (id: string) => new Directory(Paths.document, "episodes", id)
-const chapterFile = (id: string, index: number) => new File(episodeDir(id), `${String(index).padStart(3, "0")}.m4a`)
+// Downloads live per account (server and user), so two accounts on one server never share files.
+const episodeDir = (accountKey: string, id: string) => new Directory(Paths.document, "accounts", accountKey, "episodes", id)
+const chapterFile = (accountKey: string, id: string, index: number) =>
+  new File(episodeDir(accountKey, id), `${String(index).padStart(3, "0")}.m4a`)
 
 export function DownloadsProvider({ children }: { children: ReactNode }) {
-  const { api } = useSettings()
+  const { api, account } = useSettings()
+  const accountKey = account?.key
   const [active, setActive] = useState<ReadonlyMap<string, { done: number; total: number }>>(new Map())
   // File checks are synchronous. Bump after a change on disk so readers render again.
   const [version, setVersion] = useState(0)
 
   const value = useMemo<Downloads>(() => {
     const isComplete = (episode: Episode) =>
-      episode.job._tag === "Ready" && episode.chapters.length > 0 && episode.chapters.every((c) => chapterFile(episode.id, c.index).exists)
+      accountKey !== undefined &&
+      episode.job._tag === "Ready" &&
+      episode.chapters.length > 0 &&
+      episode.chapters.every((c) => chapterFile(accountKey, episode.id, c.index).exists)
     const setProgress = (id: string, progress: { done: number; total: number } | null) =>
       setActive((map) => {
         const next = new Map(map)
@@ -41,18 +47,19 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         return isComplete(episode) ? { _tag: "Done" } : { _tag: "None" }
       },
       localUri(episodeId, index) {
-        const file = chapterFile(episodeId, index)
+        if (accountKey === undefined) return null
+        const file = chapterFile(accountKey, episodeId, index)
         return file.exists ? file.uri : null
       },
       async download(episode) {
-        if (!api || active.has(episode.id)) return
-        const dir = episodeDir(episode.id)
+        if (!api || accountKey === undefined || active.has(episode.id)) return
+        const dir = episodeDir(accountKey, episode.id)
         if (!dir.exists) dir.create({ intermediates: true })
         const total = episode.chapters.length
         setProgress(episode.id, { done: 0, total })
         try {
           for (const [done, chapter] of episode.chapters.entries()) {
-            const file = chapterFile(episode.id, chapter.index)
+            const file = chapterFile(accountKey, episode.id, chapter.index)
             if (!file.exists) {
               // Download beside the target, then move, so a cut download never looks complete.
               const partial = new File(dir, `${chapter.index}.part`)
@@ -68,14 +75,15 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         }
       },
       remove(episodeId) {
-        const dir = episodeDir(episodeId)
+        if (accountKey === undefined) return
+        const dir = episodeDir(accountKey, episodeId)
         if (dir.exists) dir.delete()
         setVersion((v) => v + 1)
       },
     }
     // version is a cache key for the file checks above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, active, version])
+  }, [api, accountKey, active, version])
 
   return <DownloadsContext value={value}>{children}</DownloadsContext>
 }

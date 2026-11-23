@@ -6,12 +6,40 @@ export class StorageError extends Schema.TaggedError<StorageError>()("StorageErr
   cause: Schema.Defect(),
 }) {}
 
+/** Every object of a user lives under this prefix. */
+const userPrefix = (userId: string) => `users/${userId}/`
+
 export const keys = {
-  upload: (episodeId: string, fileName: string) => `uploads/${episodeId}/${fileName}`,
-  chapter: (episodeId: string, index: number) =>
-    `episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
-  book: (episodeId: string) => `episodes/${episodeId}/book.m4b`,
-  cover: (episodeId: string, ext: string) => `episodes/${episodeId}/cover.${ext}`,
+  upload: (userId: string, episodeId: string, fileName: string) =>
+    `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
+  chapter: (userId: string, episodeId: string, index: number) =>
+    `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
+  book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
+  cover: (userId: string, episodeId: string, ext: string) =>
+    `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+}
+
+/**
+ * The public path of a stored media key: `/media/<feedToken>/episodes/...`. The user prefix stays out of the URL,
+ * because the feed token already names the user.
+ */
+export const mediaPath = (feedToken: string, userId: string, key: string) => {
+  const prefix = userPrefix(userId)
+  if (!key.startsWith(prefix)) throw new Error(`key ${key} is not under ${prefix}`)
+  return `/media/${feedToken}/${key.slice(prefix.length)}`
+}
+
+/**
+ * The stored key behind a media path (the part after `/media/<feedToken>/`), or `null` when the path may not be
+ * served: only `episodes/...` of the feed token's own user, never `uploads/`, never `.` or `..` segments.
+ */
+export const mediaKey = (userId: string, path: string): string | null => {
+  const segments = path.split("/")
+  if (segments[0] !== "episodes" || segments.length < 3) return null
+  if (segments.some((segment) => segment === "" || segment === "." || segment === ".." || segment.includes("\\"))) {
+    return null
+  }
+  return userPrefix(userId) + path
 }
 
 export type ByteRange = { readonly offset: number; readonly length?: number } | { readonly suffix: number }
@@ -24,7 +52,8 @@ export interface Interface {
   ) => Effect.Effect<{ readonly size: number }, StorageError>
   readonly get: (key: string, range: ByteRange | null) => Effect.Effect<R2ObjectBody | null, StorageError>
   readonly head: (key: string) => Effect.Effect<R2Object | null, StorageError>
-  readonly deleteEpisode: (episodeId: string) => Effect.Effect<void, StorageError>
+  /** Removes every object of one episode of one user: its media and its upload. */
+  readonly deleteEpisode: (userId: string, episodeId: string) => Effect.Effect<void, StorageError>
 }
 
 export class MediaStore extends Context.Service<MediaStore, Interface>()("@fama/api/MediaStore") {}
@@ -64,9 +93,9 @@ export const layer = Layer.effect(
       } while (cursor !== undefined)
     })
 
-    const deleteEpisode = Effect.fn("MediaStore.deleteEpisode")(function* (episodeId: string) {
-      yield* deletePrefix(`episodes/${episodeId}/`)
-      yield* deletePrefix(`uploads/${episodeId}/`)
+    const deleteEpisode = Effect.fn("MediaStore.deleteEpisode")(function* (userId: string, episodeId: string) {
+      yield* deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/`)
+      yield* deletePrefix(`${userPrefix(userId)}uploads/${episodeId}/`)
     })
 
     return MediaStore.of({ put, get, head, deleteEpisode })

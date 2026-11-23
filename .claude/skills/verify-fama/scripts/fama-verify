@@ -6,7 +6,7 @@
 #   fama-verify metro              Metro on :8081 for the simulator dev client
 #   fama-verify worker             start the worker later (after `up --no-worker`)
 #   fama-verify doctor             read-only health check
-#   fama-verify api METHOD PATH    curl the verification API with the token, for example: api GET /api/episodes
+#   fama-verify api METHOD PATH    curl the verification API with the client token, for example: api GET /api/me
 #   fama-verify wait ID [SECONDS]  poll episode ID until Ready or Failed (default 180 s), print a summary
 #   fama-verify feed               print the feed URL
 #   fama-verify down               stop what `up`, `metro` and `worker` started, copy logs to the evidence dir
@@ -20,7 +20,9 @@ METRO_PORT=8081
 STATE="${FAMA_VERIFY_STATE:-${TMPDIR:-/tmp}/fama-verify}"
 EVIDENCE_ROOT="${FAMA_VERIFY_EVIDENCE:-$HOME/Developer/fama-shots/verify}"
 API="http://localhost:$API_PORT"
-TOKEN="dev-api-token"
+TOKEN="dev-api-token"          # client token of the seeded dev user
+FEED_TOKEN="dev-feed-token"
+WORKER_TOKEN="dev-worker-token" # FAMA_WORKER_TOKEN in apps/api/.dev.vars
 export _ZO_DOCTOR=0 FORCE_COLOR=0
 
 die() { echo "fama-verify: $*" >&2; exit 1; }
@@ -59,7 +61,7 @@ voices_registered() { api GET /api/voices | python3 -c 'import json,sys; sys.exi
 start_worker() {
   load
   alive "${WORKER_PID:-}" && die "worker already running (pid $WORKER_PID)"
-  spawn worker "$REPO/worker" uv run fama work --api "$API" --token "$TOKEN" \
+  spawn worker "$REPO/worker" uv run fama work --api "$API" --token "$WORKER_TOKEN" \
     --worker-id "verify-$RUN_ID" --out "$STATE/work" >/dev/null
   wait_for "worker (voices registered)" 120 voices_registered
   note "worker ready"
@@ -81,13 +83,18 @@ cmd_up() {
   save COMMIT "$(git -C "$REPO" rev-parse --short HEAD)$(git -C "$REPO" diff --quiet || echo -dirty)"
 
   [ -f "$REPO/apps/api/.dev.vars" ] || cp "$REPO/apps/api/.dev.vars.example" "$REPO/apps/api/.dev.vars"
-  grep -q "^FAMA_API_TOKEN=$TOKEN$" "$REPO/apps/api/.dev.vars" || die "apps/api/.dev.vars must set FAMA_API_TOKEN=$TOKEN"
+  grep -q "^FAMA_WORKER_TOKEN=$WORKER_TOKEN$" "$REPO/apps/api/.dev.vars" \
+    || die "apps/api/.dev.vars must set FAMA_WORKER_TOKEN=$WORKER_TOKEN (see .dev.vars.example)"
 
   note "building web (apps/web/dist)"
   (cd "$REPO/apps/web" && ./node_modules/.bin/vite build >"$STATE/web-build.log" 2>&1) || die "web build failed: $STATE/web-build.log"
   note "applying migrations to an empty local D1 in $STATE/wrangler"
   (cd "$REPO/apps/api" && ./node_modules/.bin/wrangler d1 migrations apply DB --local --persist-to "$STATE/wrangler" \
     >"$STATE/migrate.log" 2>&1) || die "migrations failed: $STATE/migrate.log"
+  note "seeding the dev user (client token $TOKEN, feed token $FEED_TOKEN)"
+  (cd "$REPO/apps/api" && node scripts/create-user.ts --user-id=dev-user --client-token="$TOKEN" \
+    --feed-token="$FEED_TOKEN" -- --local --persist-to "$STATE/wrangler" >"$STATE/seed.log" 2>&1) \
+    || die "seeding failed: $STATE/seed.log"
 
   spawn api "$REPO/apps/api" ./node_modules/.bin/wrangler dev --ip 127.0.0.1 --port "$API_PORT" --inspector-port 0 \
     --persist-to "$STATE/wrangler" --show-interactive-dev-session=false >/dev/null
@@ -100,6 +107,7 @@ cmd_up() {
   echo "RUN_ID=$RUN_ID"
   echo "WEB=$API"
   echo "TOKEN=$TOKEN"
+  echo "WORKER_TOKEN=$WORKER_TOKEN"
   echo "FIXTURES=http://localhost:$FIXTURE_PORT"
   echo "EVIDENCE=$EVIDENCE"
 }
@@ -129,6 +137,10 @@ cmd_doctor() {
   label="port $API_PORT owned by this run (listener pid ${owner:-none})"; check test -n "$owner" -a "$(pgid "${owner:-1}")" = "${API_PID:-x}"
   label="token accepted (GET /api/episodes 200)"; check api GET /api/episodes -o /dev/null
   label="no token refused (401)"; check test "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/episodes")" = 401
+  label="feed token refused on /api (401)"
+  check test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $FEED_TOKEN" "$API/api/episodes")" = 401
+  label="client token refused on /api/worker (401)"
+  check test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOKEN" "$API/api/worker/claim")" = 401
   label="web app served"; check sh -c "curl -fsS $API/ | grep -q '<div id=\"root\"'"
   label="fixtures served on :$FIXTURE_PORT"; check curl -fsS "http://localhost:$FIXTURE_PORT/article.html" -o /dev/null
   if [ -n "${WORKER_PID:-}" ]; then

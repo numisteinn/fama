@@ -19,7 +19,8 @@ export default function SettingsScreen() {
     if (!api) return setCheck({ _tag: "Idle" })
     let live = true
     setCheck({ _tag: "Checking" })
-    api.listEpisodes().then(
+    // Connected means the server knows the token's user (GET /api/me).
+    api.me().then(
       () => live && setCheck({ _tag: "Ok" }),
       (error: unknown) => live && setCheck({ _tag: "Failed", message: error instanceof ApiError ? error.message : "Could not connect." }),
     )

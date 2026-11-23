@@ -13,10 +13,15 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Worker** | A process that pulls jobs from the API and makes the audio. Runs on the Mac (local) or Modal (cloud). Same Python package. |
 | **Engine** | A TTS model family a worker can run: `kokoro`, `piper`, ... |
 | **Voice** | One speaker of an engine, with a language. Written `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. |
-| **Feed** | The private podcast RSS feed of all ready episodes. Its URL holds a secret feed token. |
+| **Feed** | The private podcast RSS feed of one user's ready episodes. Its URL holds the user's feed token. |
+| **User** | The owner of episodes. A DIY server has exactly one; the managed service has many. Every episode, feed and stored file belongs to one user. |
+| **Client token** | A bearer secret for the web and phone apps. It acts as one user on `/api/*`. A user can have many. |
+| **Feed token** | The secret in the feed and media URLs of one user. It opens only `/feed/` and `/media/`. Rotating it closes the old URLs. |
+| **Worker token** | The bearer secret of workers. It opens only `/api/worker/*`, for the jobs of all users. |
+| **Lease** | One worker's claim on one job, proven by the lease token `claim` returns. Every job call carries it. A new claim makes the old lease useless. |
 
 Rules:
 
-- One user per deployment. The API token guards the API. The feed token guards the feed and audio URLs.
+- Each credential opens one set of routes: the client token the client API, the feed token the feed and media, the worker token the worker API. The code has no branch for DIY or managed; they differ only in how users and tokens are made.
 - The worker owns extraction, language detection and synthesis. The API owns state and storage. Clients only talk to the API.
 - When the user picks no voice, the worker picks the default voice for the detected language.

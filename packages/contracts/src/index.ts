@@ -6,6 +6,13 @@ export type EpisodeId = typeof EpisodeId.Type
 export const WorkerId = Schema.String.pipe(Schema.brand("WorkerId"))
 export type WorkerId = typeof WorkerId.Type
 
+export const UserId = Schema.String.pipe(Schema.brand("UserId"))
+export type UserId = typeof UserId.Type
+
+/** The secret `claim` hands out for one attempt at a job. Every job route needs it. */
+export const LeaseToken = Schema.String.pipe(Schema.brand("LeaseToken"))
+export type LeaseToken = typeof LeaseToken.Type
+
 /** `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. */
 export const VoiceRef = Schema.String.pipe(Schema.brand("VoiceRef"))
 export type VoiceRef = typeof VoiceRef.Type
@@ -87,6 +94,13 @@ export const EpisodeList = Schema.Struct({ episodes: Schema.Array(Episode) })
 export const VoiceList = Schema.Struct({ voices: Schema.Array(Voice) })
 export const FeedInfo = Schema.Struct({ url: Schema.String })
 
+/** Bumped on a breaking change to this contract. */
+export const API_VERSION = 1
+
+/** `GET /api/me`: who the client token belongs to. Clients key caches and downloads by server and `userId`. */
+export const Me = Schema.Struct({ userId: UserId, apiVersion: Schema.Number })
+export interface Me extends Schema.Schema.Type<typeof Me> {}
+
 // Worker API
 
 export const ClaimRequest = Schema.Struct({
@@ -97,6 +111,7 @@ export interface ClaimRequest extends Schema.Schema.Type<typeof ClaimRequest> {}
 
 export const ClaimedJob = Schema.Struct({
   episodeId: EpisodeId,
+  leaseToken: LeaseToken,
   source: Source,
   /** API path to GET the uploaded bytes. Set only for `File` sources. */
   sourcePath: Schema.NullOr(Schema.String),
@@ -111,6 +126,7 @@ export const ClaimResponse = Schema.Struct({ job: ClaimedJob })
 
 export const ProgressRequest = Schema.Struct({
   workerId: WorkerId,
+  leaseToken: LeaseToken,
   stage: Stage,
   done: Schema.Number,
   total: Schema.Number,
@@ -124,15 +140,19 @@ export interface ProgressRequest extends Schema.Schema.Type<typeof ProgressReque
 /** Query of `PUT /api/worker/jobs/:id/chapters/:index`. */
 export const ChapterUploadQuery = Schema.Struct({
   workerId: WorkerId,
+  leaseToken: LeaseToken,
   title: Schema.String,
   durationMs: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
 
 /** Query of `PUT /api/worker/jobs/:id/book` and `PUT /api/worker/jobs/:id/cover`. */
-export const UploadQuery = Schema.Struct({ workerId: WorkerId })
+export const UploadQuery = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken })
 
-export const CompleteRequest = Schema.Struct({ workerId: WorkerId, durationMs: Schema.Number })
-export const FailRequest = Schema.Struct({ workerId: WorkerId, reason: Schema.String })
+/** Query of `GET /api/worker/jobs/:id/source`. */
+export const SourceQuery = Schema.Struct({ leaseToken: LeaseToken })
+
+export const CompleteRequest = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken, durationMs: Schema.Number })
+export const FailRequest = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken, reason: Schema.String })
 
 /** A job whose heartbeat is older than this can be claimed by another worker. */
 export const LEASE_MS = 10 * 60 * 1000

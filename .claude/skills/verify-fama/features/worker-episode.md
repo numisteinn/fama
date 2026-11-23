@@ -12,6 +12,7 @@ The Mac worker pulls the oldest queued job, extracts the document, narrates it c
 - `job-retry` puts a failed job back to `Queued`, and the worker runs it again.
 - `job-voices` registers the worker's voices, which fill the voice menus.
 - `job-resume` lets a new worker take over a stale job after the 10-minute lease and skip finished chapters.
+- `job-lease` gives each claim its own lease token. Every job call needs it, the source read included, and a call with another token gets `409`. The worker token opens only `/api/worker/*`.
 
 ## How to get to it (user POV)
 
@@ -38,6 +39,6 @@ Preconditions:
 
 - The worker caches synthesized chunks in `~/.cache/fama/chunks` by text, voice and speed. A second run of the same fixture is much faster and can skip visible stages. To see every stage, change the voice or the speed.
 - The worker polls at least every 10 s when idle, so a job can stay `Queued` for up to 10 s after `fama-verify worker`.
-- `job-resume` needs a stale lease of 10 minutes (`LEASE_MS`). It is not practical in a normal run. Prove it with the API and worker tests (`pnpm --filter @fama/api test`, `cd worker && uv run pytest`) unless the run is about leases.
+- `job-resume` and `job-lease` need a second worker or a stale lease of 10 minutes (`LEASE_MS`). They are not practical in a normal run. Prove it with the API and worker tests (`pnpm --filter @fama/api test`, `cd worker && uv run pytest`) unless the run is about leases.
 - The web page asks for voices only when it loads. In a recorded run, saving the token refetched the library and the feed, but not `/api/voices`. After you save a new token, reload the tab before you check the voice menu.
 - Only one worker should be pointed at 8788. A worker from another run would take jobs and make results confusing; `doctor` shows the worker this run started.

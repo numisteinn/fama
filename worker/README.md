@@ -21,8 +21,8 @@ uv run fama make book.epub --voice kokoro:bm_george --speed 1.1 --out out
 uv run fama make paper.pdf
 pbpaste | uv run fama make -                                        # pasted text
 uv run fama voices                                                  # all voices, defaults marked
-uv run fama work --api http://localhost:8787 --token dev-api-token  # pull jobs from the API
-uv run fama work --api http://localhost:8787 --token dev-api-token --drain  # until the queue is empty
+uv run fama work --api http://localhost:8787 --token dev-worker-token  # pull jobs (FAMA_WORKER_TOKEN)
+uv run fama work --api http://localhost:8787 --token dev-worker-token --drain  # until the queue is empty
 ```
 
 `fama make` writes:
@@ -34,7 +34,7 @@ out/<slug>/cover.jpg        (when the source has one)
 out/<slug>/episode.json     (title, language, voice, chapter durations)
 ```
 
-`fama work` loops: claim a job, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. Chapters listed in `completedChapters` are not uploaded again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
+`fama work` loops: claim a job (with the worker token, `FAMA_WORKER_TOKEN` on the API), send its lease token on every job call, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. Chapters listed in `completedChapters` are not uploaded again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
 
 Settings:
 

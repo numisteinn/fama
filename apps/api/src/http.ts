@@ -1,4 +1,5 @@
 import {
+  API_VERSION,
   ChapterUploadQuery,
   ClaimRequest,
   CompleteRequest,
@@ -7,21 +8,22 @@ import {
   FailRequest,
   ProgressRequest,
   type Source,
+  SourceQuery,
   UploadQuery,
   VoiceRef,
 } from "@fama/contracts"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
-import { Bindings } from "./bindings.ts"
+import { AccountRepo } from "./account-repo.ts"
+import { clientUser, feedUser, requireWorker, type User } from "./auth.ts"
 import cover from "./cover.png"
 import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
-import { keys, MediaStore } from "./media-store.ts"
+import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
-class Unauthorized extends Schema.TaggedError<Unauthorized>()("Unauthorized", {}) {}
 class BadRequest extends Schema.TaggedError<BadRequest>()("BadRequest", { message: Schema.String }) {}
 class TooLarge extends Schema.TaggedError<TooLarge>()("TooLarge", {}) {}
 
@@ -46,34 +48,31 @@ const errorResponse = (error: unknown) =>
     return HttpServerResponse.jsonUnsafe({ error: tag, message }, { status })
   })
 
-const sha256 = (value: string) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(value))
-
-const sameSecret = (given: string, expected: string) =>
-  Effect.promise(async () => crypto.subtle.timingSafeEqual(await sha256(given), await sha256(expected)))
-
 const webRequest = Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
   HttpServerRequest.toWeb(request),
 )
 
-const requireApiToken = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest
-  const { FAMA_API_TOKEN } = yield* Bindings
-  const header = request.headers.authorization ?? ""
-  const token = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : ""
-  if (!(yield* sameSecret(token, FAMA_API_TOKEN))) return yield* new Unauthorized()
-})
-
-const requireFeedToken = Effect.gen(function* () {
-  const { token } = yield* HttpRouter.schemaPathParams(Schema.Struct({ token: Schema.String }))
-  const { FAMA_FEED_TOKEN } = yield* Bindings
-  if (!(yield* sameSecret(token, FAMA_FEED_TOKEN))) return yield* new Unauthorized()
-})
-
 const handle = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
   Effect.catch(effect, errorResponse)
 
-const api = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-  handle(Effect.andThen(requireApiToken, effect))
+/** A client route: runs as the user of the client token. */
+const api = <E, R>(effect: (user: User) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
+  handle(Effect.flatMap(clientUser, effect))
+
+/** A worker route: needs the worker token. Job routes also check the lease token. */
+const worker = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
+  handle(Effect.andThen(requireWorker, effect))
+
+/** The decoded path after `/media/<token>/`, for example `episodes/<id>/book.m4b`. Empty when it does not decode. */
+const mediaPathOf = (url: string) => {
+  try {
+    return new URL(url).pathname.split("/").slice(3).map(decodeURIComponent).join("/")
+  } catch {
+    return ""
+  }
+}
+
+const feedUrl = (origin: string, feedToken: string) => `${origin}/feed/${feedToken}/rss.xml`
 
 const noContent = HttpServerResponse.empty({ status: 204 })
 const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status })
@@ -85,6 +84,7 @@ const ChapterParams = Schema.Struct({
   index: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
 const BlobParams = Schema.Struct({ ...UploadQuery.fields, id: EpisodeId })
+const SourceParams = Schema.Struct({ ...SourceQuery.fields, id: EpisodeId })
 
 const firstWords = (text: string, count: number) => {
   const words = text.trim().split(/\s+/)
@@ -120,13 +120,18 @@ const putBody = Effect.fn("http.putBody")(function* (key: string, fallbackType: 
 
 const clientRoutes = HttpRouter.addAll([
   HttpRouter.route(
+    "GET",
+    "/api/me",
+    api(({ userId }) => Effect.succeed(json({ userId, apiVersion: API_VERSION }))),
+  ),
+  HttpRouter.route(
     "POST",
     "/api/episodes",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
         const body = yield* HttpServerRequest.schemaBodyJson(CreateEpisode)
         const repo = yield* EpisodeRepo
-        const episode = yield* repo.create({
+        const episode = yield* repo.create(userId, {
           id: EpisodeId.make(crypto.randomUUID()),
           source: body.source,
           title: provisionalTitle(body.source),
@@ -140,7 +145,7 @@ const clientRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/episodes/upload",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
         const request = yield* webRequest
         const length = Number(request.headers.get("content-length") ?? 0)
@@ -161,10 +166,10 @@ const clientRoutes = HttpRouter.addAll([
         const fileName = safeFileName(file.name)
         const contentType = file.type || "application/octet-stream"
         const store = yield* MediaStore
-        yield* store.put(keys.upload(id, fileName), file, contentType)
+        yield* store.put(keys.upload(userId, id, fileName), file, contentType)
         const repo = yield* EpisodeRepo
         const source: Source = { _tag: "File", fileName, contentType }
-        const episode = yield* repo.create({ id, source, title: provisionalTitle(source), voice, speed })
+        const episode = yield* repo.create(userId, { id, source, title: provisionalTitle(source), voice, speed })
         return json(episode, 201)
       }),
     ),
@@ -172,28 +177,33 @@ const clientRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "GET",
     "/api/episodes",
-    api(Effect.gen(function* () {
-      return json({ episodes: yield* (yield* EpisodeRepo).list })
-    })),
+    api(({ userId }) =>
+      Effect.gen(function* () {
+        return json({ episodes: yield* (yield* EpisodeRepo).list(userId) })
+      }),
+    ),
   ),
   HttpRouter.route(
     "GET",
     "/api/episodes/:id",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
-        return json(yield* (yield* EpisodeRepo).get(id))
+        return json(yield* (yield* EpisodeRepo).get(userId, id))
       }),
     ),
   ),
   HttpRouter.route(
     "DELETE",
     "/api/episodes/:id",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
-        yield* (yield* MediaStore).deleteEpisode(id)
-        yield* (yield* EpisodeRepo).remove(id)
+        const repo = yield* EpisodeRepo
+        // Ownership first: another user's id is 404 and touches no media.
+        yield* repo.get(userId, id)
+        yield* (yield* MediaStore).deleteEpisode(userId, id)
+        yield* repo.remove(userId, id)
         return noContent
       }),
     ),
@@ -201,28 +211,39 @@ const clientRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/episodes/:id/retry",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
-        return json(yield* (yield* EpisodeRepo).retry(id))
+        return json(yield* (yield* EpisodeRepo).retry(userId, id))
       }),
     ),
   ),
   HttpRouter.route(
     "GET",
     "/api/voices",
-    api(Effect.gen(function* () {
-      return json({ voices: yield* (yield* EpisodeRepo).voices })
-    })),
+    api(() =>
+      Effect.gen(function* () {
+        return json({ voices: yield* (yield* EpisodeRepo).voices })
+      }),
+    ),
   ),
   HttpRouter.route(
     "GET",
     "/api/feed",
-    api(
+    api(({ userId }) =>
       Effect.gen(function* () {
-        const request = yield* webRequest
-        const { FAMA_FEED_TOKEN } = yield* Bindings
-        return json({ url: `${new URL(request.url).origin}/feed/${FAMA_FEED_TOKEN}/rss.xml` })
+        const origin = new URL((yield* webRequest).url).origin
+        return json({ url: feedUrl(origin, yield* (yield* AccountRepo).feedToken(userId)) })
+      }),
+    ),
+  ),
+  HttpRouter.route(
+    "POST",
+    "/api/feed/rotate",
+    api(({ userId }) =>
+      Effect.gen(function* () {
+        const origin = new URL((yield* webRequest).url).origin
+        return json({ url: feedUrl(origin, yield* (yield* AccountRepo).rotateFeedToken(userId)) })
       }),
     ),
   ),
@@ -232,7 +253,7 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/worker/claim",
-    api(
+    worker(
       Effect.gen(function* () {
         const body = yield* HttpServerRequest.schemaBodyJson(ClaimRequest)
         const job = yield* (yield* EpisodeRepo).claim(body.workerId, body.voices)
@@ -243,12 +264,12 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "GET",
     "/api/worker/jobs/:id/source",
-    api(
+    worker(
       Effect.gen(function* () {
-        const { id } = yield* HttpRouter.schemaPathParams(IdParams)
-        const source = yield* (yield* EpisodeRepo).source(id)
+        const params = yield* HttpRouter.schemaParams(SourceParams)
+        const { source, userId } = yield* (yield* EpisodeRepo).holdLease(params.id, params.leaseToken)
         if (source._tag !== "File") return yield* new BadRequest({ message: "Source is not a file" })
-        const object = yield* (yield* MediaStore).get(keys.upload(id, source.fileName), null)
+        const object = yield* (yield* MediaStore).get(keys.upload(userId, params.id, source.fileName), null)
         if (object === null) return yield* new BadRequest({ message: "Uploaded file is missing" })
         return HttpServerResponse.raw(
           new Response(object.body, {
@@ -261,7 +282,7 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/worker/jobs/:id/progress",
-    api(
+    worker(
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         const body = yield* HttpServerRequest.schemaBodyJson(ProgressRequest)
@@ -273,12 +294,12 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "PUT",
     "/api/worker/jobs/:id/chapters/:index",
-    api(
+    worker(
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(ChapterParams)
         const repo = yield* EpisodeRepo
-        yield* repo.holdLease(params.id, params.workerId)
-        const { size } = yield* putBody(keys.chapter(params.id, params.index), "audio/mp4")
+        const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
+        const { size } = yield* putBody(keys.chapter(userId, params.id, params.index), "audio/mp4")
         yield* repo.putChapter(params.id, { ...params, size })
         return noContent
       }),
@@ -287,12 +308,12 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "PUT",
     "/api/worker/jobs/:id/book",
-    api(
+    worker(
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(BlobParams)
         const repo = yield* EpisodeRepo
-        yield* repo.holdLease(params.id, params.workerId)
-        const { size } = yield* putBody(keys.book(params.id), "audio/mp4")
+        const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
+        const { size } = yield* putBody(keys.book(userId, params.id), "audio/mp4")
         yield* repo.setBook(params.id, size)
         return noContent
       }),
@@ -301,7 +322,7 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "PUT",
     "/api/worker/jobs/:id/cover",
-    api(
+    worker(
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(BlobParams)
         const request = yield* webRequest
@@ -309,9 +330,10 @@ const workerRoutes = HttpRouter.addAll([
         const ext = { "image/jpeg": "jpg", "image/png": "png" }[contentType]
         if (ext === undefined) return yield* new BadRequest({ message: "Cover must be image/jpeg or image/png" })
         const repo = yield* EpisodeRepo
-        yield* repo.holdLease(params.id, params.workerId)
-        yield* putBody(keys.cover(params.id, ext), contentType)
-        yield* repo.setCover(params.id, keys.cover(params.id, ext))
+        const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
+        const key = keys.cover(userId, params.id, ext)
+        yield* putBody(key, contentType)
+        yield* repo.setCover(params.id, key)
         return noContent
       }),
     ),
@@ -319,11 +341,11 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/worker/jobs/:id/complete",
-    api(
+    worker(
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         const body = yield* HttpServerRequest.schemaBodyJson(CompleteRequest)
-        yield* (yield* EpisodeRepo).complete(id, body.workerId, body.durationMs)
+        yield* (yield* EpisodeRepo).complete(id, body.leaseToken, body.durationMs)
         return noContent
       }),
     ),
@@ -331,11 +353,11 @@ const workerRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
     "/api/worker/jobs/:id/fail",
-    api(
+    worker(
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         const body = yield* HttpServerRequest.schemaBodyJson(FailRequest)
-        yield* (yield* EpisodeRepo).fail(id, body.workerId, body.reason)
+        yield* (yield* EpisodeRepo).fail(id, body.leaseToken, body.reason)
         return noContent
       }),
     ),
@@ -348,15 +370,14 @@ const publicRoutes = HttpRouter.addAll([
     "/feed/:token/rss.xml",
     handle(
       Effect.gen(function* () {
-        yield* requireFeedToken
+        const { userId, feedToken } = yield* feedUser
         const origin = new URL((yield* webRequest).url).origin
-        const { FAMA_FEED_TOKEN } = yield* Bindings
-        const items = yield* (yield* EpisodeRepo).feedItems(origin)
+        const items = yield* (yield* EpisodeRepo).feedItems(userId, origin)
         const xml = renderFeed({
           title: "Fama",
           author: "Fama",
           link: origin,
-          imageUrl: `${origin}/feed/${FAMA_FEED_TOKEN}/cover.png`,
+          imageUrl: `${origin}/feed/${feedToken}/cover.png`,
           items,
         })
         return HttpServerResponse.text(xml, { contentType: "application/rss+xml; charset=utf-8" })
@@ -367,10 +388,7 @@ const publicRoutes = HttpRouter.addAll([
     "GET",
     "/feed/:token/cover.png",
     handle(
-      Effect.as(
-        requireFeedToken,
-        HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/png" }),
-      ),
+      Effect.as(feedUser, HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/png" })),
     ),
   ),
   ...(["GET", "HEAD"] as const).map((method) =>
@@ -379,10 +397,10 @@ const publicRoutes = HttpRouter.addAll([
       "/media/:token/*",
       handle(
         Effect.gen(function* () {
-          yield* requireFeedToken
+          const { userId } = yield* feedUser
           const request = yield* webRequest
-          const prefix = `/media/${(yield* Bindings).FAMA_FEED_TOKEN}/`
-          const key = decodeURIComponent(new URL(request.url).pathname.slice(prefix.length))
+          const key = mediaKey(userId, mediaPathOf(request.url))
+          if (key === null) return HttpServerResponse.text("Not found", { status: 404 })
           return HttpServerResponse.raw(yield* mediaResponse(request, key))
         }),
       ),

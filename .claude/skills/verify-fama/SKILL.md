@@ -15,7 +15,7 @@ This skill starts its own instance. It never drives the deployed server (`*.work
 | Fixture server (articles, EPUB, PDF, Markdown) | `http://localhost:8790`, files in `fixtures/` |
 | Mac worker | `uv run fama work`, worker id `verify-<RUN_ID>` |
 | Metro (iPhone only) | `:8081` |
-| API token | `dev-api-token` (from `apps/api/.dev.vars`). Feed token `dev-feed-token`. |
+| Tokens | `up` seeds one user, `dev-user`, into the empty D1: client token `dev-api-token` (the web and iPhone `API token`), feed token `dev-feed-token`. The worker uses `FAMA_WORKER_TOKEN=dev-worker-token` from `apps/api/.dev.vars`. Each token opens only its own routes. |
 | Evidence | `~/Developer/fama-shots/verify/<RUN_ID>/`, kept after cleanup |
 
 The helper is `.claude/skills/verify-fama/scripts/fama-verify`. Run it from the repo root. It needs `pnpm install` and `(cd worker && uv sync)` done once, and the mise tools on `PATH` (in a non-interactive shell: `export PATH="$HOME/.local/share/mise/shims:$PATH"`).
@@ -27,7 +27,7 @@ The helper is `.claude/skills/verify-fama/scripts/fama-verify`. Run it from the 
 .claude/skills/verify-fama/scripts/fama-verify up --no-worker # to watch the Queued state, then: fama-verify worker
 ```
 
-`up` builds `apps/web/dist`, applies the D1 migrations to an empty state dir, starts wrangler dev on 127.0.0.1:8788, the fixture server and the worker, each in its own process group. It returns when the API answers `GET /api/episodes` with the token and the worker has registered its voices (`GET /api/voices` is not empty). That takes about 5 s with warm caches. It prints `RUN_ID`, `WEB`, `TOKEN`, `FIXTURES` and `EVIDENCE`.
+`up` builds `apps/web/dist`, applies the D1 migrations to an empty state dir, seeds the dev user with `apps/api/scripts/create-user.ts`, starts wrangler dev on 127.0.0.1:8788, the fixture server and the worker, each in its own process group. It returns when the API answers `GET /api/episodes` with the token and the worker has registered its voices (`GET /api/voices` is not empty). That takes about 5 s with warm caches. It prints `RUN_ID`, `WEB`, `TOKEN`, `WORKER_TOKEN`, `FIXTURES` and `EVIDENCE`.
 
 `up` refuses when an instance is already up or when port 8788 or 8790 belongs to another process. It never kills what it did not start.
 
@@ -39,7 +39,7 @@ For the iPhone, also run `fama-verify metro`. It starts Metro on 8081 and refuse
 .claude/skills/verify-fama/scripts/fama-verify doctor
 ```
 
-This check only reads. It confirms that the API process is alive, that the listener on 8788 is in this run's process group, that the token gets 200 and no token gets 401, that the web app and the fixtures are served, that the worker is alive with voices registered, and that Metro serves (when started). It also prints the commit the build came from and the current commit. If they differ, run `down` and `up` again before you trust a result. Run doctor first whenever anything looks wrong.
+This check only reads. It confirms that the API process is alive, that the listener on 8788 is in this run's process group, that the client token gets 200, no token gets 401, the feed token gets 401 on `/api/*` and the client token gets 401 on `/api/worker/*`, that the web app and the fixtures are served, that the worker is alive with voices registered, and that Metro serves (when started). It also prints the commit the build came from and the current commit. If they differ, run `down` and `up` again before you trust a result. Run doctor first whenever anything looks wrong.
 
 ## Drive: web (T3 preview tab)
 
@@ -106,11 +106,11 @@ After a failed attempt, run `down` before the next `up`, so no ports or processe
 All subcommands of `scripts/fama-verify` (run from the repo root):
 
 ```sh
-fama-verify up [--no-worker]   # fresh instance, prints RUN_ID, WEB, TOKEN, FIXTURES, EVIDENCE
+fama-verify up [--no-worker]   # fresh instance with the dev user, prints RUN_ID, WEB, TOKEN, WORKER_TOKEN, FIXTURES, EVIDENCE
 fama-verify worker             # start the worker after `up --no-worker`
 fama-verify metro              # Metro on :8081 for the simulator
 fama-verify doctor             # read-only health check, exit 1 when unhealthy
-fama-verify api GET /api/episodes          # any API call with the token
+fama-verify api GET /api/episodes          # any client API call with the client token (GET /api/me names the user)
 fama-verify wait <episodeId> [seconds]     # block until Ready or Failed, print a one-line summary
 fama-verify feed               # print the feed URL
 fama-verify down               # stop what this run started, keep evidence

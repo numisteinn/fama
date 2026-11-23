@@ -45,7 +45,7 @@ class Progress:
 class Heartbeat:
     """Holds the latest progress and sends it on change (throttled) and every HEARTBEAT_S."""
 
-    def __init__(self, api: Api, job: str, interval: float = HEARTBEAT_S) -> None:
+    def __init__(self, api: Api, job: ClaimedJob, interval: float = HEARTBEAT_S) -> None:
         self.api, self.job, self.interval = api, job, interval
         self.progress = Progress()
         self.lost = threading.Event()
@@ -97,7 +97,7 @@ class Heartbeat:
 class JobReporter:
     """Pipeline reporter: progress goes to the heartbeat, finished chapters go up at once."""
 
-    def __init__(self, api: Api, job: str, heartbeat: Heartbeat) -> None:
+    def __init__(self, api: Api, job: ClaimedJob, heartbeat: Heartbeat) -> None:
         self.api, self.job, self.heartbeat = api, job, heartbeat
 
     def stage(self, stage: str, done: int, total: int) -> None:
@@ -105,24 +105,22 @@ class JobReporter:
 
     def chapter_ready(self, chapter: ChapterFile) -> None:
         self.api.put_chapter(self.job, chapter.index, chapter.title, chapter.duration_ms, chapter.path)
-        log(f"{self.job}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
+        log(f"{self.job.episode_id}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
 
 
 def _source(api: Api, job: ClaimedJob, directory: Path) -> Source:
     if not isinstance(job.source, FileRef):
         return job.source
-    if not job.source_path:
-        raise ApiError("File job has no sourcePath")
     path = directory / Path(job.source.file_name).name
-    path.write_bytes(api.source(job.source_path))
+    path.write_bytes(api.source(job))
     return FileSource(path, job.source.content_type)
 
 
-def _upload_book(api: Api, job: str, book: Path) -> None:
+def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     if book.stat().st_size > MAX_UPLOAD_BYTES:
         smaller = book.with_name("book-upload.m4b")
         if not audio.shrink_book(book, smaller, MAX_UPLOAD_BYTES):
-            log(f"{job}: book file is too long to fit {MAX_UPLOAD_BYTES} bytes; chapters only")
+            log(f"{job.episode_id}: book file is too long to fit {MAX_UPLOAD_BYTES} bytes; chapters only")
             return
         book = smaller
     api.put_book(job, book)
@@ -136,20 +134,20 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     workdir.mkdir(parents=True, exist_ok=True)
     log(f"{episode}: claimed, skipping chapters {sorted(job.completed_chapters)}")
     try:
-        with Heartbeat(api, episode) as heartbeat:
+        with Heartbeat(api, job) as heartbeat:
             with tempfile.TemporaryDirectory() as tmp:
                 document = extract(_source(api, job, Path(tmp)))
             voice = job.voice or default_voice(document.language)
             heartbeat.update(stage="extracting", done=1, total=1, title=document.title, author=document.author,
                              language=document.language, voice=str(voice))
             if document.cover:
-                api.put_cover(episode, audio.write_cover(document.cover, workdir))
-            book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, episode, heartbeat),
+                api.put_cover(job, audio.write_cover(document.cover, workdir))
+            book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, job, heartbeat),
                            skip=job.completed_chapters)
             heartbeat.update(stage="uploading", done=0, total=1)
-            _upload_book(api, episode, book.path)
+            _upload_book(api, job, book.path)
             heartbeat.update(stage="uploading", done=1, total=1)
-            api.complete(episode, book.duration_ms)
+            api.complete(job, book.duration_ms)
         log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
             f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)
@@ -161,7 +159,7 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
         reason = str(error) if isinstance(error, ValueError) else f"{type(error).__name__}: {error}"
         log(f"{episode}: failed: {reason}")
         try:
-            api.fail(episode, reason)
+            api.fail(job, reason)
         except (LeaseLost, ApiError) as fail_error:
             log(f"{episode}: could not report failure: {fail_error}")
     return None
