@@ -17,5 +17,5 @@ export const ASSETS = {
 
 export const OBSERVABILITY = { enabled: true, traces: { enabled: true } } as const
 
-/** `src/http.ts` imports `./cover.png`. Upload it as a binary module. */
-export const MODULE_RULES = [{ type: "Data", globs: ["**/*.png"] }] as const
+/** `src/http.ts` imports `./cover.jpg`. Upload it as a binary module. */
+export const MODULE_RULES = [{ type: "Data", globs: ["**/*.png", "**/*.jpg"] }] as const

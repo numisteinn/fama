@@ -432,7 +432,8 @@ private enum Artwork {
       let letter = String(title.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
       let attributes: [NSAttributedString.Key: Any] = [
         .font: UIFont.systemFont(ofSize: 300, weight: .bold),
-        .foregroundColor: UIColor(red: 0.85, green: 1.0, blue: 0.35, alpha: 1),
+        // Brand peach #EABB9F.
+        .foregroundColor: UIColor(red: 0.918, green: 0.733, blue: 0.624, alpha: 1),
       ]
       let text = NSAttributedString(string: letter.isEmpty ? "F" : letter, attributes: attributes)
       let bounds = text.size()

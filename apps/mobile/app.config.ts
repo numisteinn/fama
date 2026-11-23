@@ -39,6 +39,8 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-router",
+    // Expo SDK 58's prebuilt Release frameworks need iOS 17. The prebuild default is 16.4.
+    ["expo-build-properties", { ios: { deploymentTarget: "17.0" } }],
     ["expo-font", { ios: { fonts: dmSans } }],
     "expo-secure-store",
     "./plugins/withShareExtensionDisplayName.cjs",

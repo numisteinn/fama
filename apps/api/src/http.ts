@@ -17,7 +17,7 @@ import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { AccountRepo } from "./account-repo.ts"
 import { clientUser, feedUser, requireWorker, type User } from "./auth.ts"
-import cover from "./cover.png"
+import cover from "./cover.jpg"
 import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
@@ -399,7 +399,7 @@ const publicRoutes = HttpRouter.addAll([
           title: "Fama",
           author: "Fama",
           link: origin,
-          imageUrl: `${origin}/feed/${feedToken}/cover.png`,
+          imageUrl: `${origin}/feed/${feedToken}/cover.jpg`,
           items,
         })
         return HttpServerResponse.text(xml, { contentType: "application/rss+xml; charset=utf-8" })
@@ -408,9 +408,12 @@ const publicRoutes = HttpRouter.addAll([
   ),
   HttpRouter.route(
     "GET",
-    "/feed/:token/cover.png",
+    "/feed/:token/cover.jpg",
     handle(
-      Effect.as(feedUser, HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/png" })),
+      Effect.as(
+        feedUser,
+        HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/jpeg" }),
+      ),
     ),
   ),
   ...(["GET", "HEAD"] as const).map((method) =>

@@ -184,8 +184,8 @@ try {
     "feed item has absolute enclosure, length, duration and guid",
   )
   check((await fetch(`${base}/feed/wrong/rss.xml`)).status === 401, "wrong feed token -> 401")
-  const coverImage = await fetch(`${base}/feed/${feedToken}/cover.png`)
-  check(coverImage.status === 200 && coverImage.headers.get("content-type") === "image/png", "channel image is served")
+  const coverImage = await fetch(`${base}/feed/${feedToken}/cover.jpg`)
+  check(coverImage.status === 200 && coverImage.headers.get("content-type") === "image/jpeg", "channel image is served")
 
   // Media with Range.
   const bookUrl = base + ready.bookUrl
