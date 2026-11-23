@@ -3,7 +3,7 @@ import { Option } from "effect"
 import type { Html, HtmlBuilder } from "foldkit/html"
 import { formatClock, formatRate } from "~/lib/format"
 import { Message } from "~/message"
-import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current } from "~/model"
+import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current, isPlayPending } from "~/model"
 import { chapterStartMs, SCRUB_STEP_MS, scrubMaxMs, totalMs } from "~/timeline"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass } from "~/view/button"
@@ -43,7 +43,7 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
           ),
           h.div(
             [h.Class("contents sm:flex sm:flex-col sm:items-center sm:gap-1")],
-            [transport(playback, h), scrubber(model, playback, episode, h)],
+            [transport(playback, isPlayPending(model, episode.id), h), scrubber(model, playback, episode, h)],
           ),
           h.div(
             [h.Class("col-span-2 grid grid-cols-[1fr_auto_1fr] items-center gap-1 sm:col-span-1 sm:flex sm:justify-end")],
@@ -94,17 +94,18 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
   )
 }
 
-const transport = (playback: LoadedPlayback, h: HtmlBuilder<Message>): Html =>
+const transport = (playback: LoadedPlayback, isPending: boolean, h: HtmlBuilder<Message>): Html =>
   h.div(
     [h.Class("col-start-2 row-start-1 flex items-center gap-1 sm:col-auto sm:row-auto")],
     [
-      h.div([h.Class("hidden items-center gap-1 sm:flex")], skipButtons(h, [playButton(playback, h)])),
-      h.div([h.Class("sm:hidden")], [playButton(playback, h)]),
+      h.div([h.Class("hidden items-center gap-1 sm:flex")], skipButtons(h, [playButton(playback, isPending, h)])),
+      h.div([h.Class("sm:hidden")], [playButton(playback, isPending, h)]),
       h.span([h.Class("sr-only"), h.AriaLive("polite")], [playback.isWaiting ? "Waiting for the next chapter" : ""]),
     ],
   )
 
-const playButton = (playback: LoadedPlayback, h: HtmlBuilder<Message>): Html =>
+/** The spinner shows a Play that waits: for the next chapter, or for the library (`isPending`). */
+const playButton = (playback: LoadedPlayback, isPending: boolean, h: HtmlBuilder<Message>): Html =>
   h.button(
     [
       h.Type("button"),
@@ -113,7 +114,7 @@ const playButton = (playback: LoadedPlayback, h: HtmlBuilder<Message>): Html =>
       h.Class(buttonClass({ variant: "primary", size: "icon-lg" })),
     ],
     [
-      playback.isWaiting
+      playback.isWaiting || isPending
         ? Icon.loaderCircle("animate-spin")
         : playback.isPlaying
           ? Icon.pause("fill-current")

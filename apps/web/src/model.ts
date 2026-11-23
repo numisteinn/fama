@@ -58,6 +58,13 @@ export const StoredProgress = defineTaggedUnion({
 })
 export type StoredProgress = typeof StoredProgress.Type
 
+/**
+ * A Play pressed while library requests were in flight. It starts when `awaiting` more of them have answered, so
+ * it plays from the newer of this device's and the server's progress, and not from a position another device left.
+ */
+export const PendingPlay = Schema.Struct({ episodeId: EpisodeId, awaiting: Schema.Number })
+export type PendingPlay = typeof PendingPlay.Type
+
 /** The private podcast feed URL in Settings. */
 export const Feed = defineTaggedUnion({
   Loading: {},
@@ -93,6 +100,8 @@ export const Model = Schema.Struct({
    * responses carry the generation they were fetched for; a response from an older one is dropped.
    */
   connectionGeneration: Schema.Number,
+  /** Library requests sent and not answered yet. */
+  libraryRequestsInFlight: Schema.Number,
   /** `None` until the first load finishes. */
   maybeEpisodes: Schema.Option(Schema.Array(Episode)),
   maybeLibraryFailure: Schema.Option(ApiFailure),
@@ -132,6 +141,8 @@ export const Model = Schema.Struct({
    * its result plays only if no later action came, so it is still the latest intent.
    */
   playIntents: Schema.Number,
+  /** `Some` while a Play waits for the library. The next playback action of the user replaces it. */
+  maybePendingPlay: Schema.Option(PendingPlay),
   rate: Schema.Number,
   /**
    * The device's progress by episode id, as this tab knows it: read from `fama.progress.<id>` at boot, then
@@ -170,6 +181,10 @@ export const current = (model: Model): Option.Option<{ playback: LoadedPlayback;
   const episode = episodes(model).find((item) => item.id === playback.episodeId)
   return episode ? Option.some({ playback, episode }) : Option.none()
 }
+
+/** A Play of `episodeId` waits for the library. */
+export const isPlayPending = (model: Model, episodeId: EpisodeId): boolean =>
+  Option.exists(model.maybePendingPlay, (pending) => pending.episodeId === episodeId)
 
 /** What the add bar will submit. */
 export const Draft = defineTaggedUnion({

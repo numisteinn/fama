@@ -955,6 +955,191 @@ describe("player", () => {
     )
   })
 
+  describe("Play while the library refreshes", () => {
+    const { id } = harbourDays
+    const old = progressAt(10_000, "2026-11-23T10:00:00.000Z")
+    /** The phone played on to 40 s and saved it after this tab last loaded the library. */
+    const phone = progressAt(40_000, "2026-11-23T10:01:00.000Z")
+    const paused = {
+      ...withEpisodes(baseModel({ [id]: old }), [{ ...harbourDays, progress: old }]),
+      playback: Playback.Loaded({
+        episodeId: id,
+        chapter: 0,
+        offsetMs: 10_000,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    /** The tab came back to the foreground: its library request is in flight. */
+    const refreshing = update(paused, Message.BecameVisible()).model
+    const answer = (progress: typeof old) =>
+      Message.SucceededFetchEpisodes({ generation: 0, episodes: [{ ...harbourDays, progress }] })
+    const secondChapter = (offsetMs: number, isAutoplay: boolean) =>
+      LoadChapter({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
+
+    test("Play waits for the answer, starts at the phone's newer position, and saves only from there", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // Nothing plays from the old position, so nothing can be stamped over the phone's entry.
+        Command.expectNone(),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 1 }))
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+        }),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(next.localProgress[id]).toEqual(phone)
+          expect(next.playback).toEqual(
+            Playback.Loaded({
+              episodeId: id,
+              chapter: 1,
+              offsetMs: 40_000 - 26_825,
+              isPlaying: true,
+              isWaiting: false,
+              isEnded: false,
+            }),
+          )
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        saved(45_000),
+      )
+    })
+
+    test("with nothing newer on the server, the Play resumes in place", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(answer(old)),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(ToggleAudio),
+        Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      )
+    })
+
+    test("a failed refresh plays from what the tab knows", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(Message.FailedFetchEpisodes({ generation: 0, failure: { status: 0, message: "Can't reach the server" } })),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(Option.isSome(next.maybeLibraryFailure)).toBe(true)
+        }),
+        Command.expectExact(ToggleAudio),
+        Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      )
+    })
+
+    test("a finished entry from the phone starts the Play at 0", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(answer(progressAt(45_000, phone.updatedAt))),
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
+        }),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.expectExact(LoadChapter),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+    test("a Pause key or a seek takes the waiting Play back: the answer only moves the paused player", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.PressedMediaPause()),
+        Command.expectNone(),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        message(answer(phone)),
+        model((next) => expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)),
+        Command.expectExact(StoreProgress, secondChapter(40_000 - 26_825, false)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.ClickedSkip({ deltaMs: 5_000 })),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(SeekAudio, SaveProgress({ episodeId: id, positionMs: 15_000 })),
+        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        saved(15_000),
+      )
+    })
+
+    test("a second Play does not wait again: a slow refresh never leaves Play dead", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(Message.ClickedPlayPause()),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(ToggleAudio),
+        Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      )
+    })
+
+    test("with two requests in flight, the Play waits for both answers", () => {
+      // A poll went out, then the tab came back: the poll's answer may be older than the phone's save.
+      const polling = update(update(paused, Message.TickedPoll()).model, Message.BecameVisible()).model
+      story(
+        update,
+        given(polling),
+        message(Message.ClickedPlayPause()),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 2 }))),
+        message(answer(old)),
+        Command.expectNone(),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 1 }))),
+        message(answer(phone)),
+        Command.expectExact(StoreProgress, secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+    test("an episode started from its row waits too, and starts at the phone's newer position", () => {
+      const listed = update(withEpisodes(baseModel({ [id]: old }), [{ ...harbourDays, progress: old }]), Message.BecameVisible())
+      story(
+        updateKeepingReads,
+        given(listed.model),
+        message(Message.ClickedPlayEpisode({ episodeId: id })),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(Playback.Stopped())),
+        message(answer(phone)),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), ReadStoredProgress),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        readStorage,
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
+        }),
+        Command.expectExact(LoadChapter),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+  })
+
   test("deleting the loaded episode stops the audio", () => {
     story(
       updateKeepingReads,

@@ -16,8 +16,10 @@ export const progressAt = (positionMs: number, updatedAt = "2026-11-23T10:00:00.
   updatedAt,
 })
 
+/** `model` after the library loaded `episodes`: no library request is in flight. */
 export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Model => ({
   ...model,
+  libraryRequestsInFlight: 0,
   maybeEpisodes: Option.some(episodes),
 })
 

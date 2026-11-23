@@ -48,6 +48,7 @@ import {
   StoredProgress,
   current,
   episodes,
+  isPlayPending,
   isWorking,
   pickerItemText,
   pickerItems,
@@ -70,6 +71,7 @@ export const init = (flags: Flags): UpdateReturn => {
   const model: Model = {
     connection,
     connectionGeneration: 0,
+    libraryRequestsInFlight: 0,
     maybeEpisodes: Option.none(),
     maybeLibraryFailure: Option.none(),
     voices: [],
@@ -92,19 +94,23 @@ export const init = (flags: Flags): UpdateReturn => {
     feedUrlCopies: 0,
     playback: Playback.Stopped(),
     playIntents: 0,
+    maybePendingPlay: Option.none(),
     rate: flags.rate,
     localProgress: flags.localProgress,
     lastSavedAtMs: 0,
     maybeScrubMs: Option.none(),
   }
-  return { model, commands: [fetchEpisodesCommand(model), FetchVoices({ connection }), FocusAddText()] }
+  const library = fetchLibrary(model)
+  return { model: library.model, commands: [library.command, FetchVoices({ connection }), FocusAddText()] }
 }
 
 // CONNECTION
 
-/** The library request for the current connection, tagged with its generation. */
-const fetchEpisodesCommand = (model: Model) =>
-  FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration })
+/** A library request for the current connection, tagged with its generation and counted as in flight. */
+const fetchLibrary = (model: Model): { model: Model; command: ReturnType<typeof FetchEpisodes> } => ({
+  model: modifyFields(model, { libraryRequestsInFlight: (count) => count + 1 }),
+  command: FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration }),
+})
 
 /** A new feed request for the current connection. Results of earlier requests are dropped. */
 const fetchFeed = (model: Model): { model: Model; command: ReturnType<typeof FetchFeed> } => {
@@ -160,10 +166,8 @@ const saveSettings: Step = (model) => {
     (stepModel) => {
       if (!isChanged) return { model: stepModel, commands: [StoreConnection({ connection })] }
       const feed = fetchFeed(changeConnection(stepModel, connection))
-      return {
-        model: feed.model,
-        commands: [StoreConnection({ connection }), fetchEpisodesCommand(feed.model), feed.command],
-      }
+      const library = fetchLibrary(feed.model)
+      return { model: library.model, commands: [StoreConnection({ connection }), library.command, feed.command] }
     },
     closeSettings,
   ])
@@ -177,10 +181,10 @@ const setFeed = (request: number, feed: Feed): Step => (model) =>
 const followStoredConnection = (connection: Connection): Step => (model) => {
   if (isSameConnection(connection, model.connection)) return { model }
   const isFeedShown = model.settingsDialog.isOpen
-  const changed = changeConnection(model, connection)
-  if (!isFeedShown) return { model: changed, commands: [fetchEpisodesCommand(changed)] }
-  const feed = fetchFeed(modifyFields(changed, { feed: () => Feed.Loading() }))
-  return { model: feed.model, commands: [fetchEpisodesCommand(feed.model), feed.command] }
+  const library = fetchLibrary(changeConnection(model, connection))
+  if (!isFeedShown) return { model: library.model, commands: [library.command] }
+  const feed = fetchFeed(modifyFields(library.model, { feed: () => Feed.Loading() }))
+  return { model: feed.model, commands: [library.command, feed.command] }
 }
 
 /**
@@ -204,7 +208,33 @@ const followStoredSettings =
 
 // LIBRARY
 
-const fetchEpisodes: Step = (model) => ({ model, commands: [fetchEpisodesCommand(model)] })
+const fetchEpisodes: Step = (model) => {
+  const library = fetchLibrary(model)
+  return { model: library.model, commands: [library.command] }
+}
+
+/**
+ * A library request answered, with a list or a failure: it is no longer in flight. `maybePlay` is the episode of a
+ * pending Play that waited for this answer as its last one, so it starts now.
+ *
+ * A Play waits for as many answers as requests were in flight when it was pressed. By then each of those requests
+ * answered, or a later and fresher one did.
+ */
+const answerLibrary = (model: Model): { model: Model; maybePlay: Option.Option<EpisodeId> } => {
+  const counted = modifyFields(model, { libraryRequestsInFlight: (count) => Math.max(0, count - 1) })
+  return Option.match(model.maybePendingPlay, {
+    onNone: () => ({ model: counted, maybePlay: Option.none() }),
+    onSome: ({ episodeId, awaiting }) =>
+      awaiting > 1
+        ? {
+            model: modifyFields(counted, {
+              maybePendingPlay: () => Option.some({ episodeId, awaiting: awaiting - 1 }),
+            }),
+            maybePlay: Option.none(),
+          }
+        : { model: modifyFields(counted, { maybePendingPlay: () => Option.none() }), maybePlay: Option.some(episodeId) },
+  })
+}
 
 /** Replaces the episode list, then applies the playback rules that depend on it. */
 const withEpisodes =
@@ -488,9 +518,10 @@ const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Ste
 
 /**
  * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
- * A loaded, paused episode rests there, so the next Play resumes where the other device stopped.
+ * A loaded, paused episode rests there, so the next Play resumes where the other device stopped. With `isPlayDue`,
+ * a Play waited for this entry: the episode plays from there now.
  */
-const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => {
+const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress, isPlayDue = false): Step => (model) => {
   const local = model.localProgress[episodeId]
   if (local && isSameProgress(local, progress)) return { model }
   const playback = model.playback
@@ -501,7 +532,11 @@ const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step =>
       model: modifyFields(stepModel, { localProgress: Record.set(episodeId, progress) }),
       commands: [StoreProgress({ episodeId, progress })],
     }),
-    isLoadedPaused ? restAt(progress.positionMs) : unchanged,
+    !isLoadedPaused
+      ? unchanged
+      : isPlayDue
+        ? withLoaded(({ episode }) => playFrom(episode, progress.positionMs))
+        : restAt(progress.positionMs),
   ])
 }
 
@@ -517,9 +552,10 @@ const takePushAnswer = (episodeId: EpisodeId, sent: EpisodeProgress, stored: Epi
 
 /**
  * After a library load: each local entry newer than the server's is sent, so listening done offline syncs, and
- * each newer server entry is taken. Nothing is stamped.
+ * each newer server entry is taken. Nothing is stamped. `maybePlay` is the episode whose pending Play starts with
+ * this load.
  */
-const syncProgress: Step = (model) =>
+const syncProgress = (maybePlay: Option.Option<EpisodeId>): Step => (model) =>
   Update.combine(
     model,
     episodes(model).map((episode): Step => {
@@ -531,7 +567,9 @@ const syncProgress: Step = (model) =>
           commands: [PushProgress({ connection: stepModel.connection, episodeId: episode.id, progress: local })],
         })
       }
-      return progress === null ? unchanged : adoptProgress(episode.id, progress)
+      return progress === null
+        ? unchanged
+        : adoptProgress(episode.id, progress, Option.exists(maybePlay, (id) => id === episode.id))
     }),
   )
 
@@ -563,20 +601,62 @@ const loadChapter =
     }
   }
 
-/** A playback action of the user. A start still reading storage is no longer the latest intent. */
+/** Plays `episode` from a saved `positionMs`. A played-through position starts from the top. */
+const playFrom = (episode: Episode, positionMs: number): Step => {
+  const target = locate(episode.chapters, isPlayedThrough(episode, positionMs) ? 0 : positionMs)
+  return loadChapter(episode, target.index, target.offsetMs, true)
+}
+
+/**
+ * A playback action of the user. A start still reading storage is no longer the latest intent, and a Play that
+ * waits for the library is off.
+ */
 const intend =
   (step: Step): Step =>
   (model) =>
-    step(modifyFields(model, { playIntents: (count) => count + 1 }))
+    step(modifyFields(model, { playIntents: (count) => count + 1, maybePendingPlay: () => Option.none() }))
+
+/**
+ * A Play of the user. While a library request is in flight, it waits for the answer and does `now` then: the
+ * library may hold a newer position from another device, and a Play from the old one would stamp it over that.
+ * A second Play of the same episode does not wait again, so a slow request never leaves Play dead.
+ */
+const play =
+  (episodeId: EpisodeId, now: Step): Step =>
+  (model) =>
+    model.libraryRequestsInFlight > 0 && !isPlayPending(model, episodeId)
+      ? intend((held) => ({
+          model: modifyFields(held, {
+            maybePendingPlay: () => Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
+          }),
+        }))(model)
+      : intend(now)(model)
+
+/** A Pause while a Play waits for the library: the Play is off. */
+const cancelPlay: Step = (model) => (Option.isSome(model.maybePendingPlay) ? intend(unchanged)(model) : { model })
+
+/** Plays the loaded, paused episode from where it rests. After the end of the episode, that is the top. */
+const resume: Step = withLoaded(({ playback, episode }) =>
+  playback.isPlaying
+    ? unchanged
+    : playback.isEnded
+      ? loadChapter(episode, 0, 0, true)
+      : (model) => ({ model, commands: [ToggleAudio()] }),
+)
 
 const toggle: Step = withLoaded(({ playback, episode }) => {
   if (playback.isWaiting) return intend(setPlayback({ isWaiting: false }))
-  if (playback.isEnded) return intend(loadChapter(episode, 0, 0, true))
-  return intend((model) => ({ model, commands: [ToggleAudio()] }))
+  if (playback.isPlaying) return intend((model) => ({ model, commands: [ToggleAudio()] }))
+  return play(episode.id, resume)
 })
 
 const isLoadedEpisode = (model: Model, episodeId: EpisodeId) =>
   model.playback._tag === "Loaded" && model.playback.episodeId === episodeId
+
+/** Reads the progress storage holds for an episode, to play it from there. The read carries the latest intent. */
+const readThenPlay =
+  (episodeId: EpisodeId): Step =>
+  (model) => ({ model, commands: [ReadStoredProgress({ episodeId, intent: model.playIntents })] })
 
 /**
  * Toggles `episode` when it is already loaded. Otherwise reads its progress from storage first,
@@ -587,11 +667,21 @@ const start =
   (model) => {
     if (isLoadedEpisode(model, episode.id)) return toggle(model)
     if (episode.chapters.length === 0) return { model }
-    return intend((started) => ({
-      model: started,
-      commands: [ReadStoredProgress({ episodeId: episode.id, intent: started.playIntents })],
-    }))(model)
+    return play(episode.id, readThenPlay(episode.id))(model)
   }
+
+/** A pending Play whose wait is over starts, from what the device knows now. */
+const playDue = (maybePlay: Option.Option<EpisodeId>): Step =>
+  Option.match(maybePlay, {
+    onNone: () => unchanged,
+    onSome:
+      (episodeId): Step =>
+      (model) => {
+        if (isLoadedEpisode(model, episodeId)) return resume(model)
+        const isPlayable = episodes(model).some((item) => item.id === episodeId && item.chapters.length > 0)
+        return isPlayable ? readThenPlay(episodeId)(model) : { model }
+      },
+  })
 
 /**
  * Plays an episode from the newer of the progress storage holds and the server's; with neither, from 0. Only
@@ -610,14 +700,12 @@ const playFromSaved =
       Unreadable: () => model.localProgress[episodeId] ?? null,
     })
     const { progress } = mergeProgress(local, episode.progress)
-    const saved = progress?.positionMs ?? 0
-    const target = locate(episode.chapters, isPlayedThrough(episode, saved) ? 0 : saved)
     // Storage is the truth for this device: an entry gone from it (site data cleared) is gone here too.
     const known: Step =
       progress !== null
         ? adoptProgress(episodeId, progress)
         : (stepModel) => ({ model: modifyFields(stepModel, { localProgress: Record.remove(episodeId) }) })
-    return Update.combine(model, [savePosition, known, loadChapter(episode, target.index, target.offsetMs, true)])
+    return Update.combine(model, [savePosition, known, playFrom(episode, progress?.positionMs ?? 0)])
   }
 
 const clampToEpisode = (episode: Episode, ms: number) => Math.min(Math.max(0, ms), totalMs(episode.chapters))
@@ -732,18 +820,25 @@ const isPlaying = (model: Model) => model.playback._tag === "Loaded" && model.pl
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    SucceededFetchEpisodes: ({ generation, episodes: list }) =>
-      isCurrent(model, generation)
-        ? Update.combine(modifyFields(model, { maybeLibraryFailure: () => Option.none() }), [
+    SucceededFetchEpisodes: ({ generation, episodes: list }) => {
+      const answered = answerLibrary(model)
+      return isCurrent(model, generation)
+        ? Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.none() }), [
             withEpisodes(() => list),
-            syncProgress,
+            syncProgress(answered.maybePlay),
+            playDue(answered.maybePlay),
           ])
-        : { model },
+        : playDue(answered.maybePlay)(answered.model)
+    },
     FailedFetchEpisodes: ({ generation, failure }) => {
-      if (!isCurrent(model, generation)) return { model }
+      // A failed request is an answer too: a Play that waited for it starts from what the tab knows.
+      const answered = answerLibrary(model)
+      if (!isCurrent(model, generation)) return playDue(answered.maybePlay)(answered.model)
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
-      const failed = modifyFields(model, { maybeLibraryFailure: () => Option.some(failure) })
-      return failure.status === 401 && !wasUnauthorized ? openSettings(failed) : { model: failed }
+      return Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.some(failure) }), [
+        failure.status === 401 && !wasUnauthorized ? openSettings : unchanged,
+        playDue(answered.maybePlay),
+      ])
     },
     SucceededFetchVoices: ({ voices }) => ({ model: modifyFields(model, { voices: () => voices }) }),
     FailedFetchVoices: () => ({ model }),
@@ -874,7 +969,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       ),
     PressedPlayerShortcut: ({ shortcut: name }) => shortcut(name)(model),
     PressedMediaPlay: () => (isPlaying(model) ? { model } : toggle(model)),
-    PressedMediaPause: () => (isPlaying(model) ? toggle(model) : { model }),
+    PressedMediaPause: () => (isPlaying(model) ? toggle(model) : cancelPlay(model)),
     PressedMediaSkip: ({ deltaMs }) => skip(deltaMs)(model),
     PressedMediaSeekTo: ({ positionMs }) => seek(positionMs)(model),
     PressedMediaPreviousTrack: () =>
