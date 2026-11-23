@@ -48,6 +48,8 @@ export interface Core {
    * it), and its status corrects this, including while a Play waits for the next chapter.
    */
   readonly wantsPlay: boolean
+  /** Ignore earlier native Play statuses until the native player confirms a Pause sent by JS. */
+  readonly awaitingPause: boolean
 
   // Facts
   /** Counts library requests. `inFlight` holds the numbers of those sent and not answered. */
@@ -87,6 +89,7 @@ export const initialCore = (entries: Readonly<Record<string, EpisodeProgress>>):
   move: null,
   held: null,
   wantsPlay: false,
+  awaitingPause: false,
   requests: 0,
   inFlight: [],
   library: [],
@@ -198,12 +201,14 @@ const saveNow = (core: Core, now: string): Outcome => {
 const takeStatus = (core: Core, status: NativeStatus, now: string): Outcome => {
   const ms = positionMs(status)
   const episode = listed(core, status.episodeId)
+  const awaitingPause = core.awaitingPause &&
+    !(status.episodeId === core.told?.episodeId && !status.playing && status.wantsPlay !== true)
   // At the end of a growing queue, only native intent distinguishes a wait from a Pause.
   const wantsPlay =
-    status.episodeId === null
+    core.awaitingPause || status.episodeId === null
       ? false
       : status.playing || (status.ended && (status.wantsPlay ?? core.wantsPlay) && (episode === undefined || isActive(episode.job)))
-  const next = { ...core, status, wantsPlay }
+  const next = { ...core, status, wantsPlay, awaitingPause }
   if (core.landingMs !== null && status.episodeId === core.tracker.episodeId) {
     // `plan` moved the native player. A status that still has the old place is from before the move.
     const isLanded = Math.abs(ms - core.landingMs) < 1_000 || ms !== positionMs(core.status)
@@ -351,7 +356,7 @@ export const plan = (core: Core, now: string): Outcome => {
     return told === null
       ? { core: { ...core, ...done }, effects: [] }
       : {
-          core: { ...core, ...done, told: null, wantsPlay: false, followedAt: null, landingMs: null, shortOfMs: null },
+          core: { ...core, ...done, told: null, wantsPlay: false, awaitingPause: false, followedAt: null, landingMs: null, shortOfMs: null },
           effects: [{ _tag: "Unload" }],
         }
   }
@@ -371,6 +376,7 @@ export const plan = (core: Core, now: string): Outcome => {
         ...done,
         told: { episodeId: episode.id, chapters: episode.chapters.length, expectsMore: isActive(episode.job) },
         wantsPlay: isPlay,
+        awaitingPause: false,
         followedAt: entry?.updatedAt ?? null,
         landingMs: null,
         shortOfMs: entry !== null && entry.positionMs > lengthMs(episode) ? entry.positionMs : null,
@@ -428,6 +434,7 @@ export const plan = (core: Core, now: string): Outcome => {
       ...done,
       told: nextTold,
       wantsPlay,
+      awaitingPause: core.ask === null ? core.awaitingPause : core.ask === "Pause",
       followedAt: hasNews ? entry.updatedAt : core.followedAt,
       landingMs,
       shortOfMs,

@@ -431,6 +431,21 @@ describe("the native calls of one event, in order", () => {
     expect(device.calls).toEqual(["Load e1, 2 chapters, at 40000, paused"])
   })
 
+  test("a status sent before an in-app Pause cannot restart a waiting player", () => {
+    const device = paused(running)
+    device.send({ _tag: "Toggle" })
+    const waiting = { position: 26.825, ended: true, wantsPlay: true }
+    device.status(waiting, "2026-11-23T10:30:00.000Z")
+    device.calls.length = 0
+    device.send({ _tag: "Toggle" })
+    device.status(waiting)
+    expect(isWaitingForChapter(device.core)).toBe(false)
+    device.library([{ ...grown, progress: newer }])
+    expect(device.calls).toEqual(["Pause", "Load e1, 2 chapters, at 40000, paused"])
+    device.status({ ...waiting, wantsPlay: false })
+    expect(device.core.awaitingPause).toBe(false)
+  })
+
   test("an entry past the end of the listed audio: the player rests short of it, and moves on when the list has it", () => {
     // The other device is in chapter 2. This phone took the entry with a list from before chapter 2.
     const device = phone({ e1: older })
