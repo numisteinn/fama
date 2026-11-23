@@ -371,10 +371,17 @@ describe("the native calls of one event, in order", () => {
     expect(device.core.entries.e1).toEqual(newer)
   })
 
-  test("a paused player that takes a finished entry of a Ready job rests at 0", () => {
+  test("a paused player that takes a finished entry rests at its end, and the next Play starts at 0", () => {
     const device = paused()
     device.library([{ ...ready, progress: at(46_525, newer.updatedAt) }])
-    expect(device.calls).toEqual(["Seek 0"])
+    expect(device.calls).toEqual(["Seek 46525"])
+    // The native player parks just before the end. That is not the listener's place: nothing is stamped.
+    device.status({ position: 46.275 })
+    device.send({ _tag: "Background" })
+    expect(device.sent).toEqual([])
+    device.calls.length = 0
+    device.send({ _tag: "Toggle" })
+    expect(device.calls).toEqual(["Seek 0", "Play"])
   })
 
   test("a newer entry does not move audio that plays", () => {

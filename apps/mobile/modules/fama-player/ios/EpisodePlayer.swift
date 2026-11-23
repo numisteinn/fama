@@ -251,10 +251,17 @@ final class EpisodePlayer: NSObject {
         DispatchQueue.main.async {
           guard let self else { return }
           self.watchItemStatus(player.currentItem)
+          self.endIfOver()
           self.publish()
         }
       },
     ]
+  }
+
+  /// The queue ran out and the job makes no more chapters: that was the end of the episode, so no Play is on.
+  /// A seek back from the end then rests there, and does not play by itself.
+  private func endIfOver() {
+    if wantsPlay && isAtEnd && !expectsMore { wantsPlay = false }
   }
 
   private func watchItemStatus(_ item: AVPlayerItem?) {
@@ -319,7 +326,7 @@ final class EpisodePlayer: NSObject {
       "index": currentIndex,
       "position": position,
       "duration": totalDuration,
-      // At the end wantsPlay stays set, so chapters that arrive later resume.
+      // At the end of a job that still makes chapters wantsPlay stays set, so chapters that arrive later resume.
       "playing": wantsPlay && !isAtEnd,
       // An empty queue also reports waiting. That is the end, not buffering.
       "buffering": wantsPlay && !isAtEnd && player.timeControlStatus == .waitingToPlayAtSpecifiedRate,

@@ -150,9 +150,16 @@ describe("restMs", () => {
   } as unknown as Pick<Episode, "chapters" | "job">
   const end = at(26_825, newer.updatedAt)
 
-  test("a finished entry of a Ready job rests at 0: a Ready job does not change", () => {
-    expect(restMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(0)
+  test("a paused player rests at the newer of the device's and the server's entry", () => {
     expect(restMs(older, { ...ready, progress: newer })).toBe(40_000)
+    expect(restMs(newer, { ...ready, progress: older })).toBe(40_000)
+    expect(restMs(null, { ...ready, progress: null })).toBe(0)
+  })
+
+  test("a finished entry rests at the end: the Play decides, on the list it has then", () => {
+    // Resting decides nothing. A later list can have another job state, so the Play starts by `startMs` then.
+    expect(restMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(46_525)
+    expect(startMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(0)
   })
 
   test("the end of the audio of a job that can still get chapters rests there, so a later Play is not at 0", () => {

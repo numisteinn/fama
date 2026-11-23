@@ -97,10 +97,10 @@ export function startMs(local: EpisodeProgress | null, episode: Positioned): num
 
 /**
  * Where a paused player rests when it loads or moves with no Play: the restore after launch, and a newer server
- * entry. No Play acts here, so a decision made now must stay right until one does. A Ready job does not change, so
- * its finished position rests at 0, where the next Play starts. Every other job can still get chapters (a failed
- * one after a retry): the player rests at the saved position, and the Play decides, on the list it has then.
+ * entry. It is the saved position, also when that is the end of the episode. No Play acts here, so nothing is
+ * decided here: the chapters and the job can differ in a later list. The Play decides, by `playStart`, on the list
+ * it has then (`plan` in `core.ts`).
  */
 export function restMs(local: EpisodeProgress | null, episode: Positioned): number {
-  return episode.job._tag === "Ready" ? startMs(local, episode) : savedMs(local, episode)
+  return savedMs(local, episode)
 }

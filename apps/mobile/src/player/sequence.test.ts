@@ -55,7 +55,8 @@ const episodeOf = (listing: Listing): Episode =>
 
 /**
  * The native player, as `EpisodePlayer.swift` has it: the queue, `wantsPlay`, `expectsMore` and `playAsked`. Keep
- * the two in step: `load`, `updateTracks`, `play`, `pause` and `seek` here say what the Swift methods do.
+ * the two in step: `load`, `updateTracks`, `play`, `pause`, `seek` and the end of the queue in `listen` here say
+ * what the Swift methods and `endIfOver` do.
  */
 class Native {
   episodeId: string | null = null
@@ -160,6 +161,8 @@ class Native {
     if (!this.isAudible || this.item === null) return
     if (this.offsetMs + ms < this.tracks[this.item]!) this.offsetMs += ms
     else this.rebuild(this.item + 1, 0)
+    // `endIfOver`: the queue ran out and the job makes no more chapters.
+    if (this.isAtEnd && !this.expectsMore) this.wantsPlay = false
   }
   status(): NativeStatus {
     return {
