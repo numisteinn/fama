@@ -817,7 +817,8 @@ const stopPlayback: Step = (model) => {
  * - audio that plays what they asked for leads: a newer entry of another device does not move it;
  * - a player whose audio does not play (paused, held for the library, waiting for a chapter) moves to a device
  *   entry it does not follow yet. That is each newer entry of the server or of storage. So listening never goes
- *   on, and nothing is stamped, from a place another device moved on from;
+ *   on, and nothing is stamped, from a place another device moved on from. An entry past the end of the listed
+ *   audio is followed only when a later list has that audio;
  * - else they are where the audio rests.
  *
  * What the audio does there, by `playStart` of the contract on the chapters and the job the library lists now:
@@ -859,7 +860,10 @@ const reconcile: Step = (model) => {
   const positionMs = Option.getOrElse(maybeSeekMs, () =>
     heardMs === undefined ? (heldMs(model, episode.id) ?? 0) : isMovedToEntry && entry ? entry.positionMs : heardMs,
   )
-  const maybeFollowedAt = isStamping ? listening.maybeFollowedAt : Option.fromNullishOr(entry?.updatedAt)
+  // An entry past the end of the listed audio cannot be reached yet: the audio rests at that end, and the player
+  // keeps moving to the entry as the list grows. Listening and a seek are the listener's own place: they follow.
+  const isReached = isOn || isSeek || entry === undefined || entry.positionMs <= lengthMs
+  const maybeFollowedAt = isStamping || !isReached ? listening.maybeFollowedAt : Option.fromNullishOr(entry?.updatedAt)
 
   // What the audio does there.
   const start = playStart(positionMs, chapters, job)

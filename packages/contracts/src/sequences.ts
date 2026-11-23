@@ -150,17 +150,21 @@ const EPOCH = Date.parse("2026-11-23T10:00:00.000Z")
 /** The stamp of the model's clock. Every step moves the clock, so two stamps never tie. */
 export const stampAt = (clock: number): string => new Date(EPOCH + clock).toISOString()
 
-/** A world before any step: the device has the server's list. */
-export const startWorld = (device: Device, server: Listing): World => ({
+/**
+ * A world before any step. The device has `listed`: the server's list, or an earlier one. With an earlier list, its
+ * entry can be ahead of its audio: the other device has chapters this one does not list yet.
+ */
+export const startWorld = (device: Device, server: Listing, listed: Listing = server): World => ({
   clock: 0,
   server,
   outstanding: [],
   requests: 0,
-  listed: server,
+  listed,
   device,
   audio: device.audio,
-  known: server.progress,
-  owed: null,
+  known: listed.progress,
+  // The device took the entry of its list while no audio played: its listening starts there.
+  owed: listed.progress === null ? null : { entry: listed.progress, startMs: null },
   wantsPlay: false,
   hold: null,
   isOn: false,
@@ -247,6 +251,11 @@ export const apply = (world: World, step: Step): { readonly world: World; readon
     if (entry === null || (known !== null && !isNewerProgress(entry, known))) return
     known = entry
     if (!isPlaying) owed = { entry, startMs: null }
+    else if (owed !== null) {
+      // Audio that plays may go on where it is, or move to the still newer entry: both follow the newest entry.
+      const startMs = playStart(entry.positionMs, chaptersOf(listed), jobOf(listed)).positionMs
+      owed = { ...owed, startMs: Math.min(owed.startMs ?? owed.entry.positionMs, startMs) }
+    }
   }
   const context: Context = {
     now: stampAt(clock),

@@ -306,6 +306,18 @@ const seed = (server: Omit<Listing, "progress">, prefix: ReadonlyArray<Step>): W
   return started.world
 }
 
+/**
+ * The other device is at 40 s, in chapter 2. The tab took that entry with a list from before chapter 2: its audio
+ * rests at the end of chapter 1.
+ */
+const seedAhead = (prefix: ReadonlyArray<Step>): World => {
+  const ahead = { positionMs: 40_000, updatedAt: stampAt(-30_000) }
+  const listed: Listing = { chapters: 1, job: "Running", progress: ahead }
+  const started = run(startWorld(new Tab({ listing: listed, local: old }), { ...listed, chapters: 2 }, listed), prefix)
+  if (started.broken.length > 0) throw new Error(`The seed breaks an invariant: ${started.broken.join("; ")}`)
+  return started.world
+}
+
 const SEEDS: ReadonlyArray<readonly [string, () => World]> = [
   ["ready, in the library", () => seed({ chapters: 2, job: "Ready" }, [])],
   ["ready, paused at 10 s", () => seed({ chapters: 2, job: "Ready" }, [steps.play, steps.pause])],
@@ -316,6 +328,7 @@ const SEEDS: ReadonlyArray<readonly [string, () => World]> = [
     () => seed({ chapters: 1, job: "Running" }, [steps.play, steps.listen, steps.listen, steps.listen, steps.listen]),
   ],
   ["encoding, playing at 10 s", () => seed({ chapters: 2, job: "Running" }, [steps.play])],
+  ["growing, the entry is ahead of the list", () => seedAhead([steps.play, steps.pause])],
 ]
 
 /** Steps after each seed. `FAMA_SEQUENCE_DEPTH=7` walks about ten times as many sequences. */
