@@ -17,7 +17,7 @@ xcrun simctl install <simulator-udid> ios/build/Build/Products/Debug-iphonesimul
 pnpm start                 # Metro for the dev client
 ```
 
-In the app, open Settings and enter `http://localhost:8787` and the `FAMA_API_TOKEN` from `apps/api/.dev.vars` (`dev-api-token` by default). On a phone, use the Mac's LAN address instead, for example `http://192.168.0.5:8787`.
+In the app, open Settings and enter `http://localhost:8787` and the dev client token `dev-api-token` (`pnpm dev` seeds it). On a phone, use the Mac's LAN address instead, for example `http://192.168.0.5:8787`.
 
 `pnpm typecheck` runs `tsc`.
 
@@ -56,6 +56,6 @@ The activation rule accepts links, plain text, PDF and EPUB only. `plugins/withS
 ## Layout
 
 - `src/app`: routes. `(tabs)` holds Library, Add and Settings, each in a native stack with a large title.
-- `src/lib`: API client (decodes with `@fama/contracts`), settings (server URL and token in `expo-secure-store`), library provider (polls every 3 s while a job is Queued or Running, caches the last list for offline), downloads (`expo-file-system`, `Documents/episodes/<id>/<index>.m4a`).
+- `src/lib`: API client (decodes with `@fama/contracts`), settings (server URL and token in `expo-secure-store`), library provider (polls every 3 s while a job is Queued or Running, caches the last list of each account for offline), downloads (`expo-file-system`, `Documents/accounts/<account>/episodes/<id>/<index>.m4a`). An account is a server plus the user from `GET /api/me`, so two accounts on one server never share a cache or a download.
 - `src/player`: native binding, store, sync with the library.
 - `src/components`: rows, mini player, scrubber, artwork, pickers.

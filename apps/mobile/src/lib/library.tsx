@@ -11,7 +11,7 @@ const POLL_MS = 3_000
 
 type Library = {
   readonly episodes: ReadonlyArray<Episode>
-  /** True after the first list arrived for the current server. */
+  /** True after the first list arrived for the current account. */
   readonly loaded: boolean
   readonly refreshing: boolean
   readonly error: string | null
@@ -24,15 +24,15 @@ type Library = {
 
 const LibraryContext = createContext<Library | null>(null)
 
-// The last list per server, so downloaded episodes stay playable offline.
-const cacheFile = jsonFile<{ serverUrl: string; episodes: unknown } | null>("library.json", null)
+// The last list of each account (server and user), so downloaded episodes stay playable offline and two accounts
+// on one server never see each other's episodes.
+const cacheFile = jsonFile<Record<string, unknown>>("libraries.json", {})
 const decodeList = Schema.decodeUnknownSync(EpisodeList)
 
-function cachedEpisodes(serverUrl: string | undefined): ReadonlyArray<Episode> {
-  const cache = cacheFile.read()
-  if (!cache || cache.serverUrl !== serverUrl) return []
+function cachedEpisodes(accountKey: string | undefined): ReadonlyArray<Episode> {
+  if (accountKey === undefined) return []
   try {
-    return decodeList({ episodes: cache.episodes }).episodes
+    return decodeList({ episodes: cacheFile.read()[accountKey] }).episodes
   } catch {
     return []
   }
@@ -41,36 +41,42 @@ function cachedEpisodes(serverUrl: string | undefined): ReadonlyArray<Episode> {
 const message = (error: unknown) => (error instanceof ApiError ? error.message : "Something went wrong.")
 
 export function LibraryProvider({ children }: { children: ReactNode }) {
-  const { api } = useSettings()
+  const { api, account } = useSettings()
+  const accountKey = account?.key
   const [episodes, setEpisodes] = useState<ReadonlyArray<Episode>>([])
   const [loaded, setLoaded] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const apiRef = useRef(api)
-  apiRef.current = api
+  // The library loads only once the account is known, so a list is never cached under the wrong user.
+  const sessionRef = useRef({ api, accountKey })
+  sessionRef.current = { api, accountKey }
 
   const load = useCallback(async () => {
-    const current = apiRef.current
-    if (!current) return
+    const current = sessionRef.current
+    if (!current.api || current.accountKey === undefined) return
+    const isCurrent = () => sessionRef.current.api === current.api && sessionRef.current.accountKey === current.accountKey
     try {
-      const list = await current.listEpisodes()
-      if (apiRef.current !== current) return
+      const list = await current.api.listEpisodes()
+      if (!isCurrent()) return
       setEpisodes(list)
       setLoaded(true)
       setError(null)
-      cacheFile.write({ serverUrl: current.mediaUrl(""), episodes: Schema.encodeSync(EpisodeList)({ episodes: list }).episodes })
+      cacheFile.write({
+        ...cacheFile.read(),
+        [current.accountKey]: Schema.encodeSync(EpisodeList)({ episodes: list }).episodes,
+      })
     } catch (cause) {
-      if (apiRef.current === current) setError(message(cause))
+      if (isCurrent()) setError(message(cause))
     }
   }, [])
 
-  // A new server or token starts a fresh library.
+  // A new server, token or user starts a fresh library.
   useEffect(() => {
-    setEpisodes(cachedEpisodes(api?.mediaUrl("")))
+    setEpisodes(cachedEpisodes(accountKey))
     setLoaded(false)
     setError(null)
     void load()
-  }, [api, load])
+  }, [api, accountKey, load])
 
   // Poll while any job is queued or running and the app is in front.
   const working = episodes.some((episode) => isActive(episode.job))
@@ -102,8 +108,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<Library>(() => {
     const requireApi = () => {
-      if (!apiRef.current) throw new ApiError("Set your server in Settings first.", null)
-      return apiRef.current
+      if (!sessionRef.current.api) throw new ApiError("Set your server in Settings first.", null)
+      return sessionRef.current.api
     }
     const prepend = (episode: Episode) => setEpisodes((list) => [episode, ...list.filter((e) => e.id !== episode.id)])
     return {

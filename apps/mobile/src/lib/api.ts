@@ -3,6 +3,7 @@ import {
   Episode,
   EpisodeList,
   FeedInfo,
+  Me,
   VoiceList,
   type SourceInput,
   type Voice,
@@ -83,6 +84,7 @@ export function createApi(connection: Connection) {
 
   return {
     mediaUrl: (path: string) => `${base}${path}`,
+    me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
     createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> =>
       json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed }))),
