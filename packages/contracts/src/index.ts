@@ -95,6 +95,8 @@ export const isFinished = (positionMs: number, totalMs: number): boolean =>
  * Where a Play starts: the one rule the clients share. `positionMs` is the saved position, or where a loaded player
  * rests. `chapters` and `job` are the episode as the library lists it when the Play acts, never an earlier list:
  * a client keeps no "ended" state of its own from a list it had before.
+ * A paused player retains the saved position; only Play applies this rule. If audio ends before a newer saved
+ * entry, retain that entry without stamping the shorter waiting position until its chapters arrive.
  *
  * - The job ended (Ready or Failed), so no more audio comes, and the position is finished (`isFinished`): the Play
  *   starts at 0.

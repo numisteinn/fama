@@ -75,6 +75,8 @@ Clients keep `{ positionMs, updatedAt }` per episode on the device and use `merg
   - The job still works (`Queued` or `Running`) and the position is the end of the chapters made so far: the Play waits for the next chapter. When a later list has that chapter, the same position is its start, and the Play goes on there. It never starts at 0.
   - Otherwise the Play starts at the position.
 - A Play pressed while library loads are out waits for them, so it does not start from a position another device moved on from. `awaitedAfter` in the contract is the rule: the Play starts on the list of the newest load that was out at the press, or of a later load, or when each of those loads has answered. A later load that fails starts nothing.
+- A paused, held or waiting player takes newer server progress before it decides to resume. This adoption keeps the server stamp. If that position is past the available chapters, keep the entry until the audio reaches it; do not stamp the shorter waiting position.
+- A paused player rests at the saved position, including the end. Only Play applies `playStart`. A Pause cancels a wait for more chapters. A phone applies the newest chapter list and job before it releases Play.
 
 ## Worker endpoints
 
