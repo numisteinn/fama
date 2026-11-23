@@ -65,6 +65,8 @@ Additional real-app recipes:
 - Repeat **Web, Play during a library load**, but give the other device the same position with a newer stamp. After the answer, the clock must move and keep moving. No second command may pause it.
 - For a growing job, hold the worker after chapter 1. Play to the end. Check the spinner, then Pause, then Play. Upload chapter 2. The clock must continue at chapter 2, not 0. Finish the job. After the episode ends, Play must start at 0.
 - Repeat with a one-chapter job. Pause at the waiting end, then Play, then make the job Ready without adding a chapter. The pending Play must start at 0 and the clock must move.
+- For a job with one available chapter, save a position past that chapter through the API. Play the Episode on the web, then play a different Episode while the first waits. Read the first Episode from the API again. Its position and stamp must stay the same.
+- On iPhone, play a chapter to the end while the Job still makes the next one. Pause with a headphone control during the wait. Save a position in the next chapter from the web. When the iPhone gets the new chapter and position, it must stay paused there.
 
 The bounded checks run in `pnpm test`: `apps/web/src/sequence.test.ts` drives the real web update, and `apps/mobile/src/player/sequence.test.ts` drives the pure phone core with a model of the native queue. `FAMA_SEQUENCE_DEPTH` selects a deeper run. These checks do not replace a native build and simulator run.
 

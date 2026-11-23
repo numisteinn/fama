@@ -45,8 +45,7 @@ export interface Core {
   readonly held: { readonly episodeId: string; readonly awaiting: ReadonlyArray<number> } | null
   /**
    * Play was the last ask, as far as the phone knows. The native player holds the truth (the lock screen can pause
-   * it), and its status corrects this. At the end of its queue the status cannot say, so this does: a Play is on
-   * there, and waits for the next chapter.
+   * it), and its status corrects this, including while a Play waits for the next chapter.
    */
   readonly wantsPlay: boolean
 
@@ -199,11 +198,11 @@ const saveNow = (core: Core, now: string): Outcome => {
 const takeStatus = (core: Core, status: NativeStatus, now: string): Outcome => {
   const ms = positionMs(status)
   const episode = listed(core, status.episodeId)
-  // At the end of the queue the status cannot say whether a Play is on. It is over when the job ended.
+  // At the end of a growing queue, only native intent distinguishes a wait from a Pause.
   const wantsPlay =
     status.episodeId === null
       ? false
-      : status.playing || (status.ended && core.wantsPlay && (episode === undefined || isActive(episode.job)))
+      : status.playing || (status.ended && (status.wantsPlay ?? core.wantsPlay) && (episode === undefined || isActive(episode.job)))
   const next = { ...core, status, wantsPlay }
   if (core.landingMs !== null && status.episodeId === core.tracker.episodeId) {
     // `plan` moved the native player. A status that still has the old place is from before the move.

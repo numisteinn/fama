@@ -25,8 +25,10 @@ export type NativeStatus = {
   position: number
   /** Episode seconds, the sum of the known chapters. */
   duration: number
-  /** The listener wants playback. Stays true while buffering. */
+  /** The listener wants playback and the queue has audio. Stays true while buffering. */
   playing: boolean
+  /** Native playback intent, including while the queue is empty. Older dev clients omit it. */
+  wantsPlay?: boolean
   buffering: boolean
   rate: number
   /** Played past the last known chapter. */

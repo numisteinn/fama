@@ -328,6 +328,7 @@ final class EpisodePlayer: NSObject {
       "duration": totalDuration,
       // At the end of a job that still makes chapters wantsPlay stays set, so chapters that arrive later resume.
       "playing": wantsPlay && !isAtEnd,
+      "wantsPlay": wantsPlay,
       // An empty queue also reports waiting. That is the end, not buffering.
       "buffering": wantsPlay && !isAtEnd && player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
       "rate": Double(rate),

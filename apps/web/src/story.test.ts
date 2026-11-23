@@ -1600,6 +1600,29 @@ describe("player", () => {
       )
     })
 
+    test("keeps the phone's position when the listener leaves an episode that waits for its next chapter", () => {
+      const ahead = progressAt(40_000, "2026-11-23T10:02:00.000Z")
+      const otherChapter = { ...harbourDays.chapters[0]!, url: "/media/t/episodes/other/chapters/000.m4a" }
+      const other = { ...harbourDays, id: queuedArticle.id, chapters: [otherChapter] }
+      story(
+        update,
+        given(withEpisodes(baseModel(), [{ ...growing, progress: ahead }, other])),
+        message(Message.ClickedPlayEpisode({ episodeId: id })),
+        Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: id, intent: 1, stored: { _tag: "NotSaved" } })),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: ahead }), chapter(0, 26_825, false)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(Message.ClickedPlayEpisode({ episodeId: other.id })),
+        Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: other.id, intent: 2, stored: { _tag: "NotSaved" } })),
+        Command.expectExact(LoadChapter({ src: otherChapter.url, offsetMs: 0, rate: 1, isAutoplay: true })),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        model((next) => expect(next.localProgress[id]).toEqual(ahead)),
+      )
+    })
+
     test("a Play that waits for a chapter takes a finished entry of a job that is Ready now: it starts at 0:00", () => {
       const waiting = withPlayback(
         withEpisodes(baseModel({ [id]: phone }), [growing]),

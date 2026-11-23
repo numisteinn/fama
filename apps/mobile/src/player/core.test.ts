@@ -418,6 +418,19 @@ describe("the native calls of one event, in order", () => {
     expect(device.calls).toEqual(["Pause", "UpdateTracks 2 chapters, Running"])
   })
 
+  test("a native Pause during a wait keeps the player paused when the next chapter arrives", () => {
+    const device = paused(running)
+    device.send({ _tag: "Toggle" })
+    device.status({ position: 26.825, ended: true, wantsPlay: true }, "2026-11-23T10:30:00.000Z")
+    expect(isWaitingForChapter(device.core)).toBe(true)
+    device.calls.length = 0
+    // The lock screen controls the native player directly, without sending a JS Toggle.
+    device.status({ position: 26.825, ended: true, wantsPlay: false })
+    expect(isWaitingForChapter(device.core)).toBe(false)
+    device.library([{ ...grown, progress: newer }])
+    expect(device.calls).toEqual(["Load e1, 2 chapters, at 40000, paused"])
+  })
+
   test("an entry past the end of the listed audio: the player rests short of it, and moves on when the list has it", () => {
     // The other device is in chapter 2. This phone took the entry with a list from before chapter 2.
     const device = phone({ e1: older })

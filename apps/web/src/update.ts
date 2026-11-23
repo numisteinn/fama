@@ -902,9 +902,11 @@ const reconcile: Step = (model) => {
   // At most one save.
   const isNew = (episodeId: EpisodeId, ms: number) => heldMs(model, episodeId) !== Math.max(0, Math.round(ms))
   const leftEpisode = left ? episodes(model).find((item) => item.id === left.episodeId) : undefined
+  const leftShortOfEntry =
+    left && leftEpisode && !left.isPlaying && (heldMs(model, left.episodeId) ?? 0) > totalMs(leftEpisode.chapters)
   const isPaused = here !== undefined && here.isPlaying && !isPlaying
   const save: { readonly episodeId: EpisodeId; readonly positionMs: number } | undefined =
-    left && leftEpisode
+    left && leftEpisode && !leftShortOfEntry
       ? { episodeId: left.episodeId, positionMs: globalMs(left, leftEpisode) }
       : isSeek
         ? { episodeId: episode.id, positionMs }

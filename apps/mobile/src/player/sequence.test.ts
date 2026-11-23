@@ -171,6 +171,7 @@ class Native {
       position: this.positionMs / 1000,
       duration: this.totalMs / 1000,
       playing: this.wantsPlay && !this.isAtEnd,
+      wantsPlay: this.wantsPlay,
       buffering: false,
       rate: 1,
       ended: this.isAtEnd,
