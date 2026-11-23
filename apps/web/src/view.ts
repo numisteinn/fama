@@ -24,7 +24,13 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
           h.header(
             [h.Class("flex h-14 items-center justify-between")],
             [
-              h.span([h.Class("text-[17px] font-semibold tracking-tight")], ["Fama"]),
+              h.span(
+                [h.Class("flex items-center")],
+                [
+                  h.img([h.Src("/lockup-dark.svg"), h.Alt("Fama"), h.Class("logo-dark h-7 w-auto")]),
+                  h.img([h.Src("/lockup-light.svg"), h.Alt("Fama"), h.Class("logo-light h-7 w-auto")]),
+                ],
+              ),
               h.button(
                 [
                   h.Type("button"),
