@@ -1,4 +1,4 @@
-import { Episode, EpisodeId, type JobState, Voice, VoiceRef } from "@fama/contracts"
+import { Episode, EpisodeId, EpisodeProgress, type JobState, Voice, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Schema } from "effect"
 import { File } from "foldkit"
@@ -16,8 +16,6 @@ export const SPEEDS = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.5] as const
 export const ACCEPT = ".pdf,.epub,.txt,.md,.markdown,.html,.htm"
 export const POLL_MS = 2000
 export const SAVE_EVERY_MS = 5000
-/** Closer than this to the end counts as finished, so the next start is from the top. */
-export const FINISHED_MARGIN_MS = 3000
 export const SKIP_BACK_MS = 15_000
 export const SKIP_FORWARD_MS = 30_000
 export const DISARM_DELETE_MS = 3000
@@ -49,15 +47,16 @@ export const Picker = defineTaggedUnion({
 export type Picker = typeof Picker.Type
 
 /**
- * What storage holds for an episode's position when it starts. `NotSaved` starts at 0, as after the
- * user cleared site data. Only `Unreadable` storage falls back to the position this session saved.
+ * What storage holds for an episode's progress when it starts. `NotSaved` has no local entry, as after the
+ * user cleared site data: the server's progress decides. Only `Unreadable` storage falls back to the entry
+ * this tab knows.
  */
-export const StoredPosition = defineTaggedUnion({
-  Saved: { positionMs: Schema.Number },
+export const StoredProgress = defineTaggedUnion({
+  Saved: { progress: EpisodeProgress },
   NotSaved: {},
   Unreadable: {},
 })
-export type StoredPosition = typeof StoredPosition.Type
+export type StoredProgress = typeof StoredProgress.Type
 
 /** The private podcast feed URL in Settings. */
 export const Feed = defineTaggedUnion({
@@ -135,10 +134,11 @@ export const Model = Schema.Struct({
   playIntents: Schema.Number,
   rate: Schema.Number,
   /**
-   * Position on the whole timeline, by episode id, as this tab saved it to `fama.position.<id>`.
-   * A start reads storage itself; this is the fallback only when storage cannot be read.
+   * The device's progress by episode id, as this tab knows it: read from `fama.progress.<id>` at boot, then
+   * each save of this tab and each server entry it adopted. Library loads merge it with the server's; a start
+   * reads storage itself and falls back to this only when storage cannot be read.
    */
-  savedPositions: Schema.Record(Schema.String, Schema.Number),
+  localProgress: Schema.Record(Schema.String, EpisodeProgress),
   lastSavedAtMs: Schema.Number,
   /** Slider value while the user drags it. */
   maybeScrubMs: Schema.Option(Schema.Number),
@@ -154,7 +154,7 @@ export const Flags = Schema.Struct({
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
   rate: Schema.Number,
-  savedPositions: Schema.Record(Schema.String, Schema.Number),
+  localProgress: Schema.Record(Schema.String, EpisodeProgress),
 })
 export type Flags = typeof Flags.Type
 

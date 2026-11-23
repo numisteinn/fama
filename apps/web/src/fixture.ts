@@ -1,4 +1,4 @@
-import type { Episode, EpisodeId, VoiceRef } from "@fama/contracts"
+import type { Episode, EpisodeId, EpisodeProgress, VoiceRef } from "@fama/contracts"
 import { Option } from "effect"
 import { apiToken } from "~/api"
 import type { Model } from "~/model"
@@ -6,9 +6,15 @@ import { init } from "~/update"
 
 export const connection = { origin: "", token: apiToken("dev-api-token") }
 
-/** A fresh Model, as `init` makes it from empty storage plus a stored token. */
-export const baseModel = (savedPositions: Record<string, number> = {}): Model =>
-  init({ token: connection.token, origin: "", voice: null, speed: 1, rate: 1, savedPositions }).model
+/** A fresh Model, as `init` makes it from empty storage plus a stored token and `localProgress`. */
+export const baseModel = (localProgress: Record<string, EpisodeProgress> = {}): Model =>
+  init({ token: connection.token, origin: "", voice: null, speed: 1, rate: 1, localProgress }).model
+
+/** Progress at `positionMs`, stamped `updatedAt`. */
+export const progressAt = (positionMs: number, updatedAt = "2026-11-23T10:00:00.000Z"): EpisodeProgress => ({
+  positionMs,
+  updatedAt,
+})
 
 export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Model => ({
   ...model,

@@ -1,4 +1,4 @@
-import type { Episode, EpisodeId, VoiceRef } from "@fama/contracts"
+import { type Episode, type EpisodeId, type EpisodeProgress, type VoiceRef, isFinished, mergeProgress } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
@@ -17,11 +17,13 @@ import {
   FocusDeleteConfirm,
   FocusPicker,
   FocusPickerTrigger,
-  ReadSavedPosition,
+  PushProgress,
+  ReadStoredProgress,
   RetryEpisode,
-  SavePosition,
+  SaveProgress,
   ScrollPickerItem,
   StoreConnection,
+  StoreProgress,
   StoreSetting,
   UploadEpisode,
   WaitBeforeDisarmDelete,
@@ -31,7 +33,6 @@ import {
 import { Message, type PlayerShortcut } from "~/message"
 import {
   Draft,
-  FINISHED_MARGIN_MS,
   Feed,
   type Flags,
   type LoadedPlayback,
@@ -44,7 +45,7 @@ import {
   SKIP_BACK_MS,
   SKIP_FORWARD_MS,
   SPEEDS,
-  StoredPosition,
+  StoredProgress,
   current,
   episodes,
   isWorking,
@@ -92,7 +93,7 @@ export const init = (flags: Flags): UpdateReturn => {
     playback: Playback.Stopped(),
     playIntents: 0,
     rate: flags.rate,
-    savedPositions: flags.savedPositions,
+    localProgress: flags.localProgress,
     lastSavedAtMs: 0,
     maybeScrubMs: Option.none(),
   }
@@ -456,13 +457,83 @@ const setPlayback =
     return { model: modifyFields(model, { playback: () => Playback.Loaded({ ...playback, ...fields }) }) }
   }
 
-const savePositionAt = (episodeId: EpisodeId, positionMs: number): Step => (model) => ({
-  model: modifyFields(model, { savedPositions: Record.set(episodeId, positionMs) }),
-  commands: [SavePosition({ episodeId, positionMs })],
-})
+/**
+ * A listener's action left `episodeId` at `positionMs`: stamp, store and send it. A position the device already
+ * holds is not stamped again, so a pause or a hidden page with nothing new sends nothing, and a paused tab does not
+ * overwrite what another device sent since.
+ */
+const savePositionAt = (episodeId: EpisodeId, positionMs: number): Step => (model) =>
+  model.localProgress[episodeId]?.positionMs === Math.max(0, Math.round(positionMs))
+    ? { model }
+    : { model, commands: [SaveProgress({ episodeId, positionMs })] }
 
 /** Saves the position of the loaded episode now. */
 const savePosition: Step = withLoaded(({ playback, episode }) => savePositionAt(episode.id, globalMs(playback, episode)))
+
+const isSameProgress = (a: EpisodeProgress, b: EpisodeProgress) =>
+  a.positionMs === b.positionMs && a.updatedAt === b.updatedAt
+
+/** A save stamped and stored: the tab now knows it, and sends it. */
+const sendSaved = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
+  model: modifyFields(model, { localProgress: Record.set(episodeId, progress) }),
+  commands: [PushProgress({ connection: model.connection, episodeId, progress })],
+})
+
+/** Shows `progress` as the server's on the episode in the list. */
+const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
+  model: modifyFields(model, {
+    maybeEpisodes: Option.map((list) => list.map((item) => (item.id === episodeId ? { ...item, progress } : item))),
+  }),
+})
+
+/**
+ * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
+ * A loaded, paused episode moves there, so the next Play resumes where the other device stopped.
+ */
+const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => {
+  const local = model.localProgress[episodeId]
+  if (local && isSameProgress(local, progress)) return { model }
+  const playback = model.playback
+  const isLoadedPaused =
+    playback._tag === "Loaded" && playback.episodeId === episodeId && !playback.isPlaying && !playback.isWaiting
+  return Update.combine(model, [
+    (stepModel) => ({
+      model: modifyFields(stepModel, { localProgress: Record.set(episodeId, progress) }),
+      commands: [StoreProgress({ episodeId, progress })],
+    }),
+    isLoadedPaused ? moveTo(progress.positionMs) : unchanged,
+  ])
+}
+
+/**
+ * The server answered a push with what it stores. The device takes that answer, a clamped stamp included, unless
+ * the listener saved again since: that newer save goes out with its own push.
+ */
+const takePushAnswer = (episodeId: EpisodeId, sent: EpisodeProgress, stored: EpisodeProgress): Step => (model) => {
+  const local = model.localProgress[episodeId]
+  const isLatest = local !== undefined && isSameProgress(local, sent)
+  return Update.combine(model, [setServerProgress(episodeId, stored), isLatest ? adoptProgress(episodeId, stored) : unchanged])
+}
+
+/**
+ * After a library load: each local entry newer than the server's is sent, so listening done offline syncs, and
+ * each newer server entry is taken. Nothing is stamped.
+ */
+const syncProgress: Step = (model) =>
+  Update.combine(
+    model,
+    episodes(model).map((episode): Step => {
+      const local = model.localProgress[episode.id] ?? null
+      const { progress, isPushed } = mergeProgress(local, episode.progress)
+      if (isPushed && local !== null) {
+        return (stepModel) => ({
+          model: stepModel,
+          commands: [PushProgress({ connection: stepModel.connection, episodeId: episode.id, progress: local })],
+        })
+      }
+      return progress === null ? unchanged : adoptProgress(episode.id, progress)
+    }),
+  )
 
 const loadChapter =
   (episode: Episode, index: number, offsetMs: number, isAutoplay: boolean): Step =>
@@ -501,7 +572,7 @@ const isLoadedEpisode = (model: Model, episodeId: EpisodeId) =>
   model.playback._tag === "Loaded" && model.playback.episodeId === episodeId
 
 /**
- * Toggles `episode` when it is already loaded. Otherwise reads its saved position from storage first,
+ * Toggles `episode` when it is already loaded. Otherwise reads its progress from storage first,
  * as the React app did, so a pause in another tab is where it resumes.
  */
 const start =
@@ -511,56 +582,67 @@ const start =
     if (episode.chapters.length === 0) return { model }
     return intend((started) => ({
       model: started,
-      commands: [ReadSavedPosition({ episodeId: episode.id, intent: started.playIntents })],
+      commands: [ReadStoredProgress({ episodeId: episode.id, intent: started.playIntents })],
     }))(model)
   }
 
 /**
- * Plays an episode from the position storage holds; with none there, from 0. Only when storage cannot
- * be read is the position saved in this session used. A result whose start is no longer the latest
- * playback intent is dropped: a later Pause, Play or seek wins.
+ * Plays an episode from the newer of the progress storage holds and the server's; with neither, from 0. Only
+ * when storage cannot be read is the entry this tab knows used. A finished episode starts from the top. A result
+ * whose start is no longer the latest playback intent is dropped: a later Pause, Play or seek wins.
  */
 const playFromSaved =
-  (episodeId: EpisodeId, intent: number, stored: StoredPosition): Step =>
+  (episodeId: EpisodeId, intent: number, stored: StoredProgress): Step =>
   (model) => {
     if (intent !== model.playIntents) return { model }
     const episode = episodes(model).find((item) => item.id === episodeId)
     if (!episode || episode.chapters.length === 0 || isLoadedEpisode(model, episodeId)) return { model }
-    const saved = StoredPosition.match(stored, {
-      Saved: ({ positionMs }) => positionMs,
-      NotSaved: () => 0,
-      Unreadable: () => model.savedPositions[episodeId] ?? 0,
+    const local = StoredProgress.match(stored, {
+      Saved: ({ progress }) => progress,
+      NotSaved: () => null,
+      Unreadable: () => model.localProgress[episodeId] ?? null,
     })
-    const isFinished = !isWorking(episode.job) && saved >= totalMs(episode.chapters) - FINISHED_MARGIN_MS
-    const target = locate(episode.chapters, isFinished ? 0 : saved)
-    return Update.combine(model, [savePosition, loadChapter(episode, target.index, target.offsetMs, true)])
+    const { progress } = mergeProgress(local, episode.progress)
+    const saved = progress?.positionMs ?? 0
+    const isDone = !isWorking(episode.job) && isFinished(saved, totalMs(episode.chapters))
+    const target = locate(episode.chapters, isDone ? 0 : saved)
+    // Storage is the truth for this device: an entry gone from it (site data cleared) is gone here too.
+    const known: Step =
+      progress !== null
+        ? adoptProgress(episodeId, progress)
+        : (stepModel) => ({ model: modifyFields(stepModel, { localProgress: Record.remove(episodeId) }) })
+    return Update.combine(model, [savePosition, known, loadChapter(episode, target.index, target.offsetMs, true)])
   }
 
+const clampToEpisode = (episode: Episode, ms: number) => Math.min(Math.max(0, ms), totalMs(episode.chapters))
+
 /**
- * Moves to `ms` on the timeline. A paused move to the very end leaves the episode ended, as the
- * audio element is: the next Play then starts from the top, not from the start of the last chapter.
+ * Moves the loaded episode to `ms` on the timeline, without saving. A paused move to the very end leaves the
+ * episode ended, as the audio element is: the next Play then starts from the top, not from the start of the
+ * last chapter.
  */
-const seek = (ms: number): Step =>
+const moveTo = (ms: number): Step =>
   withLoaded(({ playback, episode }) => {
-    const total = totalMs(episode.chapters)
-    const clamped = Math.min(Math.max(0, ms), total)
+    const clamped = clampToEpisode(episode, ms)
     const target = locate(episode.chapters, clamped)
     const isSameChapter = target.index === playback.chapter
     const willPlay = isSameChapter ? playback.isPlaying : playback.isPlaying || playback.isWaiting
-    const isEnded = clamped >= total && !willPlay
-    const move: Step = isSameChapter
+    const isEnded = clamped >= totalMs(episode.chapters) && !willPlay
+    return isSameChapter
       ? (model) => ({
           model: modifyFields(model, {
             playback: () => Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false, isEnded }),
           }),
           commands: [SeekAudio({ offsetMs: target.offsetMs })],
         })
-      : Update.combine([
-          loadChapter(episode, target.index, target.offsetMs, willPlay),
-          setPlayback({ isEnded }),
-        ])
-    return intend(Update.combine([move, savePositionAt(episode.id, clamped)]))
+      : Update.combine([loadChapter(episode, target.index, target.offsetMs, willPlay), setPlayback({ isEnded })])
   })
+
+/** The listener moves to `ms`: the move, saved. */
+const seek = (ms: number): Step =>
+  withLoaded(({ episode }) =>
+    intend(Update.combine([moveTo(ms), savePositionAt(episode.id, clampToEpisode(episode, ms))])),
+  )
 
 const skip = (deltaMs: number): Step =>
   withLoaded(({ playback, episode }) => seek(globalMs(playback, episode) + deltaMs))
@@ -570,8 +652,13 @@ const playChapter = (index: number): Step => withLoaded(({ episode }) => intend(
 const endChapter: Step = withLoaded(({ playback, episode }) => {
   const next = playback.chapter + 1
   if (episode.chapters[next]) return loadChapter(episode, next, 0, true)
+  // The end of the chapters made so far is not the end of the episode: wait, and save nothing new.
   if (isWorking(episode.job)) return setPlayback({ isPlaying: false, isWaiting: true, isEnded: true })
-  return Update.combine([setPlayback({ isPlaying: false, isEnded: true }), savePositionAt(episode.id, 0)])
+  // Finished: the episode's total length is stored, so every device shows it played. The next Play starts at 0.
+  return Update.combine([
+    setPlayback({ isPlaying: false, isEnded: true }),
+    savePositionAt(episode.id, totalMs(episode.chapters)),
+  ])
 })
 
 const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
@@ -623,7 +710,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     SucceededFetchEpisodes: ({ generation, episodes: list }) =>
       isCurrent(model, generation)
-        ? withEpisodes(() => list)(modifyFields(model, { maybeLibraryFailure: () => Option.none() }))
+        ? Update.combine(modifyFields(model, { maybeLibraryFailure: () => Option.none() }), [
+            withEpisodes(() => list),
+            syncProgress,
+          ])
         : { model },
     FailedFetchEpisodes: ({ generation, failure }) => {
       if (!isCurrent(model, generation)) return { model }
@@ -780,6 +870,10 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     CompletedSeekAudio: () => ({ model }),
     CompletedSetAudioRate: () => ({ model }),
     CompletedStopAudio: () => ({ model }),
-    CompletedSavePosition: () => ({ model }),
-    GotSavedPosition: ({ episodeId, intent, stored }) => playFromSaved(episodeId, intent, stored)(model),
+    GotStoredProgress: ({ episodeId, intent, stored }) => playFromSaved(episodeId, intent, stored)(model),
+
+    SavedProgress: ({ episodeId, progress }) => sendSaved(episodeId, progress)(model),
+    SucceededPushProgress: ({ episodeId, sent, stored }) => takePushAnswer(episodeId, sent, stored)(model),
+    FailedPushProgress: () => ({ model }),
+    CompletedStoreProgress: () => ({ model }),
   })

@@ -1,5 +1,5 @@
 import { Effect, Redacted, Schema } from "effect"
-import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http"
 
 /** Bearer token for `/api/*`. Redacted, so DevTools and logs never show it. */
 export const ApiToken = Schema.Redacted(Schema.String, { label: "API token", disallowJsonEncode: true })
@@ -38,21 +38,28 @@ export function messageFor(status: number, body: string): string {
   return body.trim() || `Request failed (${status})`
 }
 
-/** Sends a request to the Fama API. Fails with an `ApiFailure` the user can read. */
+type Method = "GET" | "POST" | "PUT" | "DELETE"
+
+/**
+ * Sends a request to the Fama API. Fails with an `ApiFailure` the user can read. `isKeepalive` lets the request
+ * finish after the page is gone, for the last progress write on `pagehide`.
+ */
 export const send = (
   connection: Connection,
-  method: "GET" | "POST" | "DELETE",
+  method: Method,
   path: string,
   withBody: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest = (request) =>
     request,
+  isKeepalive = false,
 ): Effect.Effect<HttpClientResponse.HttpClientResponse, ApiFailure, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient
     const token = Redacted.value(connection.token)
     const request = withBody(HttpClientRequest.make(method)(connection.origin + path))
-    const response = yield* client
-      .execute(token === "" ? request : HttpClientRequest.bearerToken(request, token))
-      .pipe(Effect.mapError(() => unreachable))
+    const execute = client.execute(token === "" ? request : HttpClientRequest.bearerToken(request, token))
+    const response = yield* (
+      isKeepalive ? Effect.provideService(execute, FetchHttpClient.RequestInit, { keepalive: true }) : execute
+    ).pipe(Effect.mapError(() => unreachable))
     if (response.status >= 200 && response.status < 300) return response
     const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
     return yield* Effect.fail<ApiFailure>({ status: response.status, message: messageFor(response.status, body) })
@@ -62,11 +69,12 @@ export const send = (
 export const sendJson = <S extends Schema.Decoder<unknown>>(
   schema: S,
   connection: Connection,
-  method: "GET" | "POST",
+  method: Method,
   path: string,
   withBody?: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest,
+  isKeepalive = false,
 ): Effect.Effect<S["Type"], ApiFailure, HttpClient.HttpClient> =>
-  send(connection, method, path, withBody).pipe(
+  send(connection, method, path, withBody, isKeepalive).pipe(
     Effect.flatMap((response) =>
       response.json.pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(schema)),

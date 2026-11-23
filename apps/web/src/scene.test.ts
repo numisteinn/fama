@@ -25,16 +25,17 @@ import {
   FocusAddText,
   FocusPicker,
   FocusPickerTrigger,
-  ReadSavedPosition,
-  SavePosition,
+  PushProgress,
+  ReadStoredProgress,
+  SaveProgress,
   ScrollPickerItem,
   StoreSetting,
   StoreConnection,
   WaitBeforeResetTypeAhead,
 } from "~/command"
-import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
+import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes } from "~/fixture"
 import { Message } from "~/message"
-import { Playback, StoredPosition } from "~/model"
+import { Playback, StoredProgress } from "~/model"
 import { apiToken } from "~/api"
 import { update } from "~/update"
 import { OpenFilePickerOnKey } from "~/view/addBar"
@@ -237,10 +238,10 @@ describe("play and pause", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       resolveAttachKeys,
       click(role("button", { name: "Play Harbour Days" })),
-      Command.expectExact(ReadSavedPosition),
+      Command.expectExact(ReadStoredProgress),
       Command.resolve(
-        ReadSavedPosition,
-        Message.GotSavedPosition({ episodeId: harbourDays.id, intent: 1, stored: StoredPosition.NotSaved() }),
+        ReadStoredProgress,
+        Message.GotStoredProgress({ episodeId: harbourDays.id, intent: 1, stored: StoredProgress.NotSaved() }),
       ),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -257,7 +258,9 @@ describe("play and pause", () => {
       Command.expectExact(ToggleAudio),
       Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
       Subscription.emit(Message.PausedAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 0 })),
+      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) })),
+      Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
       expect(role("button", { name: "Play Harbour Days" })).toExist(),
       click(role("button", { name: /^Play$/ })),
       Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
