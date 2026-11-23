@@ -4,7 +4,7 @@ import { isActive } from "../lib/format"
 import { jsonFile } from "../lib/jsonFile"
 import { FamaPlayer, type NativeStatus, type Track } from "./native"
 import { progress } from "./progress"
-import { IDLE_TRACKER, type Moment, type Tracker, makePlayGate, startMs, track } from "./progressRules"
+import { IDLE_TRACKER, type Moment, type Tracker, makePlayGate, restMs, startMs, track } from "./progressRules"
 
 // One native player per app, so its state lives in one module-level store.
 
@@ -27,6 +27,8 @@ const prefsFile = jsonFile<Prefs>("player.json", { rate: 1, lastEpisodeId: null 
 let status: NativeStatus = IDLE
 let prefs = prefsFile.read()
 let loadedChapters = 0
+/** Whether the native player was told that the job still makes chapters. */
+let loadedExpectsMore = false
 let tracker: Tracker = IDLE_TRACKER
 
 const statusListeners = new Set<() => void>()
@@ -64,12 +66,12 @@ function saveNow() {
 }
 
 // A newer server entry for the loaded, paused episode moves the player there, without a save: the move is not the
-// listener's. A finished episode moves to the top, where its next play starts. The episode is the one the library
-// lists now, so a job that just turned Ready counts as finished.
+// listener's. A finished episode of a Ready job moves to the top, where its next play starts (see `restMs`). The
+// episode is the one the library lists now, so a job that just turned Ready counts as finished.
 progress.onAdopt((episodeId, entry) => {
   if (status.episodeId !== episodeId || status.playing) return
   const episode = playGate.listed(episodeId)
-  const targetMs = episode ? startMs(entry, episode) : entry.positionMs
+  const targetMs = episode ? restMs(entry, episode) : entry.positionMs
   tracker = { ...tracker, savedMs: targetMs }
   void FamaPlayer.seek(targetMs / 1000)
 })
@@ -102,7 +104,9 @@ function tracksOf(episode: Episode, source: TrackSource): Track[] {
 }
 
 /**
- * Loads an episode at the newer of the device's and the server's position. A finished episode starts over.
+ * Loads an episode at the newer of the device's and the server's position. With `autoplay` it is a Play, and
+ * `startMs` says where it starts. Without it, the player rests (`restMs`). The native player also learns whether
+ * the job still makes chapters: the end of its queue is then a wait, not the end of the episode.
  * Loading saves nothing for the new episode; only the listener's play and moves do.
  */
 async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean) {
@@ -111,8 +115,10 @@ async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean)
     return
   }
   saveNow()
-  const position = startMs(progress.get(episode.id), episode) / 1000
+  const local = progress.get(episode.id)
+  const position = (autoplay ? startMs(local, episode) : restMs(local, episode)) / 1000
   loadedChapters = episode.chapters.length
+  loadedExpectsMore = isActive(episode.job)
   prefs = { ...prefs, lastEpisodeId: episode.id }
   prefsFile.write(prefs)
   await FamaPlayer.load({
@@ -121,6 +127,7 @@ async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean)
     artist: episode.author,
     artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
     tracks: tracksOf(episode, source),
+    expectsMore: loadedExpectsMore,
     position,
     rate: prefs.rate,
     autoplay,
@@ -137,12 +144,17 @@ export const player = {
     if (!autoplay) return loadNow(episode, source, false)
     playGate.playEpisode(episode, (listed) => void loadNow(listed, source, true))
   },
-  /** Feeds chapters that appeared while the job runs. */
+  /**
+   * Gives the native player the episode as the library lists it now: chapters that appeared while the job runs, and
+   * whether the job still makes more. The native player decides from that at each Play, and when its queue ends.
+   */
   async sync(episode: Episode, source: TrackSource) {
     if (status.episodeId !== episode.id) return
-    if (episode.chapters.length <= loadedChapters) return
-    loadedChapters = episode.chapters.length
-    await FamaPlayer.updateTracks(tracksOf(episode, source))
+    const expectsMore = isActive(episode.job)
+    if (episode.chapters.length <= loadedChapters && expectsMore === loadedExpectsMore) return
+    loadedChapters = Math.max(loadedChapters, episode.chapters.length)
+    loadedExpectsMore = expectsMore
+    await FamaPlayer.updateTracks(tracksOf(episode, source), expectsMore)
   },
   /** Pauses, or plays. A Play pressed while the library loads waits for the answer; a pause takes it back. */
   toggle() {

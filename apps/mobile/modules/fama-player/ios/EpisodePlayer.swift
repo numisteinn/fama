@@ -27,6 +27,9 @@ final class EpisodePlayer: NSObject {
   private var itemIndex: [ObjectIdentifier: Int] = [:]
   private var rate: Float = 1
   private var wantsPlay = false
+  /// The job still makes chapters, as the library lists it now. The end of the queue is then a wait, not the end
+  /// of the episode. `load` and every `updateTracks` set it, so it is never from an earlier list.
+  private var expectsMore = false
   private var resumeAfterInterruption = false
   private var lastError: String?
   /// Where a running seek will land. Repeated skips build on it, not on the old time.
@@ -48,8 +51,9 @@ final class EpisodePlayer: NSObject {
 
   // MARK: Commands
 
-  func load(_ info: EpisodeInfo, tracks newTracks: [Track], position: Double, rate newRate: Float, autoplay: Bool) {
+  func load(_ info: EpisodeInfo, tracks newTracks: [Track], expectsMore more: Bool, position: Double, rate newRate: Float, autoplay: Bool) {
     episode = info
+    expectsMore = more
     rate = newRate
     player.defaultRate = newRate
     setTracks(newTracks)
@@ -65,10 +69,13 @@ final class EpisodePlayer: NSObject {
     publish()
   }
 
+  /// The episode as the library lists it now: its chapters, and whether the job still makes more.
   /// Chapters grow while the job runs. Appends new chapters to the queue and
   /// resumes when playback ran out of chapters while the listener wanted to play.
-  func updateTracks(_ newTracks: [Track]) {
-    guard episode != nil, newTracks.count >= tracks.count else { return }
+  func updateTracks(_ newTracks: [Track], expectsMore more: Bool) {
+    guard episode != nil else { return }
+    expectsMore = more
+    guard newTracks.count >= tracks.count else { return }
     let oldCount = tracks.count
     let wasWaiting = player.currentItem == nil && wantsPlay
     let kept = tracks
@@ -77,10 +84,11 @@ final class EpisodePlayer: NSObject {
     })
     guard newTracks.count > oldCount else { publish(); return }
     if player.currentItem == nil {
-      if wasWaiting {
-        rebuildQueue(from: oldCount, offset: 0)
-        play()
-      }
+      // The queue ran out at the end of the old chapters. The new ones go on from there: a waiting player plays
+      // them, and a paused one rests at their start. So the position stays where the listener was. It does not
+      // jump to the new end, and the next Play does not start at 0.
+      rebuildQueue(from: oldCount, offset: 0)
+      if wasWaiting { play() } else { player.pause() }
     } else {
       for index in oldCount..<tracks.count { enqueue(index) }
     }
@@ -92,8 +100,9 @@ final class EpisodePlayer: NSObject {
     activateSession()
     wantsPlay = true
     if player.currentItem == nil {
-      // Finished: play again from the start.
-      if !tracks.isEmpty && isAtEnd { rebuildQueue(from: 0, offset: 0) }
+      // The end of the audio. When the job is done, that is the end of the episode: play again from the start.
+      // While the job still makes chapters, it is a wait: `updateTracks` plays the next chapter when it comes.
+      if !tracks.isEmpty && isAtEnd && !expectsMore { rebuildQueue(from: 0, offset: 0) }
     }
     player.defaultRate = rate
     player.play()

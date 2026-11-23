@@ -1,5 +1,5 @@
 // The progress rules of the phone app, kept free of React Native so they run under vitest.
-import { type Episode, type EpisodeProgress, awaitedAfter, isFinished, mergeProgress } from "@fama/contracts"
+import { type Episode, type EpisodeProgress, awaitedAfter, mergeProgress, playStart } from "@fama/contracts"
 
 /** How far playback moves before it is saved again. */
 export const SAVE_EVERY_MS = 5000
@@ -79,15 +79,31 @@ export function planSync(
 export const takesAnswer = (current: EpisodeProgress | undefined, sent: EpisodeProgress): boolean =>
   current !== undefined && isSameProgress(current, sent)
 
-/** Where an episode starts, in ms: the newer of the device's and the server's entry, and 0 when it was finished. */
-export function startMs(
-  local: EpisodeProgress | null,
-  episode: Pick<Episode, "progress" | "chapters" | "job">,
-): number {
-  const saved = mergeProgress(local, episode.progress).progress?.positionMs ?? 0
-  const totalMs = episode.chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
-  // The end of the chapters of a running job is not the end of the episode.
-  return episode.job._tag === "Ready" && isFinished(saved, totalMs) ? 0 : saved
+type Positioned = Pick<Episode, "progress" | "chapters" | "job">
+
+/** The newer of the device's and the server's position, and 0 with neither. */
+const savedMs = (local: EpisodeProgress | null, episode: Positioned): number =>
+  mergeProgress(local, episode.progress).progress?.positionMs ?? 0
+
+/**
+ * Where a Play of an episode starts, in ms: at the newer of the device's and the server's entry, by the
+ * `playStart` rule the devices share. `episode` is the one the library lists when the Play acts. A finished
+ * episode starts at 0. The end of the chapters of a job that still works is not finished: the player loads there
+ * and waits for the next chapter.
+ */
+export function startMs(local: EpisodeProgress | null, episode: Positioned): number {
+  return playStart(savedMs(local, episode), episode.chapters, episode.job).positionMs
+}
+
+/**
+ * Where a paused player rests when it loads or moves with no Play: the restore after launch, and a newer server
+ * entry. No Play acts here, so a decision made now must stay right until one does. A Ready job does not change, so
+ * its finished position rests at 0, where the next Play starts. Every other job can still get chapters (a failed
+ * one after a retry): the player rests at the saved position, and the native player decides at the Play, from its
+ * queue then.
+ */
+export function restMs(local: EpisodeProgress | null, episode: Positioned): number {
+  return episode.job._tag === "Ready" ? startMs(local, episode) : savedMs(local, episode)
 }
 
 /**

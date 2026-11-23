@@ -6,6 +6,7 @@ import {
   type Tracker,
   makePlayGate,
   planSync,
+  restMs,
   startMs,
   takesAnswer,
   track,
@@ -129,6 +130,47 @@ describe("startMs", () => {
 
   test("the end of the audio of a running job is not finished", () => {
     expect(startMs(at(26_825, newer.updatedAt), { ...running, progress: null })).toBe(26_825)
+  })
+
+  test("the same saved position on a later list starts in the new chapter, never at 0", () => {
+    // The web listened to the end of chapter 1 while the job ran. The list then grew, and the job is Ready.
+    const saved = at(26_825, newer.updatedAt)
+    expect(startMs(saved, { ...running, progress: saved })).toBe(26_825)
+    expect(startMs(saved, { ...running, chapters, progress: saved })).toBe(26_825)
+    expect(startMs(saved, { ...ready, progress: saved })).toBe(26_825)
+  })
+
+  test("a position in the last 3 s of a Ready episode is finished", () => {
+    expect(startMs(at(45_000, newer.updatedAt), { ...ready, progress: null })).toBe(0)
+    // The same position while the job still encodes the book is not.
+    expect(startMs(at(45_000, newer.updatedAt), { ...running, chapters, progress: null })).toBe(45_000)
+  })
+})
+
+describe("restMs", () => {
+  const chapters = [
+    { index: 0, title: "Morning", durationMs: 26_825, url: "" },
+    { index: 1, title: "Evening", durationMs: 19_700, url: "" },
+  ]
+  const ready = { chapters, job: { _tag: "Ready", finishedAt: "x" } } as const
+  const failed = { chapters: [chapters[0]!], job: { _tag: "Failed", reason: "x", failedAt: "x" } } as const
+  const running = {
+    chapters: [chapters[0]!],
+    job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
+  } as unknown as Pick<Episode, "chapters" | "job">
+  const end = at(26_825, newer.updatedAt)
+
+  test("a finished entry of a Ready job rests at 0: a Ready job does not change", () => {
+    expect(restMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(0)
+    expect(restMs(older, { ...ready, progress: newer })).toBe(40_000)
+  })
+
+  test("the end of the audio of a job that can still get chapters rests there, so a later Play is not at 0", () => {
+    expect(restMs(end, { ...running, progress: null })).toBe(26_825)
+    // A failed job gets more chapters after a retry: its end is not kept as 0.
+    expect(restMs(end, { ...failed, progress: null })).toBe(26_825)
+    // A Play that acts now, with the failed job as it is, does start at 0: no more audio comes.
+    expect(startMs(end, { ...failed, progress: null })).toBe(0)
   })
 })
 

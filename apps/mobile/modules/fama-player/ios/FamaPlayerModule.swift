@@ -13,6 +13,7 @@ struct LoadRecord: Record {
   @Field var artist: String? = nil
   @Field var artworkUrl: String? = nil
   @Field var tracks: [TrackRecord] = []
+  @Field var expectsMore: Bool = false
   @Field var position: Double = 0
   @Field var rate: Double = 1
   @Field var autoplay: Bool = false
@@ -43,11 +44,14 @@ public class FamaPlayerModule: Module {
         artist: record.artist,
         artworkUrl: record.artworkUrl.flatMap(URL.init(string:))
       )
-      self.player.load(info, tracks: toTracks(record.tracks), position: record.position, rate: Float(record.rate), autoplay: record.autoplay)
+      self.player.load(
+        info, tracks: toTracks(record.tracks), expectsMore: record.expectsMore,
+        position: record.position, rate: Float(record.rate), autoplay: record.autoplay
+      )
     }.runOnQueue(.main)
 
-    AsyncFunction("updateTracks") { (tracks: [TrackRecord]) in
-      self.player.updateTracks(toTracks(tracks))
+    AsyncFunction("updateTracks") { (tracks: [TrackRecord], expectsMore: Bool) in
+      self.player.updateTracks(toTracks(tracks), expectsMore: expectsMore)
     }.runOnQueue(.main)
 
     AsyncFunction("play") { self.player.play() }.runOnQueue(.main)
