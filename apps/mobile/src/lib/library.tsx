@@ -6,8 +6,7 @@ import { ApiError, type PickedFile } from "./api"
 import { isActive } from "./format"
 import { jsonFile } from "./jsonFile"
 import { useSettings } from "./settings"
-import { playGate } from "../player/player"
-import { progress } from "../player/progress"
+import { player } from "../player/player"
 
 const POLL_MS = 3_000
 
@@ -58,17 +57,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     if (!current.api || current.accountKey === undefined) return
     const isCurrent = () => sessionRef.current.api === current.api && sessionRef.current.accountKey === current.accountKey
     // A Play pressed while this request is out waits for it, by its number.
-    const request = playGate.refreshStarted()
-    let isListed = false
+    const request = player.refreshStarted()
+    let listed: ReadonlyArray<Episode> | null = null
     try {
       const list = await current.api.listEpisodes()
       if (!isCurrent()) return
-      // The player takes each list first, so a move to a newer entry and a waiting Play use these episodes.
-      playGate.list(list)
-      // Every list the server sent: pending local entries go out, newer server entries come in. This runs before
-      // the gate opens, so a waiting Play starts from the newer position.
-      progress.sync(list)
-      isListed = true
+      listed = list
       setEpisodes(list)
       setLoaded(true)
       setError(null)
@@ -79,14 +73,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     } catch (cause) {
       if (isCurrent()) setError(message(cause))
     } finally {
-      playGate.refreshSettled(request, isListed)
+      // The player gets the answer as one event: the list, the server's progress in it, and the request that is
+      // no longer out. So it gives the native player the new chapters and the job before a waiting Play starts.
+      player.refreshAnswered(request, listed)
     }
   }, [])
 
   // A new server, token or user starts a fresh library.
   useEffect(() => {
     const cached = cachedEpisodes(accountKey)
-    playGate.list(cached)
+    player.listed(cached)
     setEpisodes(cached)
     setLoaded(false)
     setError(null)

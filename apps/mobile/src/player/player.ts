@@ -1,80 +1,114 @@
-import type { Episode } from "@fama/contracts"
+import type { Episode, EpisodeProgress } from "@fama/contracts"
 import { useSyncExternalStore } from "react"
+import type { Api } from "../lib/api"
 import { isActive } from "../lib/format"
 import { jsonFile } from "../lib/jsonFile"
+import { type Core, type PlayerEffect, type PlayerEvent, initialCore, isWaitingForChapter, step } from "./core"
 import { FamaPlayer, type NativeStatus, type Track } from "./native"
 import { progress } from "./progress"
-import { IDLE_TRACKER, type Moment, type Tracker, makePlayGate, restMs, startMs, track } from "./progressRules"
 
-// One native player per app, so its state lives in one module-level store.
-
-const IDLE: NativeStatus = {
-  episodeId: null,
-  index: 0,
-  position: 0,
-  duration: 0,
-  playing: false,
-  buffering: false,
-  rate: 1,
-  ended: false,
-  error: null,
-}
+// One native player per app. `core.ts` decides what it does: this module only gives the core each event, and runs
+// the effects the core returns, in their order. It decides nothing itself.
 
 type Prefs = { rate: number; lastEpisodeId: string | null }
 
 const prefsFile = jsonFile<Prefs>("player.json", { rate: 1, lastEpisodeId: null })
 
-let status: NativeStatus = IDLE
 let prefs = prefsFile.read()
-let loadedChapters = 0
-/** Whether the native player was told that the job still makes chapters. */
-let loadedExpectsMore = false
-let tracker: Tracker = IDLE_TRACKER
+let core: Core = initialCore(progress.entries())
+/** Where chapter audio comes from. The screens and `PlayerSync` give it before a load. */
+let source: TrackSource | null = null
+/** The server this account talks to. */
+let api: Api | null = null
 
 const statusListeners = new Set<() => void>()
 
-/**
- * Holds a Play that was pressed while the library loads. The library reports each list, each request and its
- * answer, after it merged the list with the device's progress. So the Play starts from the newer position, with
- * the episode as the library lists it then (see `makePlayGate`).
- */
-export const playGate = makePlayGate<Episode>()
-
-/** The native status in whole-episode milliseconds. The native player speaks seconds. */
-const momentOf = (next: NativeStatus): Moment => ({
-  episodeId: next.episodeId,
-  positionMs: Math.round(next.position * 1000),
-  playing: next.playing,
-  ended: next.ended,
-})
-
-FamaPlayer.addListener("onStatus", (next) => {
-  status = next
-  const step = track(tracker, momentOf(next))
-  tracker = step.tracker
-  if (step.isSaved && next.episodeId) progress.save(next.episodeId, step.tracker.savedMs)
-  statusListeners.forEach((listener) => listener())
-})
-
-/** Saves where the loaded episode is now, when it moved since the last save: before a switch, and on background. */
-function saveNow() {
-  const moment = momentOf(status)
-  // Not moved since the last save or the load: nothing the listener did, so no stamp.
-  if (!moment.episodeId || moment.episodeId !== tracker.episodeId || moment.positionMs === tracker.savedMs) return
-  tracker = { ...tracker, savedMs: moment.positionMs }
-  progress.save(moment.episodeId, moment.positionMs)
+export type TrackSource = {
+  mediaUrl(path: string): string
+  localUri(episodeId: string, index: number): string | null
 }
 
-// A newer server entry for the loaded, paused episode moves the player there, without a save: the move is not the
-// listener's. A finished episode of a Ready job moves to the top, where its next play starts (see `restMs`). The
-// episode is the one the library lists now, so a job that just turned Ready counts as finished.
-progress.onAdopt((episodeId, entry) => {
-  if (status.episodeId !== episodeId || status.playing) return
-  const episode = playGate.listed(episodeId)
-  const targetMs = episode ? restMs(entry, episode) : entry.positionMs
-  tracker = { ...tracker, savedMs: targetMs }
-  void FamaPlayer.seek(targetMs / 1000)
-})
+function tracksOf(episode: Episode, from: TrackSource): Track[] {
+  return episode.chapters.map((chapter) => ({
+    url: from.localUri(episode.id, chapter.index) ?? from.mediaUrl(chapter.url),
+    title: chapter.title,
+    durationMs: chapter.durationMs,
+  }))
+}
+
+function remember(lastEpisodeId: string | null) {
+  if (prefs.lastEpisodeId === lastEpisodeId) return
+  prefs = { ...prefs, lastEpisodeId }
+  prefsFile.write(prefs)
+}
+
+/** Sends the device's entry. The server keeps the newer one and answers with what it stores. */
+async function push(episodeId: string, sent: EpisodeProgress) {
+  const target = api
+  if (!target) return
+  try {
+    const stored = await target.putProgress(episodeId, sent)
+    dispatch({ _tag: "PushAnswered", episodeId, sent, stored })
+  } catch {
+    // Offline or refused: the entry stays newer than the server's and goes out on the next library load.
+  }
+}
+
+/** One effect of the core. The native calls of one event reach the native player in the order the core gave. */
+function run(effect: PlayerEffect) {
+  switch (effect._tag) {
+    case "Load": {
+      if (!source) return
+      const { episode } = effect
+      remember(episode.id)
+      void FamaPlayer.load({
+        episodeId: episode.id,
+        title: episode.title,
+        artist: episode.author,
+        artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
+        tracks: tracksOf(episode, source),
+        expectsMore: isActive(episode.job),
+        position: effect.positionMs / 1000,
+        rate: prefs.rate,
+        autoplay: effect.autoplay,
+      })
+      return
+    }
+    case "UpdateTracks":
+      if (source) void FamaPlayer.updateTracks(tracksOf(effect.episode, source), isActive(effect.episode.job))
+      return
+    case "Seek":
+      void FamaPlayer.seek(effect.positionMs / 1000)
+      return
+    case "Skip":
+      void FamaPlayer.skip(effect.deltaMs / 1000)
+      return
+    case "Play":
+      void FamaPlayer.play()
+      return
+    case "Pause":
+      void FamaPlayer.pause()
+      return
+    case "Unload":
+      void FamaPlayer.unload()
+      return
+    case "Push":
+      void push(effect.episodeId, effect.entry)
+      return
+  }
+}
+
+/** Gives the core one event, keeps what it now holds, and runs its effects. */
+function dispatch(event: PlayerEvent) {
+  const before = core
+  const result = step(core, event, new Date().toISOString())
+  core = result.core
+  if (core.entries !== before.entries) progress.replace(core.entries)
+  for (const effect of result.effects) run(effect)
+  if (core.status !== before.status) statusListeners.forEach((listener) => listener())
+}
+
+FamaPlayer.addListener("onStatus", (status) => dispatch({ _tag: "Status", status }))
 
 export function usePlayerStatus(): NativeStatus {
   return useSyncExternalStore(
@@ -82,7 +116,7 @@ export function usePlayerStatus(): NativeStatus {
       statusListeners.add(listener)
       return () => statusListeners.delete(listener)
     },
-    () => status,
+    () => core.status,
   )
 }
 
@@ -90,88 +124,45 @@ export function lastEpisodeId(): string | null {
   return prefs.lastEpisodeId
 }
 
-export type TrackSource = {
-  mediaUrl(path: string): string
-  localUri(episodeId: string, index: number): string | null
-}
-
-function tracksOf(episode: Episode, source: TrackSource): Track[] {
-  return episode.chapters.map((chapter) => ({
-    url: source.localUri(episode.id, chapter.index) ?? source.mediaUrl(chapter.url),
-    title: chapter.title,
-    durationMs: chapter.durationMs,
-  }))
-}
-
-/**
- * Loads an episode at the newer of the device's and the server's position. With `autoplay` it is a Play, and
- * `startMs` says where it starts. Without it, the player rests (`restMs`). The native player also learns whether
- * the job still makes chapters: the end of its queue is then a wait, not the end of the episode.
- * Loading saves nothing for the new episode; only the listener's play and moves do.
- */
-async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean) {
-  if (status.episodeId === episode.id) {
-    if (autoplay && !status.playing) await FamaPlayer.play()
-    return
-  }
-  saveNow()
-  const local = progress.get(episode.id)
-  const position = (autoplay ? startMs(local, episode) : restMs(local, episode)) / 1000
-  loadedChapters = episode.chapters.length
-  loadedExpectsMore = isActive(episode.job)
-  prefs = { ...prefs, lastEpisodeId: episode.id }
-  prefsFile.write(prefs)
-  await FamaPlayer.load({
-    episodeId: episode.id,
-    title: episode.title,
-    artist: episode.author,
-    artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
-    tracks: tracksOf(episode, source),
-    expectsMore: loadedExpectsMore,
-    position,
-    rate: prefs.rate,
-    autoplay,
-  })
-}
-
 export const player = {
-  /**
-   * Loads an episode (see `loadNow`). With `autoplay` it is a Play: pressed while the library loads, it waits, and
-   * then loads the episode as the library lists it after the answer. Without it (the restore after launch) it
-   * loads at once.
-   */
-  async load(episode: Episode, source: TrackSource, autoplay: boolean) {
-    if (!autoplay) return loadNow(episode, source, false)
-    playGate.playEpisode(episode, (listed) => void loadNow(listed, source, true))
+  /** The server of the account, for the device's progress. */
+  connect(next: Api | null) {
+    api = next
   },
   /**
-   * Gives the native player the episode as the library lists it now: chapters that appeared while the job runs, and
-   * whether the job still makes more. The native player decides from that at each Play, and when its queue ends.
+   * Loads an episode. With `autoplay` it is a Play of the listener: pressed while the library loads, it waits, and
+   * then starts the episode as the library lists it after the answer. Without it (the restore after launch) the
+   * episode loads paused.
    */
-  async sync(episode: Episode, source: TrackSource) {
-    if (status.episodeId !== episode.id) return
-    const expectsMore = isActive(episode.job)
-    if (episode.chapters.length <= loadedChapters && expectsMore === loadedExpectsMore) return
-    loadedChapters = Math.max(loadedChapters, episode.chapters.length)
-    loadedExpectsMore = expectsMore
-    await FamaPlayer.updateTracks(tracksOf(episode, source), expectsMore)
+  load(episode: Episode, from: TrackSource, autoplay: boolean) {
+    source = from
+    dispatch(autoplay ? { _tag: "PlayEpisode", episode } : { _tag: "Restore", episodeId: episode.id })
+  },
+  /** A library request goes out. Give its number back to `refreshAnswered` with its answer. */
+  refreshStarted(): number {
+    dispatch({ _tag: "RefreshStarted" })
+    return core.requests
+  },
+  /** Library request `request` answered: with the list the library took, or `null` for a failure. */
+  refreshAnswered(request: number, episodes: ReadonlyArray<Episode> | null) {
+    dispatch({ _tag: "RefreshAnswered", request, episodes })
+  },
+  /** The library shows this list now: the cache of an account, or a change made on this phone. */
+  listed(episodes: ReadonlyArray<Episode>, from: TrackSource | null = source) {
+    source = from
+    dispatch({ _tag: "Listed", episodes })
   },
   /** Pauses, or plays. A Play pressed while the library loads waits for the answer; a pause takes it back. */
   toggle() {
-    if (status.playing) {
-      playGate.cancel()
-      void FamaPlayer.pause()
-    } else {
-      playGate.play(status.episodeId ?? "", () => void FamaPlayer.play())
-    }
+    dispatch({ _tag: "Toggle" })
   },
+  /** Seconds. */
   skip(delta: number) {
-    playGate.cancel()
-    return FamaPlayer.skip(delta)
+    dispatch({ _tag: "Skip", deltaMs: delta * 1000 })
   },
+  /** Episode seconds. */
   seek(position: number) {
-    playGate.cancel()
-    return FamaPlayer.seek(position)
+    dispatch({ _tag: "Seek", positionMs: position * 1000 })
   },
   async setRate(rate: number) {
     prefs = { ...prefs, rate }
@@ -180,20 +171,17 @@ export const player = {
   },
   rate: () => prefs.rate,
   /** The app goes to the background: save where the listener is, if it moved since the last save. */
-  saveNow,
+  saveNow() {
+    dispatch({ _tag: "Background" })
+  },
   /** Stops and forgets an episode, for example after it was deleted. */
-  async forget(episodeId: string) {
-    playGate.forget(episodeId)
-    progress.forget(episodeId)
-    if (prefs.lastEpisodeId === episodeId) {
-      prefs = { ...prefs, lastEpisodeId: null }
-      prefsFile.write(prefs)
-    }
-    if (status.episodeId === episodeId) await FamaPlayer.unload()
+  forget(episodeId: string) {
+    if (prefs.lastEpisodeId === episodeId) remember(null)
+    dispatch({ _tag: "Forget", episodeId })
   },
 }
 
-/** Buffering, or played to the last chapter while the job still renders the next. */
+/** Buffering, or a Play that waits at the end of the chapters while the job still renders the next. */
 export function isWaiting(status: NativeStatus, episode: Episode): boolean {
-  return status.buffering || (status.ended && isActive(episode.job))
+  return status.buffering || (status.episodeId === episode.id && isWaitingForChapter(core))
 }

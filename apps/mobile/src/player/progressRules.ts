@@ -1,5 +1,5 @@
 // The progress rules of the phone app, kept free of React Native so they run under vitest.
-import { type Episode, type EpisodeProgress, awaitedAfter, mergeProgress, playStart } from "@fama/contracts"
+import { type Episode, type EpisodeProgress, mergeProgress, playStart } from "@fama/contracts"
 
 /** How far playback moves before it is saved again. */
 export const SAVE_EVERY_MS = 5000
@@ -99,103 +99,8 @@ export function startMs(local: EpisodeProgress | null, episode: Positioned): num
  * Where a paused player rests when it loads or moves with no Play: the restore after launch, and a newer server
  * entry. No Play acts here, so a decision made now must stay right until one does. A Ready job does not change, so
  * its finished position rests at 0, where the next Play starts. Every other job can still get chapters (a failed
- * one after a retry): the player rests at the saved position, and the native player decides at the Play, from its
- * queue then.
+ * one after a retry): the player rests at the saved position, and the Play decides, on the list it has then.
  */
 export function restMs(local: EpisodeProgress | null, episode: Positioned): number {
   return episode.job._tag === "Ready" ? startMs(local, episode) : savedMs(local, episode)
-}
-
-/**
- * The Play rule. A Play pressed while library requests are in flight waits for them, so it starts from the newer of
- * the device's and the server's position, and not from one another device moved on from: a Play from the old
- * position would stamp it over the newer entry. It waits for the requests that were in flight at the press, by
- * number, and starts by the `awaitedAfter` rule of the contract: on the list of the newest of them or of a later
- * request, or when each of them has answered. The failure of a later request, a pull to refresh for example, does
- * not start it. A second Play of the same episode does not wait again, so a slow request never leaves Play dead. A
- * pause, a seek or another Play takes the waiting Play back.
- *
- * A waiting Play keeps the episode's id and no Episode. The gate knows the library's list, so the Play starts the
- * episode as the library lists it then: with the chapters and the job state the answer brought. An episode that
- * is no longer listed does not play.
- */
-export function makePlayGate<E extends { readonly id: string }>() {
-  let requests = 0
-  let inFlight: ReadonlyArray<number> = []
-  let library: ReadonlyArray<E> = []
-  let held: {
-    readonly episodeId: string
-    readonly awaiting: ReadonlyArray<number>
-    readonly run: () => void
-  } | null = null
-  const listed = (episodeId: string): E | null => library.find((episode) => episode.id === episodeId) ?? null
-  /** Does `now` at once, or holds `afterWait` for `episodeId` while library requests are in flight. */
-  const playOrHold = (episodeId: string, now: () => void, afterWait: () => void) => {
-    if (inFlight.length > 0 && held?.episodeId !== episodeId) {
-      held = { episodeId, awaiting: inFlight, run: afterWait }
-      return
-    }
-    held = null
-    now()
-  }
-  return {
-    /**
-     * The library has a new list: the one an account starts with, and each one a request brought. Call it before
-     * the list merges with the device's progress and before `refreshSettled`.
-     */
-    list(episodes: ReadonlyArray<E>) {
-      library = episodes
-    },
-    /** `episodeId` as the library lists it now, or `null` when it does not. */
-    listed,
-    /** A library request went out. Give its number back to `refreshSettled` with its answer. */
-    refreshStarted(): number {
-      requests += 1
-      inFlight = [...inFlight, requests]
-      return requests
-    },
-    /**
-     * Library request `request` answered. `isListed` says it brought a list the library took; a failure brings none.
-     * Call it after the list merged with the device's progress.
-     */
-    refreshSettled(request: number, isListed: boolean) {
-      inFlight = inFlight.filter((sent) => sent !== request)
-      if (!held) return
-      const awaiting = awaitedAfter(held.awaiting, request, isListed)
-      if (awaiting.length > 0) {
-        held = { ...held, awaiting }
-        return
-      }
-      const { run } = held
-      held = null
-      run()
-    },
-    /** The listener plays the loaded episode `episodeId`: `run` starts it, now or when the wait is over. */
-    play(episodeId: string, run: () => void) {
-      playOrHold(episodeId, run, run)
-    },
-    /**
-     * The listener plays `episode` from the library: `run` loads it. Now, it gets `episode` as given. After a wait,
-     * it gets the episode as the library lists it then, and nothing runs when the library no longer lists it.
-     */
-    playEpisode(episode: E, run: (episode: E) => void) {
-      const { id } = episode
-      playOrHold(
-        id,
-        () => run(episode),
-        () => {
-          const current = listed(id)
-          if (current) run(current)
-        },
-      )
-    },
-    /** A pause or a seek: a waiting Play is off. */
-    cancel() {
-      held = null
-    },
-    /** The listener deleted `episodeId`: its waiting Play is off. */
-    forget(episodeId: string) {
-      if (held?.episodeId === episodeId) held = null
-    },
-  }
 }

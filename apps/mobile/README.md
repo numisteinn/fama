@@ -58,7 +58,7 @@ The module does:
 - Time pitch `.timeDomain`, which suits speech and stays cheap at 3×.
 - `RouteButton`: the system `AVRoutePickerView` for AirPlay and Bluetooth.
 
-JS side (`src/player`): one module-level store fed by the native `onStatus` event. It saves the position per episode to `positions.json` (every 5 s, on pause and at the end) and the speed and last episode to `player.json`. On launch the last episode loads paused, so the mini player is there. Downloaded chapters play from local files.
+JS side (`src/player`): `core.ts` is the player as one pure state machine. It holds what the listener asked for and the facts (the library, the device's progress, what the native player said and was told). After each event its `plan` gives the native calls in order: the track list first, then the place, then Play or Pause. `player.ts` only runs them and feeds the native `onStatus` event back. The progress per episode goes to `progress.json` (every 5 s, on pause and at the end) and to the server; the speed and the last episode go to `player.json`. On launch the last episode loads paused, so the mini player is there. Downloaded chapters play from local files. `sequence.test.ts` walks every sequence of library answers, saves of another device and listener actions up to a depth on the core, with a model of the native queue.
 
 ## Share extension: expo-sharing
 
