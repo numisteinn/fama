@@ -96,8 +96,12 @@ cmd_up() {
     --feed-token="$FEED_TOKEN" -- --local --persist-to "$STATE/wrangler" >"$STATE/seed.log" 2>&1) \
     || die "seeding failed: $STATE/seed.log"
 
+  # Optional worker wake (docs/api.md "Wake"): FAMA_VERIFY_WAKE_URL, and FAMA_VERIFY_WAKE_SECRET (default "verify-wake").
+  local wake=()
+  [ -n "${FAMA_VERIFY_WAKE_URL:-}" ] && wake=(--var "WORKER_WAKE_URL:$FAMA_VERIFY_WAKE_URL" \
+    --var "WORKER_WAKE_SECRET:${FAMA_VERIFY_WAKE_SECRET:-verify-wake}")
   spawn api "$REPO/apps/api" ./node_modules/.bin/wrangler dev --ip 127.0.0.1 --port "$API_PORT" --inspector-port 0 \
-    --persist-to "$STATE/wrangler" --show-interactive-dev-session=false >/dev/null
+    --persist-to "$STATE/wrangler" --show-interactive-dev-session=false ${wake[@]+"${wake[@]}"} >/dev/null
   spawn fixtures "$SKILL/fixtures" python3 -m http.server "$FIXTURE_PORT" --bind 127.0.0.1 >/dev/null
   wait_for "api" 60 api GET /api/episodes
   wait_for "fixtures" 10 curl -fsS "http://localhost:$FIXTURE_PORT/article.html"

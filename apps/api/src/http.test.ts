@@ -1,5 +1,5 @@
 // The HTTP routes against real local D1 and R2 (miniflare through wrangler's platform proxy): ownership between two
-// users, the three auth boundaries, the lease token on job routes, and listening progress.
+// users, the three auth boundaries, the lease token on job routes, listening progress, and the worker wake.
 import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -11,6 +11,7 @@ import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import { sha256Hex } from "./secrets.ts"
+import * as Wake from "./wake.ts"
 
 const WORKER_TOKEN = "test-worker-token"
 const users = {
@@ -23,6 +24,30 @@ let proxy: Awaited<ReturnType<typeof getPlatformProxy<Env>>>
 let env: Env
 let handler: (request: Request) => Promise<Response>
 
+/** The wake calls the API made, with the episode states D1 held when each call went out. */
+type WakeCall = { url: string; method: string; authorization: string | null; jobStates: Array<string> }
+let wakeCalls: Array<WakeCall> = []
+/** The promises handed to `waitUntil`. */
+let pendingWakes: Array<Promise<unknown>> = []
+/** What the fake wake endpoint does once a call is recorded. */
+let wakeAnswer: (signal: AbortSignal | undefined) => Promise<Response> = async () => new Response(null, { status: 202 })
+let waitUntilThrows = false
+const WAKE_TIMEOUT_MS = 200
+
+const fakeWakeFetch: typeof fetch = async (input, init) => {
+  const { results } = await env.DB.prepare("SELECT job_state FROM episodes").all<{ job_state: string }>()
+  wakeCalls.push({
+    url: String(input),
+    method: init?.method ?? "GET",
+    authorization: new Headers(init?.headers).get("authorization"),
+    jobStates: results.map((row) => row.job_state),
+  })
+  return wakeAnswer(init?.signal ?? undefined)
+}
+
+const setWake = (url: string | undefined, secret: string | undefined) =>
+  Object.assign(env, { WORKER_WAKE_URL: url, WORKER_WAKE_SECRET: secret })
+
 beforeAll(async () => {
   proxy = await getPlatformProxy<Env>({ configPath: "wrangler.jsonc", persist: false })
   // In Node the proxied R2 cannot read a stream of unknown length (workerd can), so tests buffer bodies first.
@@ -30,7 +55,15 @@ beforeAll(async () => {
   const put: R2Bucket["put"] = async (key, value, options) =>
     media.put(key, value instanceof ReadableStream ? await new Response(value).arrayBuffer() : value, options)
   env = { ...proxy.env, MEDIA: Object.assign(Object.create(media) as R2Bucket, { put }), FAMA_WORKER_TOKEN: WORKER_TOKEN }
-  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer).pipe(
+  const wake = Wake.layer({
+    waitUntil: (promise) => {
+      if (waitUntilThrows) throw new Error("waitUntil outside a request")
+      pendingWakes.push(promise)
+    },
+    fetch: fakeWakeFetch,
+    timeoutMs: WAKE_TIMEOUT_MS,
+  })
+  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, wake).pipe(
     Layer.provideMerge(Layer.succeed(Bindings, env)),
   )
   const app = HttpRouter.toWebHandler(
@@ -50,6 +83,11 @@ const statements = (sql: string) =>
     .filter((statement) => statement !== "")
 
 beforeEach(async () => {
+  setWake(undefined, undefined)
+  wakeCalls = []
+  pendingWakes = []
+  wakeAnswer = async () => new Response(null, { status: 202 })
+  waitUntilThrows = false
   const tables = ["progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
   await env.DB.batch(statements(migration).map((statement) => env.DB.prepare(statement)))
@@ -387,5 +425,145 @@ describe("progress", () => {
     const body = { positionMs: 1, updatedAt: stamp(0) }
     expect((await call(null, "PUT", `/api/episodes/${episode.id}/progress`, { json: body })).status).toBe(401)
     expect((await call(WORKER_TOKEN, "PUT", `/api/episodes/${episode.id}/progress`, { json: body })).status).toBe(401)
+  })
+})
+
+describe("worker wake", () => {
+  const WAKE_URL = "https://fama-test--fama-worker-wake.modal.run/"
+  const WAKE_SECRET = "test-wake-secret"
+  const textEpisode = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
+  const createText = () => alice("POST", "/api/episodes", { json: textEpisode })
+  const uploadFile = () => {
+    const form = new FormData()
+    form.set("file", new Blob(["file body"], { type: "text/plain" }), "notes.txt")
+    return alice("POST", "/api/episodes/upload", { body: form })
+  }
+  const settled = async () => {
+    const results = await Promise.allSettled(pendingWakes)
+    expect(results.map((result) => result.status)).toEqual(pendingWakes.map(() => "fulfilled"))
+  }
+  const expectOneWake = (jobStates: Array<string>) => {
+    expect(wakeCalls).toEqual([{ url: WAKE_URL, method: "POST", authorization: `Bearer ${WAKE_SECRET}`, jobStates }])
+  }
+
+  it("create sends one wake with the secret, after the Queued episode is stored", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    expect((await createText()).status).toBe(201)
+    await settled()
+    expectOneWake(["Queued"])
+  })
+
+  it("upload sends one wake with the secret, after the Queued episode is stored", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    expect((await uploadFile()).status).toBe(201)
+    await settled()
+    expectOneWake(["Queued"])
+  })
+
+  it("retry sends one wake with the secret, after the job is Queued again", async () => {
+    const { id } = (await (await uploadFile()).json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const fail = await asWorker("POST", `/api/worker/jobs/${id}/fail`, {
+      json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" },
+    })
+    expect(fail.status).toBe(204)
+    setWake(WAKE_URL, WAKE_SECRET)
+    expect((await alice("POST", `/api/episodes/${id}/retry`)).status).toBe(200)
+    await settled()
+    expectOneWake(["Queued"])
+  })
+
+  it("a refused retry sends no wake", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    const { id } = (await (await createText()).json()) as { id: string }
+    await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    await settled()
+    wakeCalls = []
+    expect((await alice("POST", `/api/episodes/${id}/retry`)).status).toBe(409)
+    expect((await bob("POST", `/api/episodes/${id}/retry`)).status).toBe(404)
+    expect(wakeCalls).toEqual([])
+  })
+
+  it("other client and worker routes send no wake", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    await readyEpisode()
+    await settled()
+    wakeCalls = []
+    await alice("GET", "/api/episodes")
+    await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    expect(wakeCalls).toEqual([])
+  })
+
+  it("no wake URL sends no wake", async () => {
+    expect((await createText()).status).toBe(201)
+    expect((await uploadFile()).status).toBe(201)
+    expect(pendingWakes).toEqual([])
+    expect(wakeCalls).toEqual([])
+  })
+
+  it("a wake URL without a secret sends no wake", async () => {
+    setWake(WAKE_URL, undefined)
+    expect((await createText()).status).toBe(201)
+    expect(wakeCalls).toEqual([])
+  })
+
+  it("a wake that throws still returns 201", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    wakeAnswer = async () => {
+      throw new TypeError("fetch failed")
+    }
+    expect((await createText()).status).toBe(201)
+    expect((await uploadFile()).status).toBe(201)
+    await settled()
+    expect(wakeCalls).toHaveLength(2)
+  })
+
+  it("a wake that answers 401 or 500 still returns 201", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    wakeAnswer = async () => new Response("Unauthorized", { status: 401 })
+    expect((await createText()).status).toBe(201)
+    wakeAnswer = async () => new Response("boom", { status: 500 })
+    expect((await uploadFile()).status).toBe(201)
+    await settled()
+    expect(wakeCalls).toHaveLength(2)
+  })
+
+  it("a slow wake does not hold the response, and is cut at the timeout", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    let aborted = false
+    wakeAnswer = (signal) =>
+      new Promise((_, reject) => {
+        signal?.addEventListener("abort", () => {
+          aborted = true
+          reject(signal.reason)
+        })
+      })
+    const started = Date.now()
+    const response = await createText()
+    expect(response.status).toBe(201)
+    expect(aborted, "the response came before the wake settled").toBe(false)
+    await settled()
+    expect(aborted).toBe(true)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(WAKE_TIMEOUT_MS - 20)
+    expect(wakeCalls).toHaveLength(1)
+  })
+
+  it("a retry with a slow wake still returns 200", async () => {
+    const { id } = (await (await uploadFile()).json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    await asWorker("POST", `/api/worker/jobs/${id}/fail`, { json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" } })
+    setWake(WAKE_URL, WAKE_SECRET)
+    wakeAnswer = (signal) => new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)))
+    expect((await alice("POST", `/api/episodes/${id}/retry`)).status).toBe(200)
+    await settled()
+    expect(wakeCalls).toHaveLength(1)
+  })
+
+  it("a waitUntil that throws still returns 201", async () => {
+    setWake(WAKE_URL, WAKE_SECRET)
+    waitUntilThrows = true
+    expect((await createText()).status).toBe(201)
   })
 })

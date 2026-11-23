@@ -22,6 +22,7 @@ import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
+import { Wake } from "./wake.ts"
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
@@ -106,6 +107,11 @@ const provisionalTitle = (source: Source) => {
   }
 }
 
+/** Wakes the cloud worker. Call it only after the write that made the job `Queued` has committed. */
+const wakeWorker = Effect.gen(function* () {
+  yield* (yield* Wake).wake
+})
+
 const safeFileName = (name: string) => name.replace(/[/\\]/g, "_").replace(/^\.+/, "") || "upload"
 
 /** Reads a raw upload body into R2. Needs `Content-Length`, because R2 stores only bodies of known length. */
@@ -139,6 +145,7 @@ const clientRoutes = HttpRouter.addAll([
           voice: body.voice,
           speed: body.speed,
         })
+        yield* wakeWorker
         return json(episode, 201)
       }),
     ),
@@ -171,6 +178,7 @@ const clientRoutes = HttpRouter.addAll([
         const repo = yield* EpisodeRepo
         const source: Source = { _tag: "File", fileName, contentType }
         const episode = yield* repo.create(userId, { id, source, title: provisionalTitle(source), voice, speed })
+        yield* wakeWorker
         return json(episode, 201)
       }),
     ),
@@ -215,7 +223,9 @@ const clientRoutes = HttpRouter.addAll([
     api(({ userId }) =>
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
-        return json(yield* (yield* EpisodeRepo).retry(userId, id))
+        const episode = yield* (yield* EpisodeRepo).retry(userId, id)
+        yield* wakeWorker
+        return json(episode)
       }),
     ),
   ),

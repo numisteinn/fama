@@ -96,6 +96,20 @@ Rules:
 - Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
 
+## Wake
+
+A cloud worker can sleep while the queue is empty. Two optional secrets let the API wake it (D5):
+
+| Secret | Meaning |
+|---|---|
+| `WORKER_WAKE_URL` | the worker's wake endpoint, for example the Modal `wake` URL |
+| `WORKER_WAKE_SECRET` | sent as `Authorization: Bearer <secret>` |
+
+- After `POST /api/episodes`, `POST /api/episodes/upload` or `POST /api/episodes/:id/retry` stores a `Queued` job, the API sends one `POST <WORKER_WAKE_URL>` with no body. A refused request sends none.
+- The call runs after the response (`waitUntil`) and stops after 5 s. A failed, refused or slow wake is logged without the secret. It never changes the client's response.
+- Without `WORKER_WAKE_URL` there is no call. A Mac worker needs none: it polls `claim`.
+- A missed wake is safe. The worker's own schedule (the Modal `sweep`, every 5 minutes) claims the job later.
+
 ## Storage keys (R2)
 
 Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves the prefix out, because the feed token names the user: `/media/<feedToken>/episodes/<episodeId>/book.m4b` reads `users/<userId>/episodes/<episodeId>/book.m4b`.

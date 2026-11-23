@@ -1,1 +1,4 @@
 FAMA_WORKER_TOKEN=dev-worker-token
+# Optional worker wake (D5, docs/api.md "Wake"). Set both or neither.
+# WORKER_WAKE_URL=https://<workspace>--fama-worker-wake.modal.run
+# WORKER_WAKE_SECRET=<same value as in the Modal Secret>
