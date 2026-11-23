@@ -154,3 +154,11 @@ def test_heartbeat_sends_progress_while_idle(tone, server, tmp_path):
     with work.Heartbeat(api, job.episode_id, interval=0.05):
         threading.Event().wait(0.3)
     assert len(fake.progress) >= 3
+
+
+def test_drain_makes_the_job_then_exits_on_an_empty_queue(tone, server, tmp_path):
+    fake, url = server(_job())
+    work.run(url, TOKEN, "modal", out_dir=tmp_path / "work", drain=True)
+    assert fake.state == "Ready"
+    claims = [path for _, path in fake.calls if path == "/api/worker/claim"]
+    assert len(claims) == 2  # the job, then 204
