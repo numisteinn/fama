@@ -25,7 +25,7 @@ let entries = readEntries()
 let api: Api | null = null
 const listeners = new Set<() => void>()
 /** Called when the device takes a server entry, so a loaded, paused player can move there. */
-let onAdopt: (episodeId: string, progress: EpisodeProgress) => void = () => {}
+let adoptListener: (episodeId: string, progress: EpisodeProgress) => void = () => {}
 
 function set(episodeId: string, progress: EpisodeProgress) {
   entries = { ...entries, [episodeId]: progress }
@@ -35,7 +35,7 @@ function set(episodeId: string, progress: EpisodeProgress) {
 
 function adopt(episodeId: string, progress: EpisodeProgress) {
   set(episodeId, progress)
-  onAdopt(episodeId, progress)
+  adoptListener(episodeId, progress)
 }
 
 async function push(episodeId: string, sent: EpisodeProgress) {
@@ -56,8 +56,8 @@ export const progress = {
   connect(next: Api | null) {
     api = next
   },
-  onAdopt(listener: typeof onAdopt) {
-    onAdopt = listener
+  onAdopt(listener: typeof adoptListener) {
+    adoptListener = listener
   },
   /** A listener's action left the episode at `positionMs`: stamp it with the device clock, store it, send it. */
   save(episodeId: string, positionMs: number) {
