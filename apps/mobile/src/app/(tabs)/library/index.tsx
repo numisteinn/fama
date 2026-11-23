@@ -1,6 +1,6 @@
 import type { Episode } from "@fama/contracts"
 import { useRouter } from "expo-router"
-import { Alert, FlatList, RefreshControl, StyleSheet, Text, View } from "react-native"
+import { Alert, FlatList, Image, RefreshControl, StyleSheet, Text, View } from "react-native"
 import { EpisodeRow } from "../../../components/EpisodeRow"
 import { Button, Icon } from "../../../components/ui"
 import { useDownloads } from "../../../lib/downloads"
@@ -34,7 +34,7 @@ export default function LibraryScreen() {
 
   if (!api) {
     return (
-      <Empty icon="server.rack" title="Connect your Fama server">
+      <Empty title="Connect your Fama server">
         <Button title="Open Settings" onPress={() => router.navigate("/settings")} />
       </Empty>
     )
@@ -51,7 +51,7 @@ export default function LibraryScreen() {
       ListHeaderComponent={library.error ? <ErrorBanner message={library.error} /> : undefined}
       ListEmptyComponent={
         library.loaded ? (
-          <Empty icon="headphones" title="Nothing to listen to yet">
+          <Empty title="Nothing to listen to yet">
             <Button title="Add" icon="plus" onPress={() => router.navigate("/add")} />
           </Empty>
         ) : undefined
@@ -74,10 +74,12 @@ function ErrorBanner({ message }: { message: string }) {
   )
 }
 
-function Empty({ icon, title, children }: { icon: "server.rack" | "headphones"; title: string; children: React.ReactNode }) {
+const pan = require("../../../../assets/pan-sleeping.png")
+
+function Empty({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.empty}>
-      <Icon name={icon} size={44} color={colors.textTertiary} weight="regular" />
+      <Image source={pan} style={styles.emptyArt} accessibilityIgnoresInvertColors />
       <Text style={styles.emptyTitle}>{title}</Text>
       {children}
     </View>
@@ -89,6 +91,7 @@ const styles = StyleSheet.create({
   separator: { height: StyleSheet.hairlineWidth, backgroundColor: colors.separator, marginLeft: space.lg + 56 + space.md },
   banner: { flexDirection: "row", alignItems: "center", gap: space.sm, marginHorizontal: space.lg, marginBottom: space.sm, padding: space.md, borderRadius: 12, backgroundColor: colors.surface },
   bannerText: { flex: 1, fontFamily: fonts.medium, fontSize: 15, color: colors.text },
-  empty: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.lg, paddingHorizontal: space.xxl, paddingTop: 160 },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.lg, paddingHorizontal: space.xxl, paddingTop: 96 },
+  emptyArt: { width: 160, height: 160 },
   emptyTitle: { fontFamily: fonts.bold, fontSize: 22, color: colors.text, textAlign: "center" },
 })

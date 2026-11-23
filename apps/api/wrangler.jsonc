@@ -19,5 +19,5 @@
     }
   ],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "fama-media" }],
-  "rules": [{ "type": "Data", "globs": ["**/*.png"], "fallthrough": true }]
+  "rules": [{ "type": "Data", "globs": ["**/*.png", "**/*.jpg"], "fallthrough": true }]
 }

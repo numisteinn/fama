@@ -18,7 +18,7 @@ const channel = (items: ReadonlyArray<FeedItem>) =>
     title: "Fama",
     author: "Fama",
     link: "https://fama.example",
-    imageUrl: "https://fama.example/feed/secret/cover.png",
+    imageUrl: "https://fama.example/feed/secret/cover.jpg",
     items,
   })
 
@@ -28,7 +28,7 @@ describe("renderFeed", () => {
     expect(xml).toContain('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"')
     expect(xml).toContain("<title>Fama</title>")
     expect(xml).toContain("<itunes:author>Fama</itunes:author>")
-    expect(xml).toContain('<itunes:image href="https://fama.example/feed/secret/cover.png"/>')
+    expect(xml).toContain('<itunes:image href="https://fama.example/feed/secret/cover.jpg"/>')
     expect(xml).toContain("<itunes:explicit>false</itunes:explicit>")
     expect(xml).not.toContain("<item>")
   })
