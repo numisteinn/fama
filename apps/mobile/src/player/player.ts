@@ -34,8 +34,8 @@ let loadedEpisode: Episode | null = null
 const statusListeners = new Set<() => void>()
 
 /**
- * Holds a Play that was pressed while the library loads. The library reports each request and each answer, after
- * it merged the list with the device's progress, so the Play starts from the newer position (see `makePlayGate`).
+ * Holds a Play that was pressed while the library loads. The library reports each request and its answer, after it
+ * merged the list with the device's progress, so the Play starts from the newer position (see `makePlayGate`).
  */
 export const playGate = makePlayGate()
 

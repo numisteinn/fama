@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { EpisodeProgress, FINISHED_MARGIN_MS, isFinished, mergeProgress } from "./index.ts"
+import { EpisodeProgress, FINISHED_MARGIN_MS, awaitedAfter, isFinished, mergeProgress } from "./index.ts"
 import { Schema } from "effect"
 
 const at = (iso: string, positionMs: number): EpisodeProgress => ({ positionMs, updatedAt: iso })
@@ -59,5 +59,41 @@ describe("EpisodeProgress", () => {
     expect(decode({ positionMs: 1.5, updatedAt: "2026-11-23T10:00:00.000Z" })._tag).toBe("Failure")
     expect(decode({ positionMs: -1, updatedAt: "2026-11-23T10:00:00.000Z" })._tag).toBe("Failure")
     expect(decode({ positionMs: 1, updatedAt: "yesterday" })._tag).toBe("Failure")
+  })
+})
+
+describe("awaitedAfter", () => {
+  test("the list of the awaited request starts the Play", () => {
+    expect(awaitedAfter([4], 4, true)).toEqual([])
+  })
+
+  test("a later request that fails starts nothing: the Play still waits for the request of the press", () => {
+    expect(awaitedAfter([4], 5, false)).toEqual([4])
+  })
+
+  test("the list of a later request starts the Play: it is fresher than the awaited one", () => {
+    expect(awaitedAfter([4], 5, true)).toEqual([])
+  })
+
+  test("the failure of the only awaited request starts the Play, from what the device knows", () => {
+    expect(awaitedAfter([4], 4, false)).toEqual([])
+  })
+
+  test("with two awaited requests, the list of the older one alone is not enough", () => {
+    expect(awaitedAfter([3, 4], 3, true)).toEqual([4])
+    expect(awaitedAfter([4], 4, true)).toEqual([])
+  })
+
+  test("with two awaited requests, the list of the newer one starts the Play", () => {
+    expect(awaitedAfter([3, 4], 4, true)).toEqual([])
+  })
+
+  test("with two awaited requests, the Play starts when both have failed", () => {
+    expect(awaitedAfter([3, 4], 4, false)).toEqual([3])
+    expect(awaitedAfter([3], 3, false)).toEqual([])
+  })
+
+  test("after the newer awaited request failed, the list of the older one starts the Play", () => {
+    expect(awaitedAfter([3], 3, true)).toEqual([])
   })
 })

@@ -146,64 +146,114 @@ describe("makePlayGate", () => {
     expect(started).toEqual(["e1"])
   })
 
-  test("Play pressed while the library loads starts when the answer came, a failed one too", () => {
+  test("Play pressed while the library loads starts when the list came", () => {
     // The app came back to the front: the refresh is out when the listener taps Play.
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
     expect(started).toEqual([])
-    // The caller merges the list with the device's progress, or catches the failure, then settles.
-    gate.refreshSettled()
-    expect(started).toEqual(["e1"])
-    gate.refreshSettled()
+    // The caller merges the list with the device's progress, then settles.
+    gate.refreshSettled(foreground, true)
     expect(started).toEqual(["e1"])
   })
 
-  test("with two requests in flight, Play waits for both answers", () => {
+  test("a failed load starts the Play too, from what the phone knows", () => {
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
-    gate.refreshSettled()
-    expect(started).toEqual([])
-    gate.refreshSettled()
+    gate.refreshSettled(foreground, false)
     expect(started).toEqual(["e1"])
   })
 
-  test("a request sent after the Play does not make it wait longer", () => {
+  test("a later pull to refresh that fails does not start the Play: it waits for the request of the press", () => {
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
-    gate.refreshStarted()
-    gate.refreshSettled()
+    // The listener pulls to refresh while the foreground request is still out, and the server answers 503.
+    const pull = gate.refreshStarted()
+    gate.refreshSettled(pull, false)
+    // Nothing plays from the old position, so no pause can stamp it over the other device's entry.
+    expect(started).toEqual([])
+    gate.refreshSettled(foreground, true)
+    expect(started).toEqual(["e1"])
+  })
+
+  test("a later request that brings a list starts the Play at once, and the awaited answer starts nothing more", () => {
+    const { gate, started, play } = gateWithLog()
+    const foreground = gate.refreshStarted()
+    play("e1")
+    const pull = gate.refreshStarted()
+    gate.refreshSettled(pull, true)
+    expect(started).toEqual(["e1"])
+    gate.refreshSettled(foreground, true)
+    expect(started).toEqual(["e1"])
+  })
+
+  test("with two requests in flight, the list of the older one is not enough", () => {
+    const { gate, started, play } = gateWithLog()
+    const poll = gate.refreshStarted()
+    const foreground = gate.refreshStarted()
+    play("e1")
+    gate.refreshSettled(poll, true)
+    expect(started).toEqual([])
+    gate.refreshSettled(foreground, true)
+    expect(started).toEqual(["e1"])
+  })
+
+  test("with two requests in flight, the list of the newer one starts the Play", () => {
+    const { gate, started, play } = gateWithLog()
+    const poll = gate.refreshStarted()
+    const foreground = gate.refreshStarted()
+    play("e1")
+    gate.refreshSettled(foreground, true)
+    expect(started).toEqual(["e1"])
+    gate.refreshSettled(poll, true)
+    expect(started).toEqual(["e1"])
+  })
+
+  test("with two requests in flight, the Play starts when both have failed", () => {
+    const { gate, started, play } = gateWithLog()
+    const poll = gate.refreshStarted()
+    const foreground = gate.refreshStarted()
+    play("e1")
+    gate.refreshSettled(foreground, false)
+    expect(started).toEqual([])
+    gate.refreshSettled(poll, false)
+    expect(started).toEqual(["e1"])
+  })
+
+  test("a request that answered before the Play is not waited for", () => {
+    const { gate, started, play } = gateWithLog()
+    gate.refreshSettled(gate.refreshStarted(), true)
+    play("e1")
     expect(started).toEqual(["e1"])
   })
 
   test("a second Play of the same episode does not wait again", () => {
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
     play("e1")
     expect(started).toEqual(["e1"])
-    gate.refreshSettled()
+    gate.refreshSettled(foreground, true)
     expect(started).toEqual(["e1"])
   })
 
   test("a pause or a seek takes the waiting Play back", () => {
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
     gate.cancel()
-    gate.refreshSettled()
+    gate.refreshSettled(foreground, true)
     expect(started).toEqual([])
   })
 
   test("a Play of another episode replaces the waiting one", () => {
     const { gate, started, play } = gateWithLog()
-    gate.refreshStarted()
+    const foreground = gate.refreshStarted()
     play("e1")
     play("e2")
-    gate.refreshSettled()
+    gate.refreshSettled(foreground, true)
     expect(started).toEqual(["e2"])
   })
 })

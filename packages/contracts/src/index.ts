@@ -109,6 +109,24 @@ export const mergeProgress = (
   return { progress: server, isPushed: false }
 }
 
+/**
+ * The held Play rule the clients share. A Play pressed while library requests are out is held, so it starts from
+ * the newer of the device's and the server's entry, and not from a position another device moved on from.
+ * `awaiting` holds the numbers of the requests that were out at the press; a client numbers its library requests
+ * upward. `request` answered, with a list (`isListed`) or without one. The result is what the Play still waits
+ * for. Empty: it starts now.
+ *
+ * It starts when the newest request it waits for brings a list, or a request sent after the press does: no other
+ * awaited answer is fresher. It also starts when each request it waits for has answered, from what the device
+ * knows then. A request sent after the press that fails says nothing about the awaited ones, so the Play stays held.
+ */
+export const awaitedAfter = (
+  awaiting: ReadonlyArray<number>,
+  request: number,
+  isListed: boolean,
+): ReadonlyArray<number> =>
+  isListed && request >= Math.max(...awaiting) ? [] : awaiting.filter((awaited) => awaited !== request)
+
 export const Episode = Schema.Struct({
   id: EpisodeId,
   createdAt: Schema.String,

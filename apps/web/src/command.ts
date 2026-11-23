@@ -19,12 +19,12 @@ import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS, RESET_TYPE_AHEAD_MS } from
 // HTTP
 
 export const FetchEpisodes = Command.define("FetchEpisodes", {
-  args: { connection: Connection, generation: Schema.Number },
+  args: { connection: Connection, generation: Schema.Number, request: Schema.Number },
   messages: [Message.SucceededFetchEpisodes, Message.FailedFetchEpisodes],
-  execute: ({ connection, generation }) =>
+  execute: ({ connection, generation, request }) =>
     sendJson(EpisodeList, connection, "GET", "/api/episodes").pipe(
-      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ generation, episodes })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ generation, failure }))),
+      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ generation, request, episodes })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ generation, request, failure }))),
     ),
 })
 

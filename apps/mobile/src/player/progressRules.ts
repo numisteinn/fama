@@ -1,5 +1,5 @@
 // The progress rules of the phone app, kept free of React Native so they run under vitest.
-import { type Episode, type EpisodeProgress, isFinished, mergeProgress } from "@fama/contracts"
+import { type Episode, type EpisodeProgress, awaitedAfter, isFinished, mergeProgress } from "@fama/contracts"
 
 /** How far playback moves before it is saved again. */
 export const SAVE_EVERY_MS = 5000
@@ -91,36 +91,48 @@ export function startMs(
 }
 
 /**
- * The Play rule. A Play pressed while library requests are in flight waits for their answers, so it starts from the
- * newer of the device's and the server's position, and not from one another device moved on from: a Play from the
- * old position would stamp it over the newer entry. It waits for as many answers as requests were in flight; by
- * then each of them answered, or a fresher one did. A failed request is an answer too. A second Play of the same
- * episode does not wait again, so a slow request never leaves Play dead. A pause, a seek or another Play takes the
- * waiting Play back.
+ * The Play rule. A Play pressed while library requests are in flight waits for them, so it starts from the newer of
+ * the device's and the server's position, and not from one another device moved on from: a Play from the old
+ * position would stamp it over the newer entry. It waits for the requests that were in flight at the press, by
+ * number, and starts by the `awaitedAfter` rule of the contract: on the list of the newest of them or of a later
+ * request, or when each of them has answered. The failure of a later request, a pull to refresh for example, does
+ * not start it. A second Play of the same episode does not wait again, so a slow request never leaves Play dead. A
+ * pause, a seek or another Play takes the waiting Play back.
  */
 export function makePlayGate() {
-  let inFlight = 0
-  let held: { readonly episodeId: string; readonly awaiting: number; readonly run: () => void } | null = null
+  let requests = 0
+  let inFlight: ReadonlyArray<number> = []
+  let held: {
+    readonly episodeId: string
+    readonly awaiting: ReadonlyArray<number>
+    readonly run: () => void
+  } | null = null
   return {
-    /** A library request went out. */
-    refreshStarted() {
-      inFlight += 1
+    /** A library request went out. Give its number back to `refreshSettled` with its answer. */
+    refreshStarted(): number {
+      requests += 1
+      inFlight = [...inFlight, requests]
+      return requests
     },
-    /** A library request answered, with a list or a failure. Call it after the list merged with the device's progress. */
-    refreshSettled() {
-      inFlight = Math.max(0, inFlight - 1)
+    /**
+     * Library request `request` answered. `isListed` says it brought a list the library took; a failure brings none.
+     * Call it after the list merged with the device's progress.
+     */
+    refreshSettled(request: number, isListed: boolean) {
+      inFlight = inFlight.filter((sent) => sent !== request)
       if (!held) return
-      if (held.awaiting > 1) {
-        held = { ...held, awaiting: held.awaiting - 1 }
+      const awaiting = awaitedAfter(held.awaiting, request, isListed)
+      if (awaiting.length > 0) {
+        held = { ...held, awaiting }
         return
       }
       const { run } = held
       held = null
       run()
     },
-    /** The listener plays `episodeId`: `run` starts it, now or after the answers. */
+    /** The listener plays `episodeId`: `run` starts it, now or when the wait is over. */
     play(episodeId: string, run: () => void) {
-      if (inFlight > 0 && held?.episodeId !== episodeId) {
+      if (inFlight.length > 0 && held?.episodeId !== episodeId) {
         held = { episodeId, awaiting: inFlight, run }
         return
       }

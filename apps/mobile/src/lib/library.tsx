@@ -57,14 +57,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     const current = sessionRef.current
     if (!current.api || current.accountKey === undefined) return
     const isCurrent = () => sessionRef.current.api === current.api && sessionRef.current.accountKey === current.accountKey
-    // A Play pressed while this request is out waits for its answer.
-    playGate.refreshStarted()
+    // A Play pressed while this request is out waits for it, by its number.
+    const request = playGate.refreshStarted()
+    let isListed = false
     try {
       const list = await current.api.listEpisodes()
       if (!isCurrent()) return
       // Every list the server sent: pending local entries go out, newer server entries come in. This runs before
       // the gate opens, so a waiting Play starts from the newer position.
       progress.sync(list)
+      isListed = true
       setEpisodes(list)
       setLoaded(true)
       setError(null)
@@ -75,7 +77,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     } catch (cause) {
       if (isCurrent()) setError(message(cause))
     } finally {
-      playGate.refreshSettled()
+      playGate.refreshSettled(request, isListed)
     }
   }, [])
 

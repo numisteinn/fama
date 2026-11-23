@@ -38,7 +38,7 @@ describe("library", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
@@ -48,7 +48,7 @@ describe("library", () => {
     story(
       update,
       given(stillUnauthorized),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(false)),
       Command.expectNone(),
     )
@@ -59,13 +59,13 @@ describe("library", () => {
     story(
       update,
       given({ ...withEpisodes(baseModel(), [harbourDays]), connectionGeneration: 1 }),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => {
         expect(next.settingsDialog.isOpen).toBe(false)
         expect(next.maybeLibraryFailure).toEqual(Option.none())
       }),
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [queuedArticle] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [queuedArticle] })),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
@@ -75,8 +75,11 @@ describe("library", () => {
       update,
       given(withEpisodes(baseModel(), [queuedArticle])),
       message(Message.TickedPoll()),
-      Command.expectExact(FetchEpisodes({ connection, generation: 0 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 2 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [harbourDays] }),
+      ),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes).map((item) => item.title)).toEqual(["Harbour Days"])),
     )
   })
@@ -137,13 +140,25 @@ describe("settings", () => {
       update,
       given(polledA.model),
       message(storedSettings({ connection: tokenB })),
-      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1, request: 3 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 1, request: 3, episodes: [harbourDays] }),
+      ),
       message(storedSettings({ connection })),
-      Command.expectExact(FetchEpisodes({ connection, generation: 2 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 2, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 2, request: 4 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 2, request: 4, episodes: [harbourDays] }),
+      ),
       // The poll for A from before the switch returns now, with an older list.
-      message(Message.SucceededFetchEpisodes({ generation: pollA.args.generation, episodes: [queuedArticle] })),
+      message(
+        Message.SucceededFetchEpisodes({
+          generation: pollA.args.generation,
+          request: pollA.args.request,
+          episodes: [queuedArticle],
+        }),
+      ),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
@@ -186,7 +201,7 @@ describe("settings", () => {
         expect(next.feed).toEqual(Feed.Loading())
       }),
       Command.expectExact(FetchEpisodes, FetchFeed),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] })),
       Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: newFeed })),
     )
   })
@@ -776,7 +791,7 @@ describe("player", () => {
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
       // The end of the audio made so far is not the end of the episode.
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [harbourDays] })),
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(false)
@@ -811,7 +826,13 @@ describe("player", () => {
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
       Command.expectNone(),
       // No chapter came after the last one played: the wait was the end of the episode.
-      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [{ ...harbourDays, progress: progressAt(42_500) }] })),
+      message(
+        Message.SucceededFetchEpisodes({
+          generation: 0,
+          request: 1,
+          episodes: [{ ...harbourDays, progress: progressAt(42_500) }],
+        }),
+      ),
       Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
       saved(46_525),
       model((next) => {
@@ -971,10 +992,11 @@ describe("player", () => {
         isEnded: false,
       }),
     }
-    /** The tab came back to the foreground: its library request is in flight. */
+    /** The tab came back to the foreground: its library request, number 2, is in flight. */
     const refreshing = update(paused, Message.BecameVisible()).model
-    const answer = (progress: typeof old) =>
-      Message.SucceededFetchEpisodes({ generation: 0, episodes: [{ ...harbourDays, progress }] })
+    const answer = (progress: typeof old, request = 2) =>
+      Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [{ ...harbourDays, progress }] })
+    const unavailable = { status: 503, message: "Server unavailable" }
     const secondChapter = (offsetMs: number, isAutoplay: boolean) =>
       LoadChapter({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
 
@@ -986,7 +1008,7 @@ describe("player", () => {
         // Nothing plays from the old position, so nothing can be stamped over the phone's entry.
         Command.expectNone(),
         model((next) => {
-          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 1 }))
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2] }))
           expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
         }),
         message(Message.HidPage()),
@@ -1034,7 +1056,13 @@ describe("player", () => {
         given(refreshing),
         message(Message.ClickedPlayPause()),
         Command.expectNone(),
-        message(Message.FailedFetchEpisodes({ generation: 0, failure: { status: 0, message: "Can't reach the server" } })),
+        message(
+          Message.FailedFetchEpisodes({
+            generation: 0,
+            request: 2,
+            failure: { status: 0, message: "Can't reach the server" },
+          }),
+        ),
         model((next) => {
           expect(next.maybePendingPlay).toEqual(Option.none())
           expect(Option.isSome(next.maybeLibraryFailure)).toBe(true)
@@ -1123,21 +1151,95 @@ describe("player", () => {
       )
     })
 
-    test("with two requests in flight, the Play waits for both answers", () => {
-      // A poll went out, then the tab came back: the poll's answer may be older than the phone's save.
+    test("with two requests in flight, the list of the older one is not enough: the Play waits for the newer one", () => {
+      // A poll (2) went out, then the tab came back (3): the poll's answer may be older than the phone's save.
       const polling = update(update(paused, Message.TickedPoll()).model, Message.BecameVisible()).model
       story(
         update,
         given(polling),
         message(Message.ClickedPlayPause()),
-        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 2 }))),
-        message(answer(old)),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2, 3] }))),
+        message(answer(old, 2)),
         Command.expectNone(),
-        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: 1 }))),
-        message(answer(phone)),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [3] }))),
+        message(answer(phone, 3)),
         Command.expectExact(StoreProgress, secondChapter(40_000 - 26_825, true)),
         Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
         Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+    test("a later poll that fails does not start the Play: it waits for the request that was out at the press", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // A poll (3) goes out while the foreground request (2) is still out, and the server refuses it.
+        message(Message.TickedPoll()),
+        Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 3 })),
+        Command.resolve(FetchEpisodes, Message.FailedFetchEpisodes({ generation: 0, request: 3, failure: unavailable })),
+        // Nothing plays from the old 10 s, so no pause can stamp it over the phone's 40 s.
+        Command.expectNone(),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2] }))
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+          expect(next.localProgress[id]).toEqual(old)
+        }),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(next.localProgress[id]).toEqual(phone)
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        saved(45_000),
+      )
+    })
+
+    test("a later poll that brings a list starts the Play at once: its list is fresher than the awaited one", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.TickedPoll()),
+        Command.resolve(FetchEpisodes, answer(phone, 3)),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.StartedAudio()),
+        // The awaited request answers late, with the list from before the phone's save: playback stays. The tab
+        // sends the entry it took, with the phone's stamp, as it does for every list older than what it holds.
+        message(answer(old)),
+        Command.expectExact(PushProgress({ connection, episodeId: id, progress: phone })),
+        Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: id, sent: phone, stored: phone })),
+        Command.expectNone(),
+        model((next) => {
+          expect(next.localProgress[id]).toEqual(phone)
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
+        }),
+      )
+    })
+
+    test("when each request the Play waited for has failed, it plays from what the tab knows", () => {
+      const polling = update(update(paused, Message.TickedPoll()).model, Message.BecameVisible()).model
+      story(
+        update,
+        given(polling),
+        message(Message.ClickedPlayPause()),
+        message(Message.FailedFetchEpisodes({ generation: 0, request: 3, failure: unavailable })),
+        Command.expectNone(),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2] }))),
+        message(Message.FailedFetchEpisodes({ generation: 0, request: 2, failure: unavailable })),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(ToggleAudio),
+        Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
       )
     })
 
@@ -1202,7 +1304,7 @@ describe("progress sync", () => {
   const older = progressAt(10_000, "2026-11-23T09:00:00.000Z")
   const newer = progressAt(40_000, "2026-11-23T11:00:00.000Z")
   const loaded = (list: ReadonlyArray<typeof harbourDays>) =>
-    Message.SucceededFetchEpisodes({ generation: 0, episodes: list })
+    Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: list })
 
   test("a library load sends each local entry newer than the server's and takes each newer server entry", () => {
     story(

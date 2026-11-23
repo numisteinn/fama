@@ -1,4 +1,12 @@
-import { type Episode, type EpisodeId, type EpisodeProgress, type VoiceRef, isFinished, mergeProgress } from "@fama/contracts"
+import {
+  type Episode,
+  type EpisodeId,
+  type EpisodeProgress,
+  type VoiceRef,
+  awaitedAfter,
+  isFinished,
+  mergeProgress,
+} from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
@@ -71,7 +79,8 @@ export const init = (flags: Flags): UpdateReturn => {
   const model: Model = {
     connection,
     connectionGeneration: 0,
-    libraryRequestsInFlight: 0,
+    libraryRequests: 0,
+    libraryRequestsInFlight: [],
     maybeEpisodes: Option.none(),
     maybeLibraryFailure: Option.none(),
     voices: [],
@@ -106,11 +115,17 @@ export const init = (flags: Flags): UpdateReturn => {
 
 // CONNECTION
 
-/** A library request for the current connection, tagged with its generation and counted as in flight. */
-const fetchLibrary = (model: Model): { model: Model; command: ReturnType<typeof FetchEpisodes> } => ({
-  model: modifyFields(model, { libraryRequestsInFlight: (count) => count + 1 }),
-  command: FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration }),
-})
+/** A new library request for the current connection, tagged with its generation and its number, and in flight. */
+const fetchLibrary = (model: Model): { model: Model; command: ReturnType<typeof FetchEpisodes> } => {
+  const request = model.libraryRequests + 1
+  return {
+    model: modifyFields(model, {
+      libraryRequests: () => request,
+      libraryRequestsInFlight: (inFlight) => [...inFlight, request],
+    }),
+    command: FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration, request }),
+  }
+}
 
 /** A new feed request for the current connection. Results of earlier requests are dropped. */
 const fetchFeed = (model: Model): { model: Model; command: ReturnType<typeof FetchFeed> } => {
@@ -214,25 +229,34 @@ const fetchEpisodes: Step = (model) => {
 }
 
 /**
- * A library request answered, with a list or a failure: it is no longer in flight. `maybePlay` is the episode of a
- * pending Play that waited for this answer as its last one, so it starts now.
+ * Library request `request` answered: it is no longer in flight. `isListed` says it brought a list the tab takes; a
+ * failure and a list for an earlier connection bring none. `maybePlay` is the episode of a pending Play that this
+ * answer starts.
  *
- * A Play waits for as many answers as requests were in flight when it was pressed. By then each of those requests
- * answered, or a later and fresher one did.
+ * A Play waits for the requests that were in flight when it was pressed, by number (`awaitedAfter`). The failure of
+ * a request sent later, a poll for example, does not start it.
  */
-const answerLibrary = (model: Model): { model: Model; maybePlay: Option.Option<EpisodeId> } => {
-  const counted = modifyFields(model, { libraryRequestsInFlight: (count) => Math.max(0, count - 1) })
+const answerLibrary = (
+  model: Model,
+  request: number,
+  isListed: boolean,
+): { model: Model; maybePlay: Option.Option<EpisodeId> } => {
+  const answered = modifyFields(model, {
+    libraryRequestsInFlight: (inFlight) => inFlight.filter((sent) => sent !== request),
+  })
   return Option.match(model.maybePendingPlay, {
-    onNone: () => ({ model: counted, maybePlay: Option.none() }),
-    onSome: ({ episodeId, awaiting }) =>
-      awaiting > 1
+    onNone: () => ({ model: answered, maybePlay: Option.none() }),
+    onSome: ({ episodeId, awaiting }) => {
+      const stillAwaiting = awaitedAfter(awaiting, request, isListed)
+      return stillAwaiting.length > 0
         ? {
-            model: modifyFields(counted, {
-              maybePendingPlay: () => Option.some({ episodeId, awaiting: awaiting - 1 }),
+            model: modifyFields(answered, {
+              maybePendingPlay: () => Option.some({ episodeId, awaiting: stillAwaiting }),
             }),
             maybePlay: Option.none(),
           }
-        : { model: modifyFields(counted, { maybePendingPlay: () => Option.none() }), maybePlay: Option.some(episodeId) },
+        : { model: modifyFields(answered, { maybePendingPlay: () => Option.none() }), maybePlay: Option.some(episodeId) }
+    },
   })
 }
 
@@ -622,14 +646,14 @@ const intend =
     step(modifyFields(model, { playIntents: (count) => count + 1, maybePendingPlay: () => Option.none() }))
 
 /**
- * A Play of the user. While a library request is in flight, it waits for the answer and does `now` then: the
- * library may hold a newer position from another device, and a Play from the old one would stamp it over that.
- * A second Play of the same episode does not wait again, so a slow request never leaves Play dead.
+ * A Play of the user. While library requests are in flight, it waits for them and plays when `answerLibrary` says
+ * so: the library may hold a newer position from another device, and a Play from the old one would stamp it over
+ * that. A second Play of the same episode does not wait again, so a slow request never leaves Play dead.
  */
 const play =
   (episodeId: EpisodeId, now: Step): Step =>
   (model) =>
-    model.libraryRequestsInFlight > 0 && !isPlayPending(model, episodeId)
+    model.libraryRequestsInFlight.length > 0 && !isPlayPending(model, episodeId)
       ? intend((held) => ({
           model: modifyFields(held, {
             maybePendingPlay: () => Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
@@ -825,9 +849,10 @@ const isPlaying = (model: Model) => model.playback._tag === "Loaded" && model.pl
 
 export const update = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
-    SucceededFetchEpisodes: ({ generation, episodes: list }) => {
-      const answered = answerLibrary(model)
-      return isCurrent(model, generation)
+    SucceededFetchEpisodes: ({ generation, request, episodes: list }) => {
+      const isListed = isCurrent(model, generation)
+      const answered = answerLibrary(model, request, isListed)
+      return isListed
         ? Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.none() }), [
             withEpisodes(() => list),
             syncProgress(answered.maybePlay),
@@ -835,9 +860,9 @@ export const update = (model: Model, message: Message): UpdateReturn =>
           ])
         : playDue(answered.maybePlay)(answered.model)
     },
-    FailedFetchEpisodes: ({ generation, failure }) => {
-      // A failed request is an answer too: a Play that waited for it starts from what the tab knows.
-      const answered = answerLibrary(model)
+    FailedFetchEpisodes: ({ generation, request, failure }) => {
+      // When each request a Play waited for has failed, it starts from what the tab knows.
+      const answered = answerLibrary(model, request, false)
       if (!isCurrent(model, generation)) return playDue(answered.maybePlay)(answered.model)
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
       return Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.some(failure) }), [

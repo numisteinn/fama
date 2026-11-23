@@ -59,10 +59,12 @@ export const StoredProgress = defineTaggedUnion({
 export type StoredProgress = typeof StoredProgress.Type
 
 /**
- * A Play pressed while library requests were in flight. It starts when `awaiting` more of them have answered, so
- * it plays from the newer of this device's and the server's progress, and not from a position another device left.
+ * A Play pressed while library requests were in flight. `awaiting` holds the numbers of those requests that have
+ * not answered yet. It starts by the `awaitedAfter` rule of the contract, so it plays from the newer of this
+ * device's and the server's progress, and not from a position another device left. It holds the episode's id and
+ * no Episode: the episode it plays is the one the library lists when it starts.
  */
-export const PendingPlay = Schema.Struct({ episodeId: EpisodeId, awaiting: Schema.Number })
+export const PendingPlay = Schema.Struct({ episodeId: EpisodeId, awaiting: Schema.Array(Schema.Number) })
 export type PendingPlay = typeof PendingPlay.Type
 
 /** The private podcast feed URL in Settings. */
@@ -100,8 +102,10 @@ export const Model = Schema.Struct({
    * responses carry the generation they were fetched for; a response from an older one is dropped.
    */
   connectionGeneration: Schema.Number,
-  /** Library requests sent and not answered yet. */
-  libraryRequestsInFlight: Schema.Number,
+  /** Counts library requests. Each request carries its number, and its answer brings the number back. */
+  libraryRequests: Schema.Number,
+  /** The numbers of the library requests sent and not answered yet. */
+  libraryRequestsInFlight: Schema.Array(Schema.Number),
   /** `None` until the first load finishes. */
   maybeEpisodes: Schema.Option(Schema.Array(Episode)),
   maybeLibraryFailure: Schema.Option(ApiFailure),
