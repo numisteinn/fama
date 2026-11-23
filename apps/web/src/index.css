@@ -31,7 +31,17 @@
   --destructive: #f87171;
 }
 
+.logo-light {
+  display: none;
+}
+
 @media (prefers-color-scheme: light) {
+  .logo-dark {
+    display: none;
+  }
+  .logo-light {
+    display: block;
+  }
   :root {
     color-scheme: light;
     --background: #fafafa;

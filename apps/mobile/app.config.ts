@@ -56,7 +56,7 @@ const config: ExpoConfig = {
     ],
     [
       "expo-splash-screen",
-      { image: "./assets/icon.png", imageWidth: 120, backgroundColor: "#0B0B0C" },
+      { image: "./assets/splash.png", imageWidth: 120, backgroundColor: "#0B0B0C" },
     ],
   ],
   experiments: { typedRoutes: false },
