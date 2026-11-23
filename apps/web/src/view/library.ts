@@ -32,7 +32,14 @@ export const library = (model: Model, h: HtmlBuilder<Message>): Html =>
           ),
       }),
     onSome: (episodes) =>
-      h.ul(
+      episodes.length === 0
+        ? h.img([
+            h.Src("/pan-sleeping.png"),
+            h.Alt(""),
+            h.Class("mx-auto mt-16 size-40 select-none"),
+            h.Draggable(false),
+          ])
+        : h.ul(
         [h.Class("-mx-2 flex flex-col")],
         episodes.map((episode) => row(model, episode, h)),
       ),

@@ -13,7 +13,7 @@ import {
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { Bindings } from "./bindings.ts"
-import cover from "./cover.png"
+import cover from "./cover.jpg"
 import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore } from "./media-store.ts"
@@ -356,7 +356,7 @@ const publicRoutes = HttpRouter.addAll([
           title: "Fama",
           author: "Fama",
           link: origin,
-          imageUrl: `${origin}/feed/${FAMA_FEED_TOKEN}/cover.png`,
+          imageUrl: `${origin}/feed/${FAMA_FEED_TOKEN}/cover.jpg`,
           items,
         })
         return HttpServerResponse.text(xml, { contentType: "application/rss+xml; charset=utf-8" })
@@ -365,11 +365,11 @@ const publicRoutes = HttpRouter.addAll([
   ),
   HttpRouter.route(
     "GET",
-    "/feed/:token/cover.png",
+    "/feed/:token/cover.jpg",
     handle(
       Effect.as(
         requireFeedToken,
-        HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/png" }),
+        HttpServerResponse.uint8Array(new Uint8Array(cover), { contentType: "image/jpeg" }),
       ),
     ),
   ),
