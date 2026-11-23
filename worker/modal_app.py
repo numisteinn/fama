@@ -109,11 +109,11 @@ def _dispatch() -> str:
 
 def _bake_command() -> str:
     script = (
-        "from huggingface_hub import snapshot_download\n"
-        f"snapshot_download({KOKORO_REPO!r}, allow_patterns={KOKORO_FILES!r})\n"
+        "from huggingface_hub import snapshot_download; "
+        f"snapshot_download({KOKORO_REPO!r}, allow_patterns={KOKORO_FILES!r}); "
         f"snapshot_download({PIPER_REPO!r}, revision={PIPER_REVISION!r}, "
-        f"allow_patterns={[f'{voice}.onnx*' for voice in PIPER_VOICES]!r})\n"
-    )
+        f"allow_patterns={[f'{voice}.onnx*' for voice in PIPER_VOICES]!r})"
+    )  # one line: Modal puts the command into a Dockerfile RUN, which cannot hold a newline
     return f"python -c {shlex.quote(script)}"
 
 
