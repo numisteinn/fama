@@ -126,8 +126,10 @@ def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     api.put_book(job, book)
 
 
-def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
+def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
+    """Make one episode. Returns its audio length in ms when it is ready, else None."""
     episode = job.episode_id
+    started = time.monotonic()
     workdir = out_dir / episode
     workdir.mkdir(parents=True, exist_ok=True)
     log(f"{episode}: claimed, skipping chapters {sorted(job.completed_chapters)}")
@@ -146,8 +148,10 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
             _upload_book(api, job, book.path)
             heartbeat.update(stage="uploading", done=1, total=1)
             api.complete(job, book.duration_ms)
-        log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s in {len(book.chapters)} chapters")
+        log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
+            f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)
+        return book.duration_ms
     except LeaseLost as error:
         log(f"{episode}: dropped, lease lost ({error})")
     except Exception as error:  # the job fails; the loop goes on
@@ -158,28 +162,39 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
             api.fail(job, reason)
         except (LeaseLost, ApiError) as fail_error:
             log(f"{episode}: could not report failure: {fail_error}")
+    return None
 
 
-def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False,
-        stop: threading.Event | None = None, api: Api | None = None) -> None:
+def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False, drain: bool = False,
+        first_job: ClaimedJob | None = None, stop: threading.Event | None = None, api: Api | None = None) -> None:
+    """Pull jobs until stopped. `once` stops after one job or an empty queue.
+    `drain` takes jobs until the queue is empty, then stops (the cloud worker runs this).
+    `first_job` is a job this worker id already claimed; it is made before the first claim."""
     api = api or Api(api_url, token, worker_id)
     stop = stop or threading.Event()
     voices = [v.to_json() for v in all_voices()]
     delay = IDLE_MIN_S
+    started, jobs, audio_ms = time.monotonic(), 0, 0
     log(f"worker {worker_id} polling {api_url} with {len(voices)} voices")
     while not stop.is_set():
-        try:
-            job = api.claim(voices)
-        except ApiError as error:
-            log(f"claim failed: {error}")
-            job = None
+        if first_job is not None:
+            job, first_job = first_job, None
+        else:
+            try:
+                job = api.claim(voices)
+            except ApiError as error:
+                log(f"claim failed: {error}")
+                job = None
         if job is None:
-            if once:
-                return
+            if once or drain:
+                break
             stop.wait(delay)
             delay = min(delay * 2, IDLE_MAX_S)
             continue
         delay = IDLE_MIN_S
-        process(api, job, out_dir)
+        jobs += 1
+        audio_ms += process(api, job, out_dir) or 0
         if once:
-            return
+            break
+    if drain:
+        log(f"drained {jobs} jobs, {audio_ms / 1000:.0f}s audio in {time.monotonic() - started:.0f}s wall")

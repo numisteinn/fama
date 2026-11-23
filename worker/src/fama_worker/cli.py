@@ -69,7 +69,8 @@ def voices(args: argparse.Namespace) -> None:
 def work(args: argparse.Namespace) -> None:
     from fama_worker.work import run
 
-    run(args.api, args.token, args.worker_id or socket.gethostname(), out_dir=Path(args.out), once=args.once)
+    run(args.api, args.token, args.worker_id or socket.gethostname(), out_dir=Path(args.out), once=args.once,
+        drain=args.drain)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -93,7 +94,9 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--token", required=True)
     p.add_argument("--worker-id")
     p.add_argument("--out", default=str(Path.home() / ".cache" / "fama" / "work"))
-    p.add_argument("--once", action="store_true", help="stop after one job, or when the queue is empty")
+    stop_when = p.add_mutually_exclusive_group()
+    stop_when.add_argument("--once", action="store_true", help="stop after one job, or when the queue is empty")
+    stop_when.add_argument("--drain", action="store_true", help="take jobs until the queue is empty, then stop")
     p.set_defaults(run=work)
 
     args = parser.parse_args(argv)
