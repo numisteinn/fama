@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - packages/*
+  - infra
 
 catalog:
   effect: 4.1.4
@@ -13,6 +14,7 @@ overrides:
   "@effect/platform-browser": 4.1.4
   "@effect/platform-node": 4.1.4
   "@effect/platform-node-shared": 4.1.4
+  "@effect/sql-d1": 4.1.4
 
 allowBuilds:
   esbuild: true
