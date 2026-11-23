@@ -19,9 +19,11 @@ export function Tap({ style, children, ...props }: PressableProps & { style?: St
 type Variant = "primary" | "secondary" | "danger"
 
 export function Button({ title, icon, variant = "primary", busy, style, ...props }: PressableProps & { title: string; icon?: SFSymbol; variant?: Variant; busy?: boolean; style?: StyleProp<ViewStyle> }) {
-  const fg = variant === "primary" ? colors.onAccent : variant === "danger" ? colors.danger : colors.text
+  // A disabled primary button goes grey. Peach at low opacity on black reads as mud.
+  const look: Variant = variant === "primary" && props.disabled && !busy ? "secondary" : variant
+  const fg = look === "primary" ? colors.onAccent : look === "danger" ? colors.danger : colors.text
   return (
-    <Tap accessibilityRole="button" {...props} disabled={props.disabled || busy} style={[styles.button, styles[variant], style]}>
+    <Tap accessibilityRole="button" {...props} disabled={props.disabled || busy} style={[styles.button, styles[look], style]}>
       {icon ? <Icon name={icon} size={20} color={fg} weight="semibold" /> : null}
       <Text style={[styles.buttonText, { color: fg }]}>{busy ? `${title}…` : title}</Text>
     </Tap>
