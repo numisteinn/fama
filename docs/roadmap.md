@@ -71,3 +71,9 @@ You can do these at any time.
 - **Export MP3 for each chapter, or WAV, FLAC or Opus.** The apps and the feed play the M4B, and `Download` gives you the file.
 - **Narrate subtitle files or text with timestamps.** These are for video voiceovers, not for listening.
 - **GPU or CPU choice, offline model download.** The worker manages these by itself.
+
+## Before charging for a managed service
+
+- Replace PyMuPDF (AGPL) or change the license. `pypdfium2` is the candidate.
+- Measure the GPU cost per hour of audio on Modal. The price depends on it.
+- Design: [design/two-paths.md](design/two-paths.md).
