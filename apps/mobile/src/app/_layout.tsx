@@ -5,6 +5,7 @@ import { useEffect } from "react"
 import { GestureHandlerRootView } from "react-native-gesture-handler"
 import { DownloadsProvider } from "../lib/downloads"
 import { LibraryProvider } from "../lib/library"
+import { PairingHandler } from "../lib/PairingHandler"
 import { SettingsProvider, useSettings } from "../lib/settings"
 import { PlayerSync } from "../player/PlayerSync"
 import { colors, fonts } from "../theme"
@@ -22,6 +23,7 @@ export default function RootLayout() {
           <DownloadsProvider>
             <StatusBar style="light" />
             <PlayerSync />
+            <PairingHandler />
             <Screens />
           </DownloadsProvider>
         </LibraryProvider>

@@ -1,18 +1,42 @@
-import type { Episode, EpisodeId, VoiceRef } from "@fama/contracts"
+import type { Episode, EpisodeId, EpisodeProgress, VoiceRef } from "@fama/contracts"
 import { Option } from "effect"
 import { apiToken } from "~/api"
-import type { Model } from "~/model"
+import type { LoadedPlayback, Model } from "~/model"
 import { init } from "~/update"
 
 export const connection = { origin: "", token: apiToken("dev-api-token") }
 
-/** A fresh Model, as `init` makes it from empty storage plus a stored token. */
-export const baseModel = (savedPositions: Record<string, number> = {}): Model =>
-  init({ token: connection.token, origin: "", voice: null, speed: 1, rate: 1, savedPositions }).model
+/** A fresh Model, as `init` makes it from empty storage plus a stored token and `localProgress`. */
+export const baseModel = (localProgress: Record<string, EpisodeProgress> = {}): Model =>
+  init({ token: connection.token, origin: "", voice: null, speed: 1, rate: 1, localProgress }).model
 
+/** Progress at `positionMs`, stamped `updatedAt`. */
+export const progressAt = (positionMs: number, updatedAt = "2026-11-23T10:00:00.000Z"): EpisodeProgress => ({
+  positionMs,
+  updatedAt,
+})
+
+/** `model` after the library loaded `episodes`: no library request is in flight. The next request is number 2. */
 export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Model => ({
   ...model,
+  libraryRequestsInFlight: [],
   maybeEpisodes: Option.some(episodes),
+})
+
+/**
+ * `model` with `playback` in the audio element, as the listener left it: the intent is Play when the audio plays or
+ * waits for a chapter, and the player follows the entry the device holds.
+ */
+export const withPlayback = (model: Model, playback: LoadedPlayback): Model => ({
+  ...model,
+  playback,
+  maybeListening: Option.some({
+    episodeId: playback.episodeId,
+    wantsPlay: playback.isPlaying || playback.isWaiting,
+    isPlayDue: false,
+    maybeSeekMs: Option.none(),
+    maybeFollowedAt: Option.fromNullishOr(model.localProgress[playback.episodeId]?.updatedAt),
+  }),
 })
 
 const at = "2026-11-20T00:00:00.000Z"
@@ -34,6 +58,7 @@ export const harbourDays: Episode = {
   bookUrl: "/media/t/episodes/harbour-days/book.m4b",
   coverUrl: null,
   job: { _tag: "Ready", finishedAt: at },
+  progress: null,
 }
 
 export const queuedArticle: Episode = {
@@ -50,6 +75,7 @@ export const queuedArticle: Episode = {
   bookUrl: null,
   coverUrl: null,
   job: { _tag: "Queued" },
+  progress: null,
 }
 
 /** Harbour Days while its second chapter is still being narrated. */

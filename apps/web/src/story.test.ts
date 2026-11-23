@@ -2,7 +2,7 @@ import { Dialog } from "@foldkit/ui"
 import { Effect, Option, Redacted } from "effect"
 import { Command, type StorySimulation, given, message, model, steps, story } from "foldkit/story"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
+import { AudioPlayer, LoadChapter, PauseAudio, PlayAudio, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
 import {
   CopyFeedUrl,
   CreateEpisodeFromSource,
@@ -13,8 +13,10 @@ import {
   FocusDeleteConfirm,
   FocusPicker,
   FocusPickerTrigger,
-  ReadSavedPosition,
-  SavePosition,
+  PushProgress,
+  ReadStoredProgress,
+  SaveProgress,
+  StoreProgress,
   StoreSetting,
   WaitBeforeDisarmDelete,
   ScrollPickerItem,
@@ -25,7 +27,16 @@ import { Message } from "~/message"
 import { apiToken } from "~/api"
 import { Feed, Picker, Playback } from "~/model"
 import type { EpisodeId, Voice, VoiceRef } from "@fama/contracts"
-import { baseModel, connection, harbourDays, queuedArticle, runningHarbourDays, withEpisodes } from "~/fixture"
+import {
+  baseModel,
+  connection,
+  harbourDays,
+  progressAt,
+  queuedArticle,
+  runningHarbourDays,
+  withEpisodes,
+  withPlayback,
+} from "~/fixture"
 import { storageEventMessage } from "~/subscription"
 import { update } from "~/update"
 
@@ -36,7 +47,7 @@ describe("library", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
       Command.expectExact(Dialog.ShowDialog, FetchFeed),
       Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
@@ -46,7 +57,7 @@ describe("library", () => {
     story(
       update,
       given(stillUnauthorized),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => expect(next.settingsDialog.isOpen).toBe(false)),
       Command.expectNone(),
     )
@@ -57,13 +68,13 @@ describe("library", () => {
     story(
       update,
       given({ ...withEpisodes(baseModel(), [harbourDays]), connectionGeneration: 1 }),
-      message(Message.FailedFetchEpisodes({ generation: 0, failure: unauthorized })),
+      message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => {
         expect(next.settingsDialog.isOpen).toBe(false)
         expect(next.maybeLibraryFailure).toEqual(Option.none())
       }),
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [queuedArticle] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [queuedArticle] })),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
@@ -73,8 +84,11 @@ describe("library", () => {
       update,
       given(withEpisodes(baseModel(), [queuedArticle])),
       message(Message.TickedPoll()),
-      Command.expectExact(FetchEpisodes({ connection, generation: 0 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 2 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [harbourDays] }),
+      ),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes).map((item) => item.title)).toEqual(["Harbour Days"])),
     )
   })
@@ -135,13 +149,25 @@ describe("settings", () => {
       update,
       given(polledA.model),
       message(storedSettings({ connection: tokenB })),
-      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1, request: 3 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 1, request: 3, episodes: [harbourDays] }),
+      ),
       message(storedSettings({ connection })),
-      Command.expectExact(FetchEpisodes({ connection, generation: 2 })),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 2, episodes: [harbourDays] })),
+      Command.expectExact(FetchEpisodes({ connection, generation: 2, request: 4 })),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 2, request: 4, episodes: [harbourDays] }),
+      ),
       // The poll for A from before the switch returns now, with an older list.
-      message(Message.SucceededFetchEpisodes({ generation: pollA.args.generation, episodes: [queuedArticle] })),
+      message(
+        Message.SucceededFetchEpisodes({
+          generation: pollA.args.generation,
+          request: pollA.args.request,
+          episodes: [queuedArticle],
+        }),
+      ),
       model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
     )
   })
@@ -184,7 +210,7 @@ describe("settings", () => {
         expect(next.feed).toEqual(Feed.Loading())
       }),
       Command.expectExact(FetchEpisodes, FetchFeed),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] })),
       Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: newFeed })),
     )
   })
@@ -459,71 +485,138 @@ describe("add bar", () => {
 })
 
 describe("player", () => {
-  /** The ReadSavedPosition Commands update returned, oldest first, so a step can run their real storage read. */
-  const issuedReads: Array<ReturnType<typeof ReadSavedPosition>> = []
+  /** The ReadStoredProgress Commands update returned, oldest first, so a step can run their real storage read. */
+  const issuedReads: Array<ReturnType<typeof ReadStoredProgress>> = []
   const updateKeepingReads: typeof update = (current, sent) => {
     const result = update(current, sent)
     for (const command of result.commands ?? []) {
-      if (command.name === ReadSavedPosition.name) issuedReads.push(command as ReturnType<typeof ReadSavedPosition>)
+      if (command.name === ReadStoredProgress.name) issuedReads.push(command as ReturnType<typeof ReadStoredProgress>)
     }
     return result
   }
-  /** Runs the oldest ReadSavedPosition against the real localStorage and feeds its Message back. */
+  /** Runs the oldest ReadStoredProgress against the real localStorage and feeds its Message back. */
   const readStorage = <M, Msg, Out>(simulation: StorySimulation<M, Msg, Out>): StorySimulation<M, Msg, Out> => {
     const command = issuedReads.shift()
-    if (!command) throw new Error("update issued no ReadSavedPosition")
+    if (!command) throw new Error("update issued no ReadStoredProgress")
     return Command.resolve(command, Effect.runSync(command.effect))(simulation)
   }
-  const savePositionInStorage = (positionMs: number) =>
-    localStorage.setItem(`fama.position.${harbourDays.id}`, JSON.stringify(positionMs))
+  const storeProgress = (positionMs: number, updatedAt?: string) =>
+    localStorage.setItem(`fama.progress.${harbourDays.id}`, JSON.stringify(progressAt(positionMs, updatedAt)))
+  /** The save of a listener action at `positionMs`, stamped `T`, then the server's answer. */
+  const T = "2026-11-23T12:00:00.000Z"
+  const saved = (positionMs: number, episodeId: EpisodeId = harbourDays.id) =>
+    steps(
+      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId, progress: progressAt(positionMs, T) })),
+      Command.resolve(
+        PushProgress,
+        Message.SucceededPushProgress({ episodeId, sent: progressAt(positionMs, T), stored: progressAt(positionMs, T) }),
+      ),
+    )
 
   afterEach(() => {
     localStorage.clear()
     issuedReads.length = 0
   })
 
-  test("play reads the latest saved position from storage, not the one read at boot", () => {
+  /** A stand-in for the audio element that counts what the audio Commands tell it. */
+  const fakeAudio = (refusal?: Error) => ({
+    src: "",
+    currentTime: 0,
+    defaultPlaybackRate: 1,
+    playbackRate: 1,
+    paused: true,
+    playCalls: 0,
+    pauseCalls: 0,
+    async play() {
+      this.playCalls += 1
+      if (refusal) throw refusal
+      this.paused = false
+    },
+    pause() {
+      this.pauseCalls += 1
+      this.paused = true
+    },
+  })
+  /** Runs the audio Commands of one `update` on `audio`, and gives the Messages they answer with. */
+  const runAudio = async (commands: ReturnType<typeof update>["commands"], audio: ReturnType<typeof fakeAudio>) => {
+    const names: ReadonlyArray<string> = [LoadChapter.name, PlayAudio.name, PauseAudio.name, SeekAudio.name, StopAudio.name]
+    const answers: Array<Message> = []
+    for (const command of (commands ?? []).filter((item) => names.includes(item.name))) {
+      const effect = command.effect as Effect.Effect<Message, never, AudioPlayer>
+      answers.push(await Effect.runPromise(Effect.provideService(effect, AudioPlayer, audio as unknown as HTMLAudioElement)))
+    }
+    return answers
+  }
+
+  test("play reads the latest saved progress from storage, not the one read at boot", () => {
     // Another tab paused at 30 s after this tab booted with 5 s.
-    savePositionInStorage(30_000)
+    storeProgress(30_000, "2026-11-23T11:00:00.000Z")
     story(
       updateKeepingReads,
-      given(withEpisodes(baseModel({ [harbourDays.id]: 5_000 }), [harbourDays])),
+      given(withEpisodes(baseModel({ [harbourDays.id]: progressAt(5_000) }), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       model((next) => expect(next.playback).toEqual(Playback.Stopped())),
-      Command.expectExact(ReadSavedPosition),
+      Command.expectExact(ReadStoredProgress),
       readStorage,
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
       }),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
   })
 
-  test("with no position in storage, play starts at 0, even after this session saved one", () => {
+  test("with no progress in storage or on the server, play starts at 0, even after this session saved one", () => {
     // The user cleared site data while Fama was open.
     story(
       updateKeepingReads,
-      given(withEpisodes(baseModel({ [harbourDays.id]: 30_000 }), [harbourDays])),
+      given(withEpisodes(baseModel({ [harbourDays.id]: progressAt(30_000) }), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+        expect(next.localProgress[harbourDays.id]).toBeUndefined()
       }),
+      Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
   })
 
-  test("with storage unreadable, play falls back to the position saved in this session", () => {
-    savePositionInStorage(5_000)
+  test("play takes the newer of storage and the server", () => {
+    storeProgress(10_000, "2026-11-23T09:00:00.000Z")
+    const synced = { ...harbourDays, progress: progressAt(20_000, "2026-11-23T10:00:00.000Z") }
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [synced])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(20_000)),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+    storeProgress(25_000, "2026-11-23T11:00:00.000Z")
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [synced])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(25_000)),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("with storage unreadable, play falls back to the progress this tab knows", () => {
+    storeProgress(5_000)
     const blocked = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
       throw new DOMException("Storage is blocked", "SecurityError")
     })
     try {
       story(
         updateKeepingReads,
-        given(withEpisodes(baseModel({ [harbourDays.id]: 30_000 }), [harbourDays])),
+        given(withEpisodes(baseModel({ [harbourDays.id]: progressAt(30_000) }), [harbourDays])),
         message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
         readStorage,
         model((next) => {
@@ -537,80 +630,86 @@ describe("player", () => {
     }
   })
 
-  test("play resumes at the saved position, across chapters", () => {
-    savePositionInStorage(30_000)
-    story(
-      updateKeepingReads,
-      given(withEpisodes(baseModel(), [harbourDays])),
-      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readStorage,
-      model((next) => {
-        expect(next.playback).toEqual(
-          Playback.Loaded({
-            episodeId: harbourDays.id,
-            chapter: 1,
-            offsetMs: 30_000 - 26_825,
-            isPlaying: true,
-            isWaiting: false,
-            isEnded: false,
-          }),
-        )
-      }),
-      Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
-    )
-  })
-
   test("a finished episode starts from the top", () => {
-    savePositionInStorage(45_000)
+    storeProgress(45_000)
     story(
       updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+    // Finished on another device: the server holds the total length.
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [{ ...harbourDays, progress: progressAt(46_525) }])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+      }),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("the end of the last chapter stores the total length, not 0, and the next Play starts at 0", () => {
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.EndedChapter()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
+      message(Message.EndedChapter()),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
+      saved(46_525),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]?.positionMs).toBe(46_525)
+        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+      }),
+      message(Message.ClickedPlayPause()),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+      }),
+      Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
     )
   })
 
   test("dragging the paused slider fully right reaches the very end, so the next Play starts from the top", () => {
-    const paused = {
-      ...withEpisodes(baseModel(), [harbourDays]),
-      playback: Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 1_000,
-        isPlaying: false,
-        isWaiting: false,
-        isEnded: false,
-      }),
-    }
+    const paused = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
+    )
     // The range input steps in whole seconds, so its full right for 46,525 ms is the extra stop at 47,000.
-    const released = update(paused, Message.CommittedScrub({ value: "47000" })).model
-    expect(released.playback).toEqual(
+    const released = update(paused, Message.CommittedScrub({ value: "47000" }))
+    expect(released.model.playback).toEqual(
       Playback.Loaded({
         episodeId: harbourDays.id,
         chapter: 1,
         offsetMs: 19_700,
         isPlaying: false,
         isWaiting: false,
-        isEnded: true,
       }),
     )
+    expect(released.commands?.map((command) => [command.name, command.args])).toContainEqual([
+      SaveProgress.name,
+      { episodeId: harbourDays.id, positionMs: 46_525 },
+    ])
   })
 
-  test("the slider's last whole second before the end stays a normal stop", () => {
-    const paused = {
-      ...withEpisodes(baseModel(), [harbourDays]),
-      playback: Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 1_000,
-        isPlaying: false,
-        isWaiting: false,
-        isEnded: false,
-      }),
-    }
+  test("the slider's last whole second before the end stays a stop of its own", () => {
+    const paused = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
+    )
     const released = update(paused, Message.CommittedScrub({ value: "46000" })).model
     expect(released.playback).toEqual(
       Playback.Loaded({
@@ -619,38 +718,30 @@ describe("player", () => {
         offsetMs: 46_000 - 26_825,
         isPlaying: false,
         isWaiting: false,
-        isEnded: false,
       }),
     )
   })
 
   test("Pause on A while Play on B still reads storage: B's late read does not start B", () => {
     const tideTables = { ...harbourDays, id: "tide-tables" as EpisodeId, title: "Tide Tables" }
-    const playingA = {
-      ...withEpisodes(baseModel(), [harbourDays, tideTables]),
-      playback: Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 1_000,
-        isPlaying: true,
-        isWaiting: false,
-        isEnded: false,
-      }),
-    }
+    const playingA = withPlayback(
+      withEpisodes(baseModel(), [harbourDays, tideTables]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 1_000, isPlaying: true, isWaiting: false }),
+    )
     // Play on B. Its storage read is still running when the user clicks Pause on A.
     const clickedB = update(playingA, Message.ClickedPlayEpisode({ episodeId: tideTables.id }))
-    const readB = clickedB.commands?.find((command) => command.name === ReadSavedPosition.name) as
-      | ReturnType<typeof ReadSavedPosition>
+    const readB = clickedB.commands?.find((command) => command.name === ReadStoredProgress.name) as
+      | ReturnType<typeof ReadStoredProgress>
       | undefined
-    if (!readB) throw new Error("Play on B issued no ReadSavedPosition")
+    if (!readB) throw new Error("Play on B issued no ReadStoredProgress")
     story(
       update,
       given(clickedB.model),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      Command.expectExact(ToggleAudio),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      Command.expectExact(PauseAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 1_000 })),
+      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
+      saved(1_000),
       message(Message.PausedAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
       // B's read returns now, late.
       message(Effect.runSync(readB.effect)),
       model((next) => {
@@ -661,7 +752,7 @@ describe("player", () => {
     )
   })
 
-  test("the end of a chapter waits for the next one, then plays it when it renders", () => {
+  test("the end of a chapter while the job runs waits for the next one, saves nothing, then plays it", () => {
     story(
       updateKeepingReads,
       given(withEpisodes(baseModel(), [runningHarbourDays])),
@@ -670,8 +761,9 @@ describe("player", () => {
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
+      // The end of the audio made so far is not the end of the episode.
       Command.expectNone(),
-      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [harbourDays] })),
+      message(Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [harbourDays] })),
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(false)
@@ -681,38 +773,45 @@ describe("player", () => {
     )
   })
 
-  test("a skip inside the chapter seeks and saves the position", () => {
-    story(
-      updateKeepingReads,
-      given(withEpisodes(baseModel(), [harbourDays])),
-      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
-      message(Message.ClickedSkip({ deltaMs: 15_000 })),
-      Command.expectExact(SeekAudio, SavePosition),
-      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
-      model((next) => expect(next.savedPositions[harbourDays.id]).toBe(15_000)),
+  test("the last chapter ends while the job still encodes the book: the finish is saved when the job is Ready", () => {
+    const encoding = {
+      ...harbourDays,
+      durationMs: null,
+      bookUrl: null,
+      job: { ...runningHarbourDays.job, stage: "encoding" as const },
+    }
+    const playing = withPlayback(
+      withEpisodes(baseModel({ [harbourDays.id]: progressAt(42_500) }), [encoding]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 1, offsetMs: 19_700, isPlaying: true, isWaiting: false }),
     )
-  })
-
-  test("after the end, Forward 30 seconds keeps the episode ended, so Play starts from the top", () => {
     story(
-      updateKeepingReads,
-      given(withEpisodes(baseModel(), [harbourDays])),
-      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      update,
+      given(playing),
       message(Message.EndedChapter()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
-      message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
-      message(Message.EndedChapter()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
-      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(true)),
-      message(Message.ClickedSkip({ deltaMs: 30_000 })),
-      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
-      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(true)),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
+      Command.expectNone(),
+      // No chapter came after the last one played: the wait was the end of the episode.
+      message(
+        Message.SucceededFetchEpisodes({
+          generation: 0,
+          request: 1,
+          episodes: [{ ...harbourDays, progress: progressAt(42_500) }],
+        }),
+      ),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
+      saved(46_525),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]?.positionMs).toBe(46_525)
+        expect(next.playback).toEqual(
+          Playback.Loaded({
+            episodeId: harbourDays.id,
+            chapter: 1,
+            offsetMs: 19_700,
+            isPlaying: false,
+            isWaiting: false,
+          }),
+        )
+      }),
       message(Message.ClickedPlayPause()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.expectExact(LoadChapter),
@@ -720,7 +819,71 @@ describe("player", () => {
     )
   })
 
-  test("a seek back from the end leaves the ended state, so Play resumes there", () => {
+  test("a skip inside the chapter seeks, then saves and sends the position", () => {
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.ClickedSkip({ deltaMs: 15_000 })),
+      Command.expectExact(SeekAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 15_000 })),
+      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(15_000, T) })),
+      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: progressAt(15_000, T) })),
+      Command.resolve(
+        PushProgress,
+        Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: progressAt(15_000, T), stored: progressAt(15_000, T) }),
+      ),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]).toEqual(progressAt(15_000, T))
+        expect(Option.getOrThrow(next.maybeEpisodes)[0]!.progress).toEqual(progressAt(15_000, T))
+      }),
+      Command.expectNone(),
+    )
+  })
+
+  test("while playing, a save goes out about every 5 s, not on every time update", () => {
+    const playing = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 0, isPlaying: true, isWaiting: false }),
+    )
+    story(
+      update,
+      given(playing),
+      message(Message.UpdatedAudioTime({ offsetMs: 5_000, atMs: 5_000 })),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 5_000 })),
+      saved(5_000),
+      message(Message.UpdatedAudioTime({ offsetMs: 6_000, atMs: 6_000 })),
+      message(Message.UpdatedAudioTime({ offsetMs: 9_000, atMs: 9_000 })),
+      Command.expectNone(),
+      message(Message.UpdatedAudioTime({ offsetMs: 10_100, atMs: 10_100 })),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 10_100 })),
+      saved(10_100),
+    )
+  })
+
+  test("a pause or a hidden page with nothing new stamps and sends nothing", () => {
+    const at12s = Playback.Loaded({
+      episodeId: harbourDays.id,
+      chapter: 0,
+      offsetMs: 12_000,
+      isPlaying: false,
+      isWaiting: false,
+    })
+    const paused = withPlayback(withEpisodes(baseModel({ [harbourDays.id]: progressAt(12_000) }), [harbourDays]), at12s)
+    story(update, given(paused), message(Message.HidPage()), Command.expectNone())
+    story(update, given(paused), message(Message.PausedAudio()), Command.expectNone())
+    story(
+      update,
+      given(withPlayback(paused, Playback.Loaded({ ...at12s, offsetMs: 14_000 }))),
+      message(Message.HidPage()),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 14_000 })),
+      saved(14_000),
+    )
+  })
+
+  test("after the end, Forward 30 seconds stays at the end, so Play starts from the top", () => {
     story(
       updateKeepingReads,
       given(withEpisodes(baseModel(), [harbourDays])),
@@ -731,15 +894,682 @@ describe("player", () => {
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
       message(Message.EndedChapter()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
+      saved(46_525),
+      message(Message.ClickedSkip({ deltaMs: 30_000 })),
+      // Still at the end, where the audio rests and which the device already holds: nothing to move or to save.
+      Command.expectNone(),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(19_700)
+      }),
+      message(Message.ClickedPlayPause()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
+      Command.expectExact(LoadChapter),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("a seek back from the end leaves the end, so Play resumes there", () => {
+    story(
+      updateKeepingReads,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
+      readStorage,
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.EndedChapter()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
+      message(Message.EndedChapter()),
+      saved(46_525),
       message(Message.ClickedSkip({ deltaMs: -15_000 })),
       Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
-      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(false)),
+      saved(46_525 - 15_000),
       message(Message.ClickedPlayPause()),
-      Command.expectExact(ToggleAudio),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      Command.expectExact(PlayAudio),
+      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
     )
+  })
+
+  describe("Play while the library refreshes", () => {
+    const { id } = harbourDays
+    const old = progressAt(10_000, "2026-11-23T10:00:00.000Z")
+    /** The phone played on to 40 s and saved it after this tab last loaded the library. */
+    const phone = progressAt(40_000, "2026-11-23T10:01:00.000Z")
+    const paused = withPlayback(
+      withEpisodes(baseModel({ [id]: old }), [{ ...harbourDays, progress: old }]),
+      Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+    )
+    /** The tab came back to the foreground: its library request, number 2, is in flight. */
+    const refreshing = update(paused, Message.BecameVisible()).model
+    const answer = (progress: typeof old, request = 2) =>
+      Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [{ ...harbourDays, progress }] })
+    const unavailable = { status: 503, message: "Server unavailable" }
+    const secondChapter = (offsetMs: number, isAutoplay: boolean) =>
+      LoadChapter({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
+
+    test("Play waits for the answer, starts at the phone's newer position, and saves only from there", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // Nothing plays from the old position, so nothing can be stamped over the phone's entry.
+        Command.expectNone(),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2] }))
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+        }),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(next.localProgress[id]).toEqual(phone)
+          expect(next.playback).toEqual(
+            Playback.Loaded({
+              episodeId: id,
+              chapter: 1,
+              offsetMs: 40_000 - 26_825,
+              isPlaying: true,
+              isWaiting: false,
+            }),
+          )
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        saved(45_000),
+      )
+    })
+
+    test("a failed refresh plays from what the tab knows", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(
+          Message.FailedFetchEpisodes({
+            generation: 0,
+            request: 2,
+            failure: { status: 0, message: "Can't reach the server" },
+          }),
+        ),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(Option.isSome(next.maybeLibraryFailure)).toBe(true)
+        }),
+        Command.expectExact(PlayAudio),
+        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+      )
+    })
+
+    test("a Pause key or a seek takes the waiting Play back: the answer only moves the paused player", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.PressedMediaPause()),
+        Command.expectNone(),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        message(answer(phone)),
+        model((next) => expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)),
+        Command.expectExact(StoreProgress, secondChapter(40_000 - 26_825, false)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.ClickedSkip({ deltaMs: 5_000 })),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(SeekAudio, SaveProgress({ episodeId: id, positionMs: 15_000 })),
+        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        saved(15_000),
+      )
+    })
+
+    test("a second Play does not wait again: a slow refresh never leaves Play dead", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(Message.ClickedPlayPause()),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(PlayAudio),
+        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+      )
+    })
+
+    test("audio that starts by itself while the Play waits is not stamped, and the answer moves it to the phone's position", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // The audio element reports play though the tab sent it no command: the tab stops it, as the Play waits.
+        message(Message.StartedAudio()),
+        Command.expectExact(PauseAudio),
+        Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
+        message(Message.UpdatedAudioTime({ offsetMs: 11_000, atMs: 6_000 })),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 46_000 - 26_825, atMs: 12_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 46_000 })),
+        saved(46_000),
+      )
+    })
+
+    test("the phone saved the same position with a newer stamp: the answer starts the audio once", async () => {
+      // Review round 4, finding 1: taking the entry and releasing the Play each sent a toggle, so the audio paused.
+      const same = progressAt(10_000, phone.updatedAt)
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        message(answer(same)),
+        model((next) => {
+          expect(next.localProgress[id]).toEqual(same)
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: same }), PlayAudio),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+      )
+      // The Commands of that answer, run on an audio element: one `play`, no `pause`.
+      const held = update(refreshing, Message.ClickedPlayPause()).model
+      const audio = fakeAudio()
+      await runAudio(update(held, answer(same)).commands, audio)
+      expect([audio.playCalls, audio.pauseCalls, audio.paused]).toEqual([1, 0, false])
+    })
+
+    test("a later poll that fails does not start the Play: it waits for the request that was out at the press", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        // A poll (3) goes out while the foreground request (2) is still out, and the server refuses it.
+        message(Message.TickedPoll()),
+        Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 3 })),
+        Command.resolve(FetchEpisodes, Message.FailedFetchEpisodes({ generation: 0, request: 3, failure: unavailable })),
+        // Nothing plays from the old 10 s, so no pause can stamp it over the phone's 40 s.
+        Command.expectNone(),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [2] }))
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+          expect(next.localProgress[id]).toEqual(old)
+        }),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(answer(phone)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(next.localProgress[id]).toEqual(phone)
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        saved(45_000),
+      )
+    })
+
+    test("a later poll that brings a list starts the Play at once: its list is fresher than the awaited one", () => {
+      story(
+        update,
+        given(refreshing),
+        message(Message.ClickedPlayPause()),
+        message(Message.TickedPoll()),
+        Command.resolve(FetchEpisodes, answer(phone, 3)),
+        model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.StartedAudio()),
+        // The awaited request answers late, with the list from before the phone's save: playback stays. The tab
+        // sends the entry it took, with the phone's stamp, as it does for every list older than what it holds.
+        message(answer(old)),
+        Command.expectExact(PushProgress({ connection, episodeId: id, progress: phone })),
+        Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: id, sent: phone, stored: phone })),
+        Command.expectNone(),
+        model((next) => {
+          expect(next.localProgress[id]).toEqual(phone)
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
+        }),
+      )
+    })
+
+    test("an episode started from its row waits too, and starts at the phone's newer position", () => {
+      const listed = update(withEpisodes(baseModel({ [id]: old }), [{ ...harbourDays, progress: old }]), Message.BecameVisible())
+      story(
+        updateKeepingReads,
+        given(listed.model),
+        message(Message.ClickedPlayEpisode({ episodeId: id })),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(Playback.Stopped())),
+        message(answer(phone)),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), ReadStoredProgress),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        readStorage,
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
+        }),
+        Command.expectExact(LoadChapter),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+    describe("the waiting Play keeps the episode's id: it plays the episode as the answer lists it", () => {
+      /** The job still narrates: the tab lists one chapter. */
+      const growing = { ...runningHarbourDays, progress: old }
+      /** The answer lists the job Ready with both chapters, and the phone played the episode to the end. */
+      const finishedElsewhere = progressAt(46_525, phone.updatedAt)
+      const firstChapter = LoadChapter({ src: harbourDays.chapters[0]!.url, offsetMs: 0, rate: 1, isAutoplay: true })
+      const listedGrowing = update(withEpisodes(baseModel({ [id]: old }), [growing]), Message.BecameVisible()).model
+      const loadedGrowing = update(withEpisodes(paused, [growing]), Message.BecameVisible()).model
+      const answerWithout = Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [queuedArticle] })
+
+      test("from its row: a finished episode starts at 0, and its new chapter plays", () => {
+        story(
+          updateKeepingReads,
+          given(listedGrowing),
+          message(Message.ClickedPlayEpisode({ episodeId: id })),
+          Command.expectNone(),
+          message(answer(finishedElsewhere)),
+          Command.expectExact(StoreProgress({ episodeId: id, progress: finishedElsewhere }), ReadStoredProgress),
+          Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+          readStorage,
+          model((next) =>
+            expect(next.playback).toEqual(
+              Playback.Loaded({
+                episodeId: id,
+                chapter: 0,
+                offsetMs: 0,
+                isPlaying: true,
+                isWaiting: false,
+              }),
+            ),
+          ),
+          Command.expectExact(firstChapter),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+          // The second chapter came with the answer: the end of the first goes on to it.
+          message(Message.EndedChapter()),
+          Command.expectExact(secondChapter(0, true)),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        )
+      })
+
+      test("an episode the answer no longer lists does not play", () => {
+        story(
+          updateKeepingReads,
+          given(listedGrowing),
+          message(Message.ClickedPlayEpisode({ episodeId: id })),
+          message(answerWithout),
+          Command.expectNone(),
+          model((next) => {
+            expect(next.maybePendingPlay).toEqual(Option.none())
+            expect(next.playback).toEqual(Playback.Stopped())
+          }),
+        )
+        story(
+          update,
+          given(loadedGrowing),
+          message(Message.ClickedPlayPause()),
+          message(answerWithout),
+          model((next) => {
+            expect(next.maybePendingPlay).toEqual(Option.none())
+            expect(next.playback).toEqual(Playback.Stopped())
+          }),
+          Command.expectExact(StopAudio),
+          Command.resolve(StopAudio, Message.CompletedStopAudio()),
+        )
+      })
+    })
+  })
+
+  describe("the end of the audio made so far", () => {
+    const { id } = harbourDays
+    const old = progressAt(10_000, "2026-11-23T10:00:00.000Z")
+    /** The phone listened to the end of chapter 1 (26,825 ms) while the job still made chapter 2. */
+    const phone = progressAt(26_825, "2026-11-23T10:01:00.000Z")
+    /** The list while the job works: one chapter. */
+    const growing = { ...runningHarbourDays, progress: phone }
+    /** A later list: the job is Ready with both chapters, and the phone's entry is the same. */
+    const grown = { ...harbourDays, progress: phone }
+    const list = (episode: typeof harbourDays, request = 1) =>
+      Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [episode] })
+    const paused = withPlayback(
+      withEpisodes(baseModel({ [id]: old }), [{ ...runningHarbourDays, progress: old }]),
+      Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+    )
+    const chapter = (index: number, offsetMs: number, isAutoplay: boolean) =>
+      LoadChapter({ src: harbourDays.chapters[index]!.url, offsetMs, rate: 1, isAutoplay })
+    const atEndOfChapterOne = (isWaiting: boolean) =>
+      Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_825, isPlaying: false, isWaiting })
+    const inChapterTwo = Playback.Loaded({ episodeId: id, chapter: 1, offsetMs: 0, isPlaying: true, isWaiting: false })
+    /** Five seconds of chapter 2 play: the save that goes out is after the phone's 26,825, in chapter 2. */
+    const fiveSecondsOn = steps(
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      message(Message.StartedAudio()),
+      message(Message.UpdatedAudioTime({ offsetMs: 5_000, atMs: 6_000 })),
+      Command.expectExact(SaveProgress({ episodeId: id, positionMs: 31_825 })),
+      saved(31_825),
+    )
+
+    test("two refreshes with a growing list and a held Play: the Play goes on in chapter 2, not at 0:00", () => {
+      // A poll (2) and the foreground request (3) are out when the listener presses Play.
+      const polling = update(update(paused, Message.TickedPoll()).model, Message.BecameVisible()).model
+      story(
+        update,
+        given(polling),
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        // The first answer lists one chapter: the phone's position is the end of the audio made so far.
+        message(list(growing, 2)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [3] }))
+          expect(next.playback).toEqual(atEndOfChapterOne(false))
+        }),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), SeekAudio({ offsetMs: 26_825 })),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        // The second answer lists two chapters and the same position: that position is now the start of chapter 2.
+        message(list(grown, 3)),
+        model((next) => {
+          expect(next.maybePendingPlay).toEqual(Option.none())
+          expect(next.playback).toEqual(inChapterTwo)
+        }),
+        Command.expectExact(chapter(1, 0, true)),
+        fiveSecondsOn,
+      )
+    })
+
+    test("Play at the end of the audio of a job that still works waits, saves nothing, and goes on in chapter 2", () => {
+      story(
+        update,
+        given(paused),
+        message(list(growing)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        message(Message.ClickedPlayPause()),
+        // No audio starts at 0:00, so no save can replace the phone's 26,825.
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        // A poll still lists one chapter: the wait goes on.
+        message(list(growing)),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        message(list(grown)),
+        model((next) => expect(next.playback).toEqual(inChapterTwo)),
+        Command.expectExact(chapter(1, 0, true)),
+        fiveSecondsOn,
+      )
+    })
+
+    test("from the row, while the list still has one chapter: the Play waits, then goes on in chapter 2", () => {
+      story(
+        updateKeepingReads,
+        given(withEpisodes(baseModel({ [id]: phone }), [growing])),
+        message(Message.ClickedPlayEpisode({ episodeId: id })),
+        readStorage,
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        Command.expectExact(chapter(0, 26_825, false)),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(list(grown)),
+        model((next) => expect(next.playback).toEqual(inChapterTwo)),
+        Command.expectExact(chapter(1, 0, true)),
+        fiveSecondsOn,
+      )
+    })
+
+    test("a wait the listener paused goes on in chapter 2 at the next Play, when it is listed by then", () => {
+      const playing = withPlayback(
+        withEpisodes(baseModel(), [runningHarbourDays]),
+        Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_000, isPlaying: true, isWaiting: false }),
+      )
+      story(
+        update,
+        given(playing),
+        // The audio file is some milliseconds shorter than the listed chapter.
+        message(Message.UpdatedAudioTime({ offsetMs: 26_810, atMs: 0 })),
+        message(Message.EndedChapter()),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        // Pause takes the wait back. The player rests at the end of chapter 1.
+        message(Message.ClickedPlayPause()),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(false))),
+        message(list(harbourDays)),
+        Command.expectNone(),
+        message(Message.ClickedPlayPause()),
+        model((next) => expect(next.playback).toEqual(inChapterTwo)),
+        Command.expectExact(chapter(1, 0, true)),
+        fiveSecondsOn,
+      )
+    })
+
+    test("one answer brings the next chapter and the phone's newer position: the waiting Play goes on at the phone's", () => {
+      // Review round 4, finding 3: the wait went on at 26,825 and stamped 31,825 over the phone's 40,000.
+      const waiting = withPlayback(
+        withEpisodes(baseModel({ [id]: phone }), [growing]),
+        Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+      )
+      const ahead = progressAt(40_000, "2026-11-23T10:02:00.000Z")
+      story(
+        update,
+        given(waiting),
+        message(list({ ...harbourDays, progress: ahead })),
+        model((next) => {
+          expect(next.localProgress[id]).toEqual(ahead)
+          expect(next.playback).toEqual(
+            Playback.Loaded({ episodeId: id, chapter: 1, offsetMs: 40_000 - 26_825, isPlaying: true, isWaiting: false }),
+          )
+        }),
+        // One audio Command. Nothing is stamped: the player took the phone's entry.
+        Command.expectExact(StoreProgress({ episodeId: id, progress: ahead }), chapter(1, 40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        message(Message.StartedAudio()),
+        message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 6_000 })),
+        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        saved(45_000),
+      )
+    })
+
+    test("keeps the phone's position when the listener leaves an episode that waits for its next chapter", () => {
+      const ahead = progressAt(40_000, "2026-11-23T10:02:00.000Z")
+      const otherChapter = { ...harbourDays.chapters[0]!, url: "/media/t/episodes/other/chapters/000.m4a" }
+      const other = { ...harbourDays, id: queuedArticle.id, chapters: [otherChapter] }
+      story(
+        update,
+        given(withEpisodes(baseModel(), [{ ...growing, progress: ahead }, other])),
+        message(Message.ClickedPlayEpisode({ episodeId: id })),
+        Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: id, intent: 1, stored: { _tag: "NotSaved" } })),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: ahead }), chapter(0, 26_825, false)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        message(Message.HidPage()),
+        Command.expectNone(),
+        message(Message.ClickedPlayEpisode({ episodeId: other.id })),
+        Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: other.id, intent: 2, stored: { _tag: "NotSaved" } })),
+        Command.expectExact(LoadChapter({ src: otherChapter.url, offsetMs: 0, rate: 1, isAutoplay: true })),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        model((next) => expect(next.localProgress[id]).toEqual(ahead)),
+      )
+    })
+
+    test("a Play that waits for a chapter takes a finished entry of a job that is Ready now: it starts at 0:00", () => {
+      const waiting = withPlayback(
+        withEpisodes(baseModel({ [id]: phone }), [growing]),
+        Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+      )
+      const finished = progressAt(46_525, "2026-11-23T10:02:00.000Z")
+      story(
+        update,
+        given(waiting),
+        message(list({ ...harbourDays, progress: finished })),
+        Command.expectExact(StoreProgress({ episodeId: id, progress: finished }), chapter(0, 0, true)),
+        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+    test("a seek back while the Play waits for a chapter plays from there, in the same chapter too", () => {
+      const waiting = withPlayback(
+        withEpisodes(baseModel({ [id]: phone }), [growing]),
+        Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+      )
+      story(
+        update,
+        given(waiting),
+        message(Message.ClickedSkip({ deltaMs: -15_000 })),
+        model((next) =>
+          expect(next.playback).toEqual(
+            Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 11_825, isPlaying: true, isWaiting: false }),
+          ),
+        ),
+        Command.expectExact(chapter(0, 11_825, true), SaveProgress({ episodeId: id, positionMs: 11_825 })),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        saved(11_825),
+      )
+    })
+
+    test("the Pause key takes a wait for a chapter back, and the Play key leaves it", () => {
+      const waiting = withPlayback(
+        withEpisodes(baseModel({ [id]: phone }), [growing]),
+        Playback.Loaded({ episodeId: id, chapter: 0, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+      )
+      story(
+        update,
+        given(waiting),
+        message(Message.PressedMediaPlay()),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
+        message(Message.PressedMediaPause()),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(false))),
+        // The next chapter does not start a Play the listener took back.
+        message(list(grown)),
+        model((next) => expect(next.playback).toEqual(atEndOfChapterOne(false))),
+        Command.expectNone(),
+      )
+    })
+
+    test("the slider at the very end while the job still works: Play waits, and the Ready job makes it the end", () => {
+      const encoding = {
+        ...harbourDays,
+        durationMs: null,
+        bookUrl: null,
+        job: { ...runningHarbourDays.job, stage: "encoding" as const },
+      }
+      const atEnd = (isWaiting: boolean) =>
+        Playback.Loaded({ episodeId: id, chapter: 1, offsetMs: 19_700, isPlaying: false, isWaiting })
+      story(
+        update,
+        given({ ...paused, maybeEpisodes: Option.some([encoding]) }),
+        message(Message.CommittedScrub({ value: "47000" })),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        saved(46_525),
+        message(Message.ClickedPlayPause()),
+        // The job may still make audio: the Play does not start at 0:00.
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEnd(true))),
+        // The job is Ready with no audio after that place: the wait was the end. The device holds it already.
+        message(list({ ...harbourDays, progress: progressAt(46_525, T) })),
+        Command.expectNone(),
+        model((next) => expect(next.playback).toEqual(atEnd(false))),
+        // Now the position is finished: the next Play starts at 0:00.
+        message(Message.ClickedPlayPause()),
+        Command.expectExact(chapter(0, 0, true)),
+        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      )
+    })
+
+  })
+
+  describe("the audio Commands", () => {
+    const paused = withPlayback(
+      withEpisodes(baseModel({ [harbourDays.id]: progressAt(10_000) }), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+    )
+
+    test("are absolute: a repeated Play or Pause changes nothing", async () => {
+      const audio = fakeAudio()
+      const play = update(paused, Message.ClickedPlayPause())
+      expect(play.commands?.map((command) => command.name)).toEqual([PlayAudio.name])
+      await runAudio(play.commands, audio)
+      await runAudio(play.commands, audio)
+      expect(audio.paused).toBe(false)
+      const pause = update(play.model, Message.ClickedPlayPause())
+      expect(pause.commands?.map((command) => command.name)).toEqual([PauseAudio.name])
+      await runAudio(pause.commands, audio)
+      await runAudio(pause.commands, audio)
+      expect(audio.paused).toBe(true)
+    })
+
+    test("a browser that refuses to play takes the Play back; a play that a later Command stopped does not", async () => {
+      const refused = fakeAudio(new DOMException("No user gesture", "NotAllowedError"))
+      const play = update(paused, Message.ClickedPlayPause())
+      const [failed] = await runAudio(play.commands, refused)
+      expect(failed).toEqual(Message.FailedPlayAudio())
+      story(
+        update,
+        given(play.model),
+        message(Message.FailedPlayAudio()),
+        model((next) => {
+          expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+          expect(Option.exists(next.maybeListening, (listening) => listening.wantsPlay)).toBe(false)
+        }),
+        Command.expectNone(),
+      )
+      // A new load or a pause stops the old `play()` with an AbortError: the later Command says what the audio does.
+      const stopped = fakeAudio(new DOMException("Interrupted by a new load", "AbortError"))
+      expect(await runAudio(play.commands, stopped)).toEqual([Message.CompletedPlayAudio()])
+    })
+
+    test("a save that is being stamped is where the device is: a list that lands before the stamp moves nothing", () => {
+      const phone = progressAt(40_000, "2026-11-23T11:00:00.000Z")
+      const mine = progressAt(15_000, T)
+      // A Story sends no Message while a Command is out. This one must: the list lands before the stamp does.
+      const sought = update(paused, Message.ClickedSkip({ deltaMs: 5_000 }))
+      expect(sought.commands?.map((command) => command.name)).toEqual([SaveProgress.name, SeekAudio.name])
+      expect(sought.model.stamping).toEqual({ [harbourDays.id]: 15_000 })
+      const listed = update(
+        sought.model,
+        Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [{ ...harbourDays, progress: phone }] }),
+      )
+      // The phone's entry is older than the stamp that is on its way: it is not taken, and the player stays.
+      expect(listed.commands ?? []).toEqual([])
+      expect(listed.model.localProgress[harbourDays.id]).toEqual(progressAt(10_000))
+      expect(listed.model.playback._tag === "Loaded" && listed.model.playback.offsetMs).toBe(15_000)
+      story(
+        update,
+        given(listed.model),
+        message(Message.SavedProgress({ episodeId: harbourDays.id, progress: mine })),
+        model((next) => {
+          expect(next.stamping).toEqual({})
+          expect(next.localProgress[harbourDays.id]).toEqual(mine)
+          expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(15_000)
+        }),
+        // The stamp is the newest entry, and it goes to the server.
+        Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: mine })),
+        Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: mine, stored: mine })),
+      )
+    })
   })
 
   test("deleting the loaded episode stops the audio", () => {
@@ -773,5 +1603,154 @@ describe("player", () => {
       Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
       Command.resolve(SetAudioRate, Message.CompletedSetAudioRate()),
     )
+  })
+})
+
+describe("progress sync", () => {
+  const tideTables = { ...harbourDays, id: "tide-tables" as EpisodeId, title: "Tide Tables" }
+  const older = progressAt(10_000, "2026-11-23T09:00:00.000Z")
+  const newer = progressAt(40_000, "2026-11-23T11:00:00.000Z")
+  const loaded = (list: ReadonlyArray<typeof harbourDays>) =>
+    Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: list })
+
+  test("a library load sends each local entry newer than the server's and takes each newer server entry", () => {
+    story(
+      update,
+      given(withEpisodes(baseModel({ [harbourDays.id]: newer, [tideTables.id]: older }), [])),
+      message(loaded([{ ...harbourDays, progress: older }, { ...tideTables, progress: newer }])),
+      Command.expectExact(
+        PushProgress({ connection, episodeId: harbourDays.id, progress: newer }),
+        StoreProgress({ episodeId: tideTables.id, progress: newer }),
+      ),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]).toEqual(newer)
+        expect(next.localProgress[tideTables.id]).toEqual(newer)
+      }),
+      Command.resolve(
+        PushProgress,
+        Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: newer, stored: newer }),
+      ),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.expectNone(),
+    )
+  })
+
+  test("listening done offline goes out on the first library load after a reload", () => {
+    // Boot read an entry the server never got: the push failed while offline.
+    story(
+      update,
+      given(withEpisodes(baseModel({ [harbourDays.id]: newer }), [])),
+      message(loaded([harbourDays])),
+      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: newer })),
+      Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
+      // Still newer than the server's, so the next load sends it again.
+      message(loaded([harbourDays])),
+      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: newer })),
+      Command.resolve(
+        PushProgress,
+        Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: newer, stored: newer }),
+      ),
+      message(loaded([{ ...harbourDays, progress: newer }])),
+      Command.expectNone(),
+    )
+  })
+
+  test("a passive load stamps and sends nothing", () => {
+    // Boot, then the first library load: the device and the server agree.
+    story(
+      update,
+      given(withEpisodes(baseModel({ [harbourDays.id]: older }), [])),
+      message(loaded([{ ...harbourDays, progress: older }, queuedArticle])),
+      Command.expectNone(),
+    )
+    // A fresh device: it only takes the server's entry, with the server's stamp.
+    story(
+      update,
+      given(baseModel()),
+      message(loaded([{ ...harbourDays, progress: older }])),
+      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: older })),
+      model((next) => expect(next.localProgress[harbourDays.id]).toEqual(older)),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+    )
+  })
+
+  test("the device takes the server's answer to a push, a clamped stamp included, and does not send it again", () => {
+    const sent = progressAt(20_000, "2026-11-23T13:00:00.000Z") // The device clock runs an hour fast.
+    const clamped = progressAt(20_000, "2026-11-23T12:00:00.000Z")
+    story(
+      update,
+      given(withEpisodes(baseModel(), [harbourDays])),
+      message(Message.SavedProgress({ episodeId: harbourDays.id, progress: sent })),
+      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: sent })),
+      Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: harbourDays.id, sent, stored: clamped })),
+      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: clamped })),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      model((next) => expect(next.localProgress[harbourDays.id]).toEqual(clamped)),
+      message(loaded([{ ...harbourDays, progress: clamped }])),
+      Command.expectNone(),
+    )
+  })
+
+  test("an answer to an older push does not replace a newer save", () => {
+    const first = progressAt(20_000, "2026-11-23T12:00:00.000Z")
+    const second = progressAt(25_000, "2026-11-23T12:00:05.000Z")
+    story(
+      update,
+      given(withEpisodes(baseModel({ [harbourDays.id]: second }), [harbourDays])),
+      message(Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: first, stored: first })),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]).toEqual(second)
+        expect(Option.getOrThrow(next.maybeEpisodes)[0]!.progress).toEqual(first)
+      }),
+      Command.expectNone(),
+    )
+  })
+
+  test("a newer server entry moves a loaded, paused episode there, without a save", () => {
+    const paused = withPlayback(
+      withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+    )
+    story(
+      update,
+      given(paused),
+      message(loaded([{ ...harbourDays, progress: newer }])),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
+        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
+      }),
+      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: newer }), LoadChapter),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      // The tab hides: the device already holds that position, so nothing goes out.
+      message(Message.HidPage()),
+      Command.expectNone(),
+    )
+  })
+
+  test("a newer server entry leaves a playing episode where it is", () => {
+    const playing = withPlayback(
+      withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 12_000, isPlaying: true, isWaiting: false }),
+    )
+    story(
+      update,
+      given(playing),
+      message(loaded([{ ...harbourDays, progress: newer }])),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(12_000)),
+      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: newer })),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+    )
+  })
+
+  test("a save stamps the device clock and stores whole milliseconds under fama.progress.<id>", () => {
+    const result = Effect.runSync(SaveProgress({ episodeId: harbourDays.id, positionMs: 1234.6 }).effect)
+    expect(result._tag).toBe("SavedProgress")
+    if (result._tag !== "SavedProgress") return
+    expect(result.progress.positionMs).toBe(1235)
+    expect(Math.abs(Date.parse(result.progress.updatedAt) - Date.now())).toBeLessThan(1000)
+    expect(JSON.parse(localStorage.getItem(`fama.progress.${harbourDays.id}`) ?? "null")).toEqual(result.progress)
+    localStorage.clear()
   })
 })

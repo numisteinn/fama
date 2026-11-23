@@ -1,4 +1,4 @@
-import { Episode, EpisodeId, type JobState, Voice, VoiceRef } from "@fama/contracts"
+import { Episode, EpisodeId, EpisodeProgress, type JobState, Voice, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Schema } from "effect"
 import { File } from "foldkit"
@@ -16,8 +16,6 @@ export const SPEEDS = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.5] as const
 export const ACCEPT = ".pdf,.epub,.txt,.md,.markdown,.html,.htm"
 export const POLL_MS = 2000
 export const SAVE_EVERY_MS = 5000
-/** Closer than this to the end counts as finished, so the next start is from the top. */
-export const FINISHED_MARGIN_MS = 3000
 export const SKIP_BACK_MS = 15_000
 export const SKIP_FORWARD_MS = 30_000
 export const DISARM_DELETE_MS = 3000
@@ -49,15 +47,25 @@ export const Picker = defineTaggedUnion({
 export type Picker = typeof Picker.Type
 
 /**
- * What storage holds for an episode's position when it starts. `NotSaved` starts at 0, as after the
- * user cleared site data. Only `Unreadable` storage falls back to the position this session saved.
+ * What storage holds for an episode's progress when it starts. `NotSaved` has no local entry, as after the
+ * user cleared site data: the server's progress decides. Only `Unreadable` storage falls back to the entry
+ * this tab knows.
  */
-export const StoredPosition = defineTaggedUnion({
-  Saved: { positionMs: Schema.Number },
+export const StoredProgress = defineTaggedUnion({
+  Saved: { progress: EpisodeProgress },
   NotSaved: {},
   Unreadable: {},
 })
-export type StoredPosition = typeof StoredPosition.Type
+export type StoredProgress = typeof StoredProgress.Type
+
+/**
+ * A Play pressed while library requests were in flight. `awaiting` holds the numbers of those requests that have
+ * not answered yet. It starts by the `awaitedAfter` rule of the contract, so it plays from the newer of this
+ * device's and the server's progress, and not from a position another device left. It holds the episode's id and
+ * no Episode: the episode it plays is the one the library lists when it starts.
+ */
+export const PendingPlay = Schema.Struct({ episodeId: EpisodeId, awaiting: Schema.Array(Schema.Number) })
+export type PendingPlay = typeof PendingPlay.Type
 
 /** The private podcast feed URL in Settings. */
 export const Feed = defineTaggedUnion({
@@ -68,8 +76,12 @@ export const Feed = defineTaggedUnion({
 export type Feed = typeof Feed.Type
 
 /**
- * The loaded episode. An episode plays as one timeline of its chapter files in order.
- * `offsetMs` is the position inside the current chapter file.
+ * A fact: what the audio element has. An episode plays as one timeline of its chapter files in order. `chapter` is
+ * the file the element was told to load, and `offsetMs` the position inside it. Only `reconcile` in `update.ts`
+ * tells the element anything, and it writes here what it told. The element's own events correct it.
+ *
+ * It holds no "ended" state. Whether the position is the end of the episode depends on the chapters and the job
+ * the library lists, and those change. `playStart` of the contract decides it when a Play acts.
  */
 export const Playback = defineTaggedUnion({
   Stopped: {},
@@ -77,15 +89,34 @@ export const Playback = defineTaggedUnion({
     episodeId: EpisodeId,
     chapter: Schema.Number,
     offsetMs: Schema.Number,
+    /** The element plays: it was told to, or it said so. */
     isPlaying: Schema.Boolean,
-    /** The current chapter ended and the next one is still rendering. */
+    /** A Play is on at the end of the chapters made so far: it goes on when the next chapter is listed. */
     isWaiting: Schema.Boolean,
-    /** The last chapter played to its end. */
-    isEnded: Schema.Boolean,
   },
 })
 export type Playback = typeof Playback.Type
 export type LoadedPlayback = Extract<Playback, { _tag: "Loaded" }>
+
+/**
+ * Intent: what the listener asked for last, for the episode they listen to. The message handlers of `update.ts`
+ * write it and send no audio Command. `reconcile` reads it, with the facts, and decides what the audio does.
+ */
+export const Listening = Schema.Struct({
+  episodeId: EpisodeId,
+  /** Play or Pause was the last ask that acted. A Play that waits for the library has not acted: `maybePendingPlay`. */
+  wantsPlay: Schema.Boolean,
+  /** The Play has no place yet. `reconcile` places it by `playStart` of the contract, once. */
+  isPlayDue: Schema.Boolean,
+  /** A place on the episode timeline the listener asked for. `reconcile` moves the audio there and saves it, once. */
+  maybeSeekMs: Schema.Option(Schema.Number),
+  /**
+   * The `updatedAt` of the device's entry that the player's place already follows. A device entry with another
+   * stamp is news from another device: a player whose audio does not play moves there.
+   */
+  maybeFollowedAt: Schema.Option(Schema.String),
+})
+export type Listening = typeof Listening.Type
 
 export const Model = Schema.Struct({
   connection: Connection,
@@ -94,6 +125,10 @@ export const Model = Schema.Struct({
    * responses carry the generation they were fetched for; a response from an older one is dropped.
    */
   connectionGeneration: Schema.Number,
+  /** Counts library requests. Each request carries its number, and its answer brings the number back. */
+  libraryRequests: Schema.Number,
+  /** The numbers of the library requests sent and not answered yet. */
+  libraryRequestsInFlight: Schema.Array(Schema.Number),
   /** `None` until the first load finishes. */
   maybeEpisodes: Schema.Option(Schema.Array(Episode)),
   maybeLibraryFailure: Schema.Option(ApiFailure),
@@ -127,18 +162,31 @@ export const Model = Schema.Struct({
   /** Counts the copies that showed Copied. A reset timer clears Copied only for its own copy. */
   feedUrlCopies: Schema.Number,
 
+  /** Fact: what the audio element has. */
   playback: Playback,
+  /** Intent: the episode the listener plays or paused. `None`: nothing is loaded. */
+  maybeListening: Schema.Option(Listening),
   /**
    * Counts the user's playback actions: Play, Pause, skip, seek, chapter. A start reads storage first;
    * its result plays only if no later action came, so it is still the latest intent.
    */
   playIntents: Schema.Number,
+  /** Intent: `Some` while a Play waits for the library. The next playback action of the user replaces it. */
+  maybePendingPlay: Schema.Option(PendingPlay),
   rate: Schema.Number,
   /**
-   * Position on the whole timeline, by episode id, as this tab saved it to `fama.position.<id>`.
-   * A start reads storage itself; this is the fallback only when storage cannot be read.
+   * Fact: the device's progress by episode id, as this tab knows it: read from `fama.progress.<id>` at boot, then
+   * each save of this tab and each server entry it adopted. Library loads merge it with the server's; a start
+   * reads storage itself and falls back to this only when storage cannot be read.
    */
-  savedPositions: Schema.Record(Schema.String, Schema.Number),
+  localProgress: Schema.Record(Schema.String, EpisodeProgress),
+  /**
+   * Fact: positions a `SaveProgress` Command stamps now, by episode id. The stamp will be newer than every entry
+   * the tab knows, so until it lands this is where the device holds the episode, and no server entry replaces it.
+   */
+  stamping: Schema.Record(Schema.String, Schema.Number),
+  /** The page hid, or 5 s of playback passed: `reconcile` saves the listener's place now, once. */
+  isSaveDue: Schema.Boolean,
   lastSavedAtMs: Schema.Number,
   /** Slider value while the user drags it. */
   maybeScrubMs: Schema.Option(Schema.Number),
@@ -154,7 +202,7 @@ export const Flags = Schema.Struct({
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
   rate: Schema.Number,
-  savedPositions: Schema.Record(Schema.String, Schema.Number),
+  localProgress: Schema.Record(Schema.String, EpisodeProgress),
 })
 export type Flags = typeof Flags.Type
 
@@ -170,6 +218,10 @@ export const current = (model: Model): Option.Option<{ playback: LoadedPlayback;
   const episode = episodes(model).find((item) => item.id === playback.episodeId)
   return episode ? Option.some({ playback, episode }) : Option.none()
 }
+
+/** A Play of `episodeId` waits for the library. */
+export const isPlayPending = (model: Model, episodeId: EpisodeId): boolean =>
+  Option.exists(model.maybePendingPlay, (pending) => pending.episodeId === episodeId)
 
 /** What the add bar will submit. */
 export const Draft = defineTaggedUnion({

@@ -9,6 +9,8 @@ export type LoadOptions = {
   artist: string | null
   artworkUrl: string | null
   tracks: Track[]
+  /** The job still makes chapters: the end of the tracks is a wait, not the end of the episode. */
+  expectsMore: boolean
   /** Episode seconds. */
   position: number
   rate: number
@@ -23,8 +25,10 @@ export type NativeStatus = {
   position: number
   /** Episode seconds, the sum of the known chapters. */
   duration: number
-  /** The listener wants playback. Stays true while buffering. */
+  /** The listener wants playback and the queue has audio. Stays true while buffering. */
   playing: boolean
+  /** Native playback intent, including while the queue is empty. Older dev clients omit it. */
+  wantsPlay?: boolean
   buffering: boolean
   rate: number
   /** Played past the last known chapter. */
@@ -34,7 +38,8 @@ export type NativeStatus = {
 
 declare class FamaPlayerModule extends NativeModule<{ onStatus: (status: NativeStatus) => void }> {
   load(options: LoadOptions): Promise<void>
-  updateTracks(tracks: Track[]): Promise<void>
+  /** The episode as the library lists it now: its chapters, and whether the job still makes more. */
+  updateTracks(tracks: Track[], expectsMore: boolean): Promise<void>
   play(): Promise<void>
   pause(): Promise<void>
   seek(position: number): Promise<void>

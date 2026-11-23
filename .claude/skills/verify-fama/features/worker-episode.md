@@ -1,6 +1,6 @@
 # Worker makes an episode
 
-The Mac worker pulls the oldest queued job, extracts the document, narrates it chapter by chapter, uploads each chapter as soon as it is done, then uploads the book file and marks the job Ready. The user sees the job move from `Queued` through `Reading`, `Narrating n/m`, `Encoding` and `Uploading` to a duration. When extraction fails, the row shows a plain reason and a `Retry` button. When a worker stops halfway, another worker takes the job after the lease runs out and skips the chapters that already exist.
+The Mac worker pulls the oldest queued job, extracts the document, narrates it chapter by chapter, uploads each chapter as soon as it is done, then uploads the book file and marks the job Ready. The user sees the job move from `Queued` through `Reading`, `Narrating n/m`, `Encoding` and `Uploading` to a duration. When extraction fails, the row shows a plain reason and a `Retry` button. When a worker stops halfway, another worker takes the job after the lease runs out and skips the chapters that already exist. A cloud worker that sleeps is woken by the API each time a job becomes Queued.
 
 ## Sub-features
 
@@ -12,6 +12,8 @@ The Mac worker pulls the oldest queued job, extracts the document, narrates it c
 - `job-retry` puts a failed job back to `Queued`, and the worker runs it again.
 - `job-voices` registers the worker's voices, which fill the voice menus.
 - `job-resume` lets a new worker take over a stale job after the 10-minute lease and skip finished chapters.
+- `job-wake` sends one `POST` to `WORKER_WAKE_URL` with `Authorization: Bearer <WORKER_WAKE_SECRET>` after a create, upload or retry stores a Queued job. A failed or slow wake never changes the client's response. No URL, no call.
+- `job-lease` gives each claim its own lease token. Every job call needs it, the source read included, and a call with another token gets `409`. The worker token opens only `/api/worker/*`.
 
 ## How to get to it (user POV)
 
@@ -32,12 +34,14 @@ Preconditions:
 - **Failed.** Add `http://localhost:8790/missing.html`. Run `preview_wait_for {text: "Retry", timeoutMs: 60000}`. The row keeps the provisional title `localhost:8790/missing.html`, shows the reason `The page returned 404 File not found.` in red (not a stack trace or an error tag; the text sits inside the disabled `Play` button, so check it with `preview_wait_for {text: ...}`, not with an alert or a name), and has buttons `Retry` and `Delete localhost:8790/missing.html`. `fama-verify wait <id>` starts with `Failed` and has the same reason.
 - **Retry.** Choose `Retry`. The row goes back to `Queued`, then fails again with the same reason. `fama-verify api GET /api/episodes/<id>` shows a new `failedAt`.
 - **Voice menu.** On the web, choose `Voice: Auto`. The menu lists the registered voices. On the iPhone, `$AD press 'label="Voice, Auto"'` lists the same voices.
+- **Wake.** Start a sink that logs requests: `python3 -m http.server 8791 --bind 127.0.0.1 >"$EVIDENCE/worker/wake-sink.log" 2>&1 &` (it answers `POST` with `501`, which is fine). Run `FAMA_VERIFY_WAKE_URL=http://127.0.0.1:8791/wake fama-verify up --no-worker`. Add a link on the web. The sink log has one `"POST /wake HTTP/1.1" 501` line, the add bar shows no error, and `$TMPDIR/fama-verify/api.log` has `worker wake answered 501`. Stop the sink and add another link: the row still appears, and `api.log` has `worker wake failed`. The secret header is proven by the API tests (`worker wake` in `apps/api/src/http.test.ts`), not here.
 - **Proof.** Save the series of status snapshots and the `wait` lines to `$EVIDENCE/worker/`. `down` copies `worker.log` to `$EVIDENCE/logs/`.
 
 ## Gotchas
 
 - The worker caches synthesized chunks in `~/.cache/fama/chunks` by text, voice and speed. A second run of the same fixture is much faster and can skip visible stages. To see every stage, change the voice or the speed.
 - The worker polls at least every 10 s when idle, so a job can stay `Queued` for up to 10 s after `fama-verify worker`.
-- `job-resume` needs a stale lease of 10 minutes (`LEASE_MS`). It is not practical in a normal run. Prove it with the API and worker tests (`pnpm --filter @fama/api test`, `cd worker && uv run pytest`) unless the run is about leases.
+- `job-resume` and `job-lease` need a second worker or a stale lease of 10 minutes (`LEASE_MS`). They are not practical in a normal run. Prove it with the API and worker tests (`pnpm --filter @fama/api test`, `cd worker && uv run pytest`) unless the run is about leases.
 - The web page asks for voices only when it loads. In a recorded run, saving the token refetched the library and the feed, but not `/api/voices`. After you save a new token, reload the tab before you check the voice menu.
+- `fama-verify up` sets no wake URL unless `FAMA_VERIFY_WAKE_URL` is set. Never point it at a real Modal app: verify-fama stays local.
 - Only one worker should be pointed at 8788. A worker from another run would take jobs and make results confusing; `doctor` shows the worker this run started.

@@ -1,10 +1,19 @@
 import { Schema } from "effect"
 
+export * from "./connect.ts"
+
 export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
 export type EpisodeId = typeof EpisodeId.Type
 
 export const WorkerId = Schema.String.pipe(Schema.brand("WorkerId"))
 export type WorkerId = typeof WorkerId.Type
+
+export const UserId = Schema.String.pipe(Schema.brand("UserId"))
+export type UserId = typeof UserId.Type
+
+/** The secret `claim` hands out for one attempt at a job. Every job route needs it. */
+export const LeaseToken = Schema.String.pipe(Schema.brand("LeaseToken"))
+export type LeaseToken = typeof LeaseToken.Type
 
 /** `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. */
 export const VoiceRef = Schema.String.pipe(Schema.brand("VoiceRef"))
@@ -57,6 +66,93 @@ export const Chapter = Schema.Struct({
 })
 export interface Chapter extends Schema.Schema.Type<typeof Chapter> {}
 
+/** A whole number of milliseconds, 0 or more. */
+const Millis = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+
+/** An ISO 8601 time that `Date.parse` reads. */
+const Instant = Schema.String.pipe(
+  Schema.check(Schema.makeFilter((value: string) => Number.isFinite(Date.parse(value)), { expected: "an ISO 8601 time" })),
+)
+
+/**
+ * Where one user is in one episode. `positionMs` is on the whole episode timeline (all chapters in order).
+ * A finished episode holds its total length. The newest `updatedAt` wins.
+ */
+export const EpisodeProgress = Schema.Struct({ positionMs: Millis, updatedAt: Instant })
+export interface EpisodeProgress extends Schema.Schema.Type<typeof EpisodeProgress> {}
+
+/** Closer than this to the end counts as finished, so the next play starts from the top. */
+export const FINISHED_MARGIN_MS = 3000
+
+/**
+ * Whether a position is the end of an episode of `totalMs`. Only for a finished job: the end of the chapters a
+ * running job has made so far is not the end of the episode.
+ */
+export const isFinished = (positionMs: number, totalMs: number): boolean =>
+  totalMs > 0 && positionMs >= totalMs - FINISHED_MARGIN_MS
+
+/**
+ * Where a Play starts: the one rule the clients share. `positionMs` is the saved position, or where a loaded player
+ * rests. `chapters` and `job` are the episode as the library lists it when the Play acts, never an earlier list:
+ * a client keeps no "ended" state of its own from a list it had before.
+ * A paused player retains the saved position; only Play applies this rule. If audio ends before a newer saved
+ * entry, retain that entry without stamping the shorter waiting position until its chapters arrive.
+ *
+ * - The job ended (Ready or Failed), so no more audio comes, and the position is finished (`isFinished`): the Play
+ *   starts at 0.
+ * - The job still works (Queued or Running) and the position is the end of the chapters made so far: the Play
+ *   waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
+ *   start, and the Play goes on there. It never starts at 0.
+ * - Otherwise the Play starts at the position.
+ */
+export const playStart = (
+  positionMs: number,
+  chapters: ReadonlyArray<{ readonly durationMs: number }>,
+  job: { readonly _tag: JobState["_tag"] },
+): { readonly positionMs: number; readonly isWaiting: boolean } => {
+  const totalMs = chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
+  if (job._tag === "Queued" || job._tag === "Running") {
+    return positionMs >= totalMs ? { positionMs: totalMs, isWaiting: true } : { positionMs, isWaiting: false }
+  }
+  return { positionMs: isFinished(positionMs, totalMs) ? 0 : positionMs, isWaiting: false }
+}
+
+/** `a` was written after `b`. */
+export const isNewerProgress = (a: EpisodeProgress, b: EpisodeProgress): boolean =>
+  Date.parse(a.updatedAt) > Date.parse(b.updatedAt)
+
+/**
+ * The client's rule for one episode, on library load: the newer entry wins. `progress` is what the client keeps
+ * (`null` when neither side has one). `isPushed` says the local entry is newer, so the client sends it. A tie keeps
+ * the server's entry and sends nothing.
+ */
+export const mergeProgress = (
+  local: EpisodeProgress | null,
+  server: EpisodeProgress | null,
+): { readonly progress: EpisodeProgress | null; readonly isPushed: boolean } => {
+  if (local === null) return { progress: server, isPushed: false }
+  if (server === null || isNewerProgress(local, server)) return { progress: local, isPushed: true }
+  return { progress: server, isPushed: false }
+}
+
+/**
+ * The held Play rule the clients share. A Play pressed while library requests are out is held, so it starts from
+ * the newer of the device's and the server's entry, and not from a position another device moved on from.
+ * `awaiting` holds the numbers of the requests that were out at the press; a client numbers its library requests
+ * upward. `request` answered, with a list (`isListed`) or without one. The result is what the Play still waits
+ * for. Empty: it starts now.
+ *
+ * It starts when the newest request it waits for brings a list, or a request sent after the press does: no other
+ * awaited answer is fresher. It also starts when each request it waits for has answered, from what the device
+ * knows then. A request sent after the press that fails says nothing about the awaited ones, so the Play stays held.
+ */
+export const awaitedAfter = (
+  awaiting: ReadonlyArray<number>,
+  request: number,
+  isListed: boolean,
+): ReadonlyArray<number> =>
+  isListed && request >= Math.max(...awaiting) ? [] : awaiting.filter((awaited) => awaited !== request)
+
 export const Episode = Schema.Struct({
   id: EpisodeId,
   createdAt: Schema.String,
@@ -71,6 +167,8 @@ export const Episode = Schema.Struct({
   bookUrl: Schema.NullOr(Schema.String),
   coverUrl: Schema.NullOr(Schema.String),
   job: JobState,
+  /** The client token user's progress, as the server stores it. */
+  progress: Schema.NullOr(EpisodeProgress),
 })
 export interface Episode extends Schema.Schema.Type<typeof Episode> {}
 
@@ -87,6 +185,13 @@ export const EpisodeList = Schema.Struct({ episodes: Schema.Array(Episode) })
 export const VoiceList = Schema.Struct({ voices: Schema.Array(Voice) })
 export const FeedInfo = Schema.Struct({ url: Schema.String })
 
+/** Bumped on a breaking change to this contract. */
+export const API_VERSION = 1
+
+/** `GET /api/me`: who the client token belongs to. Clients key caches and downloads by server and `userId`. */
+export const Me = Schema.Struct({ userId: UserId, apiVersion: Schema.Number })
+export interface Me extends Schema.Schema.Type<typeof Me> {}
+
 // Worker API
 
 export const ClaimRequest = Schema.Struct({
@@ -97,6 +202,7 @@ export interface ClaimRequest extends Schema.Schema.Type<typeof ClaimRequest> {}
 
 export const ClaimedJob = Schema.Struct({
   episodeId: EpisodeId,
+  leaseToken: LeaseToken,
   source: Source,
   /** API path to GET the uploaded bytes. Set only for `File` sources. */
   sourcePath: Schema.NullOr(Schema.String),
@@ -111,6 +217,7 @@ export const ClaimResponse = Schema.Struct({ job: ClaimedJob })
 
 export const ProgressRequest = Schema.Struct({
   workerId: WorkerId,
+  leaseToken: LeaseToken,
   stage: Stage,
   done: Schema.Number,
   total: Schema.Number,
@@ -124,15 +231,19 @@ export interface ProgressRequest extends Schema.Schema.Type<typeof ProgressReque
 /** Query of `PUT /api/worker/jobs/:id/chapters/:index`. */
 export const ChapterUploadQuery = Schema.Struct({
   workerId: WorkerId,
+  leaseToken: LeaseToken,
   title: Schema.String,
   durationMs: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
 
 /** Query of `PUT /api/worker/jobs/:id/book` and `PUT /api/worker/jobs/:id/cover`. */
-export const UploadQuery = Schema.Struct({ workerId: WorkerId })
+export const UploadQuery = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken })
 
-export const CompleteRequest = Schema.Struct({ workerId: WorkerId, durationMs: Schema.Number })
-export const FailRequest = Schema.Struct({ workerId: WorkerId, reason: Schema.String })
+/** Query of `GET /api/worker/jobs/:id/source`. */
+export const SourceQuery = Schema.Struct({ leaseToken: LeaseToken })
+
+export const CompleteRequest = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken, durationMs: Schema.Number })
+export const FailRequest = Schema.Struct({ workerId: WorkerId, leaseToken: LeaseToken, reason: Schema.String })
 
 /** A job whose heartbeat is older than this can be claimed by another worker. */
 export const LEASE_MS = 10 * 60 * 1000

@@ -19,34 +19,49 @@ pnpm dev
 - `web`: the web build in watch mode.
 - `worker`: `fama work`, the Mac worker. It pulls jobs from the API and narrates them.
 
-The first run copies `apps/api/.dev.vars.example` to `apps/api/.dev.vars`. That file holds the API token (`dev-api-token`) and the feed token.
+The first run copies `apps/api/.dev.vars.example` to `apps/api/.dev.vars`. That file holds the worker token (`FAMA_WORKER_TOKEN=dev-worker-token`). Each run also seeds a dev user into local D1, with the client token `dev-api-token` and the feed token `dev-feed-token`.
 
-Open http://localhost:8787, open Settings, and enter the API token.
+Open http://localhost:8787, open Settings, and enter the client token `dev-api-token`.
+
+If `pnpm dev` says `no such table: users`, your local D1 has the schema from before users. Delete `apps/api/.wrangler/state/v3/d1` (local test data only) and run it again.
 
 ## iPhone app
 
 Build and install the app as `apps/mobile/README.md` says. In the app, open Settings:
 
 - Server: `http://localhost:8787` on the simulator. On a phone on the same Wi-Fi, the Mac's LAN address, for example `http://192.168.0.5:8787`. `wrangler dev` prints it at start.
-- API token: `FAMA_API_TOKEN` from `apps/api/.dev.vars`.
+- API token: `dev-api-token`.
 
-## Deploy
+## Self-host
 
-The API and web app run as one Cloudflare Worker with D1 and R2. To deploy your own:
+Put Fama on your own Cloudflare account: one Worker (API, feed and web app), one D1 database and one R2 bucket. `infra/` holds the [Alchemy](https://alchemy.run) stack. `infra/README.md` has the details.
+
+You need a Cloudflare account and [mise](https://mise.jdx.dev).
 
 ```sh
-cd apps/api
-npx wrangler d1 create fama            # put the id in wrangler.jsonc
-npx wrangler r2 bucket create fama-media
-npx wrangler d1 migrations apply DB --remote
-pnpm --filter @fama/web build
-npx wrangler deploy --secrets-file <file>   # JSON: {"FAMA_API_TOKEN": "...", "FAMA_FEED_TOKEN": "..."}
+mise install
+pnpm install
+pnpm --filter @fama/infra exec alchemy profile edit --add Cloudflare   # log in once
+pnpm fama setup --stage home
 ```
 
-Then point the Mac worker at it:
+`--stage` names the deployment. Use lowercase letters, digits and hyphens, and use the same name each time. Setup shows the plan and asks before it changes anything.
+
+The first run prints the server URL, the client token, the worker token, the worker start command and a QR code. Scan the QR code with the iPhone camera to connect the app, or enter the server URL and client token in Settings. Copy the tokens: setup does not show them again. Run `pnpm fama setup --stage home` again after a pull to update the deployment. A rerun keeps the user and the tokens.
+
+Start a worker with the worker token. On a Mac:
 
 ```sh
-cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <FAMA_API_TOKEN>
+cd worker && uv sync
+uv run fama work --api <server URL> --token <worker token>
+```
+
+For Docker or Modal, see `worker/README.md`.
+
+To remove the deployment and all its data:
+
+```sh
+pnpm --filter @fama/infra exec alchemy destroy --stage home
 ```
 
 ## Parts
@@ -54,6 +69,7 @@ cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <F
 | Path | What |
 |---|---|
 | `packages/contracts` | The HTTP contract as Effect Schema. `docs/api.md` is the same contract in words. |
+| `infra` | Alchemy stack and `fama setup` for a self-hosted deployment. |
 | `apps/api` | Cloudflare Worker: API, D1, R2, RSS feed. |
 | `apps/web` | Vite + Foldkit web app (The Elm Architecture on Effect). |
 | `apps/mobile` | Expo iOS app. |

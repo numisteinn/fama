@@ -15,7 +15,7 @@ RETRIES = 5
 
 
 class LeaseLost(Exception):
-    """409: another worker holds the job, or the job is no longer Running. Drop it."""
+    """409: the lease token is not the job's current one, or the job is no longer Running. Drop it."""
 
 
 class ApiError(Exception):
@@ -31,6 +31,7 @@ class FileRef:
 @dataclass(frozen=True)
 class ClaimedJob:
     episode_id: str
+    lease_token: str  # every job route needs it
     source: UrlSource | TextSource | FileRef
     source_path: str | None
     voice: VoiceRef | None
@@ -51,6 +52,7 @@ class ClaimedJob:
                 raise ApiError(f"Unknown source tag {tag!r}")
         return ClaimedJob(
             episode_id=data["episodeId"],
+            lease_token=data["leaseToken"],
             source=source,
             source_path=data["sourcePath"],
             voice=VoiceRef.parse(data["voice"]) if data["voice"] else None,
@@ -88,37 +90,40 @@ class Api:
         response = self._send("POST", "/api/worker/claim", json={"workerId": self.worker_id, "voices": voices})
         return None if response.status_code == 204 else ClaimedJob.parse(response.json()["job"])
 
-    def source(self, path: str) -> bytes:
-        return self._send("GET", path).content
+    def source(self, job: ClaimedJob) -> bytes:
+        if not job.source_path:
+            raise ApiError("File job has no sourcePath")
+        return self._send("GET", job.source_path, params={"leaseToken": job.lease_token}).content
 
-    def progress(self, job: str, stage: str, done: int, total: int, *, title: str | None, author: str | None,
-                 language: str | None, voice: str | None) -> None:
-        self._send("POST", f"/api/worker/jobs/{job}/progress", json={
-            "workerId": self.worker_id, "stage": stage, "done": done, "total": total,
+    def progress(self, job: ClaimedJob, stage: str, done: int, total: int, *, title: str | None,
+                 author: str | None, language: str | None, voice: str | None) -> None:
+        self._send("POST", f"/api/worker/jobs/{job.episode_id}/progress", json={
+            "workerId": self.worker_id, "leaseToken": job.lease_token, "stage": stage, "done": done, "total": total,
             "title": title, "author": author, "language": language, "voice": voice,
         })
 
-    def _put(self, path: str, file: Path, content_type: str, params: dict) -> None:
+    def _put(self, job: ClaimedJob, path: str, file: Path, content_type: str, params: dict) -> None:
         data = file.read_bytes()
         if len(data) > MAX_UPLOAD_BYTES:
             raise ApiError(f"{file.name} is {len(data)} bytes; uploads are at most {MAX_UPLOAD_BYTES}")
-        self._send("PUT", path, content=data, params={"workerId": self.worker_id, **params},
+        self._send("PUT", f"/api/worker/jobs/{job.episode_id}/{path}", content=data,
+                   params={"workerId": self.worker_id, "leaseToken": job.lease_token, **params},
                    headers={"Content-Type": content_type})
 
-    def put_chapter(self, job: str, index: int, title: str, duration_ms: int, file: Path) -> None:
-        self._put(f"/api/worker/jobs/{job}/chapters/{index}", file, "audio/mp4",
-                  {"title": title, "durationMs": str(duration_ms)})
+    def put_chapter(self, job: ClaimedJob, index: int, title: str, duration_ms: int, file: Path) -> None:
+        self._put(job, f"chapters/{index}", file, "audio/mp4", {"title": title, "durationMs": str(duration_ms)})
 
-    def put_book(self, job: str, file: Path) -> None:
-        self._put(f"/api/worker/jobs/{job}/book", file, "audio/mp4", {})
+    def put_book(self, job: ClaimedJob, file: Path) -> None:
+        self._put(job, "book", file, "audio/mp4", {})
 
-    def put_cover(self, job: str, file: Path) -> None:
+    def put_cover(self, job: ClaimedJob, file: Path) -> None:
         kind = "image/png" if file.suffix == ".png" else "image/jpeg"
-        self._put(f"/api/worker/jobs/{job}/cover", file, kind, {})
+        self._put(job, "cover", file, kind, {})
 
-    def complete(self, job: str, duration_ms: int) -> None:
-        self._send("POST", f"/api/worker/jobs/{job}/complete",
-                   json={"workerId": self.worker_id, "durationMs": duration_ms})
+    def complete(self, job: ClaimedJob, duration_ms: int) -> None:
+        self._send("POST", f"/api/worker/jobs/{job.episode_id}/complete",
+                   json={"workerId": self.worker_id, "leaseToken": job.lease_token, "durationMs": duration_ms})
 
-    def fail(self, job: str, reason: str) -> None:
-        self._send("POST", f"/api/worker/jobs/{job}/fail", json={"workerId": self.worker_id, "reason": reason[:1000]})
+    def fail(self, job: ClaimedJob, reason: str) -> None:
+        self._send("POST", f"/api/worker/jobs/{job.episode_id}/fail",
+                   json={"workerId": self.worker_id, "leaseToken": job.lease_token, "reason": reason[:1000]})

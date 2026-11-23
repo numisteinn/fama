@@ -2,7 +2,9 @@ import {
   CreateEpisode,
   Episode,
   EpisodeList,
+  EpisodeProgress,
   FeedInfo,
+  Me,
   VoiceList,
   type SourceInput,
   type Voice,
@@ -83,6 +85,7 @@ export function createApi(connection: Connection) {
 
   return {
     mediaUrl: (path: string) => `${base}${path}`,
+    me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
     createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> =>
       json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed }))),
@@ -99,6 +102,12 @@ export function createApi(connection: Connection) {
     },
     retryEpisode: (id: string): Promise<Episode> =>
       json(Episode, `/api/episodes/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+    putProgress: (id: string, progress: EpisodeProgress): Promise<EpisodeProgress> =>
+      json(EpisodeProgress, `/api/episodes/${encodeURIComponent(id)}/progress`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Schema.encodeSync(EpisodeProgress)(progress)),
+      }),
     listVoices: async (): Promise<ReadonlyArray<Voice>> => (await json(VoiceList, "/api/voices")).voices,
     feedUrl: async (): Promise<string> => (await json(FeedInfo, "/api/feed")).url,
   }

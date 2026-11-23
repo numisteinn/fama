@@ -1,5 +1,22 @@
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  -- A capability URL secret: stored in plain text so the server can print the feed URL again.
+  feed_token TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL
+);
+
+-- Client tokens. Only the SHA-256 hex of the token is stored.
+CREATE TABLE tokens (
+  hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX tokens_user ON tokens (user_id);
+
 CREATE TABLE episodes (
   id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
   created_at TEXT NOT NULL,
   source TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -14,6 +31,8 @@ CREATE TABLE episodes (
   job_state TEXT NOT NULL CHECK (job_state IN ('Queued', 'Running', 'Ready', 'Failed')),
   queued_at TEXT NOT NULL,
   worker_id TEXT,
+  -- SHA-256 hex of the lease token of the current claim. Cleared when the job goes back to Queued.
+  lease_hash TEXT,
   stage TEXT,
   done INTEGER,
   total INTEGER,
@@ -23,7 +42,7 @@ CREATE TABLE episodes (
   failed_at TEXT
 );
 
-CREATE INDEX episodes_created_at ON episodes (created_at DESC);
+CREATE INDEX episodes_user_created_at ON episodes (user_id, created_at DESC);
 CREATE INDEX episodes_claimable ON episodes (job_state, queued_at);
 
 CREATE TABLE chapters (
@@ -33,6 +52,17 @@ CREATE TABLE chapters (
   duration_ms INTEGER NOT NULL,
   size INTEGER NOT NULL,
   PRIMARY KEY (episode_id, idx)
+);
+
+-- Listening progress of one user in one episode. The newest updated_at wins.
+CREATE TABLE progress (
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL REFERENCES episodes (id) ON DELETE CASCADE,
+  -- Whole milliseconds on the episode timeline. A finished episode holds its total length.
+  position_ms INTEGER NOT NULL,
+  -- ISO 8601 from toISOString, so text order is time order. Never later than the server clock at the write.
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, episode_id)
 );
 
 CREATE TABLE voices (

@@ -1,6 +1,6 @@
 # Playback
 
-A user plays an episode. All chapters play as one timeline with one scrubber. The user can pause, skip back 15 s and forward 30 s, scrub, change speed, jump to a chapter and download the book file. On the iPhone, a mini player stays above the tab bar, the position is saved for each episode, downloaded chapters play offline, and the lock screen and AirPlay work through the native player.
+A user plays an episode. All chapters play as one timeline with one scrubber. The user can pause, skip back 15 s and forward 30 s, scrub, change speed, jump to a chapter and download the book file. On the iPhone, a mini player stays above the tab bar, downloaded chapters play offline, and the lock screen and AirPlay work through the native player. The position of each episode is saved and synced between devices: see [Progress sync](./progress-sync.md).
 
 ## Sub-features
 
@@ -11,7 +11,7 @@ A user plays an episode. All chapters play as one timeline with one scrubber. Th
 - `play-web-download` downloads the book file (`Download` link).
 - `play-ios-start` opens the player from a library row and starts playback.
 - `play-ios-mini` shows the mini player after `Close player`, with play and pause.
-- `play-ios-resume` resumes at the saved position after a relaunch.
+- `play-ios-resume` resumes at the saved position after a relaunch (the newer of the phone's and the server's).
 - `play-ios-download` downloads the chapters (`Download`, then `Downloaded`).
 - `play-ios-airplay` opens the AirPlay route picker.
 - `play-while-running` plays chapter 0 while the job is still `Running`.
@@ -31,7 +31,7 @@ Preconditions:
 - **Web, start.** Choose `Play Harbour Days`. Run `preview_act {action: "click", locator: 'role=button[name="Play Harbour Days"]'}`. The row button becomes `Pause Harbour Days`. The player bar shows `Harbour Days` and `Morning`, and button `Pause`. The network log has a `206` for `.../chapters/000.m4a`.
 - **Web, moving clock.** Run `preview_snapshot` twice, about 3 s apart. The range input inside group `Position` has a larger `aria-valuenow` (exact ms) the second time, and the elapsed text left of it changes. The text right of it is the total length.
 - **Web, skip.** Choose `Forward 30 seconds`. The position jumps by about 30000 ms and the chapter text changes to `Evening` (because `Morning` is about 27 s). Choose `Back 15 seconds`. The position drops by about 15000 ms.
-- **Web, ended.** Play to the end of the last chapter (or `Forward 30 seconds` until the slider is at its max and the player shows `Play`). Choose `Forward 30 seconds`, then `Play`. Playback starts again from `Morning` at 0:00, not from the start of the last chapter.
+- **Web, ended.** Play to the end of the last chapter (or `Forward 30 seconds` until the slider is at its max and the player shows `Play`). `localStorage["fama.progress.<id>"]` holds the total length, not 0. Choose `Forward 30 seconds`, then `Play`. Playback starts again from `Morning` at 0:00, not from the start of the last chapter.
 - **Web, speed.** Choose `Playback speed: 1×` and pick another rate. The button label changes, and the clock moves faster in the next two snapshots.
 - **Web, chapters.** Choose `Chapters`, then the item `2 Evening` (items are named `<n> <title>`; typing `2` also highlights it). The chapter text shows `Evening`, and playback starts.
 - **Web, menu over the library.** With `Chapters` open, a click on a library row closes the menu and starts nothing (`document.elementFromPoint` over the row is the menu backdrop `div.fixed.inset-0`).

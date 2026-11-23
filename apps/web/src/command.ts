@@ -1,21 +1,30 @@
-import { CreateEpisode, Episode, EpisodeId, EpisodeList, FeedInfo, VoiceList, VoiceRef } from "@fama/contracts"
+import {
+  CreateEpisode,
+  Episode,
+  EpisodeId,
+  EpisodeList,
+  EpisodeProgress,
+  FeedInfo,
+  VoiceList,
+  VoiceRef,
+} from "@fama/contracts"
 import { Duration, Effect, Redacted, Schema } from "effect"
 import { HttpClientRequest } from "effect/http"
 import { Command, Dom, File } from "foldkit"
 import { Connection, episodePath, send, sendJson } from "~/api"
-import { storedPosition } from "~/flags"
+import { PROGRESS_PREFIX, storedProgress } from "~/flags"
 import { Message } from "~/message"
 import { DISARM_DELETE_MS, PickerId, RESET_COPIED_MS, RESET_TYPE_AHEAD_MS } from "~/model"
 
 // HTTP
 
 export const FetchEpisodes = Command.define("FetchEpisodes", {
-  args: { connection: Connection, generation: Schema.Number },
+  args: { connection: Connection, generation: Schema.Number, request: Schema.Number },
   messages: [Message.SucceededFetchEpisodes, Message.FailedFetchEpisodes],
-  execute: ({ connection, generation }) =>
+  execute: ({ connection, generation, request }) =>
     sendJson(EpisodeList, connection, "GET", "/api/episodes").pipe(
-      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ generation, episodes })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ generation, failure }))),
+      Effect.map(({ episodes }) => Message.SucceededFetchEpisodes({ generation, request, episodes })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedFetchEpisodes({ generation, request, failure }))),
     ),
 })
 
@@ -90,6 +99,29 @@ export const DeleteEpisode = Command.define("DeleteEpisode", {
     ),
 })
 
+const encodeProgress = Schema.encodeSync(EpisodeProgress)
+
+/**
+ * Sends the device's progress for an episode. The server keeps the newer of it and what it has, and answers
+ * with that. It is a keepalive request, so a push started on `pagehide` still arrives.
+ */
+export const PushProgress = Command.define("PushProgress", {
+  args: { connection: Connection, episodeId: EpisodeId, progress: EpisodeProgress },
+  messages: [Message.SucceededPushProgress, Message.FailedPushProgress],
+  execute: ({ connection, episodeId, progress }) =>
+    sendJson(
+      EpisodeProgress,
+      connection,
+      "PUT",
+      `${episodePath(episodeId)}/progress`,
+      (request) => HttpClientRequest.bodyJsonUnsafe(request, encodeProgress(progress)),
+      true,
+    ).pipe(
+      Effect.map((stored) => Message.SucceededPushProgress({ episodeId, sent: progress, stored })),
+      Effect.catch(() => Effect.succeed(Message.FailedPushProgress({ episodeId }))),
+    ),
+})
+
 // STORAGE
 
 const writeStorage = (key: string, value: unknown) =>
@@ -118,18 +150,35 @@ export const StoreSetting = Command.define("StoreSetting", {
   execute: ({ key, value }) => writeStorage(key, value).pipe(Effect.as(Message.CompletedStoreSetting())),
 })
 
-export const ReadSavedPosition = Command.define("ReadSavedPosition", {
+export const ReadStoredProgress = Command.define("ReadStoredProgress", {
   args: { episodeId: EpisodeId, intent: Schema.Number },
-  messages: [Message.GotSavedPosition],
+  messages: [Message.GotStoredProgress],
   execute: ({ episodeId, intent }) =>
-    Effect.sync(() => Message.GotSavedPosition({ episodeId, intent, stored: storedPosition(episodeId) })),
+    Effect.sync(() => Message.GotStoredProgress({ episodeId, intent, stored: storedProgress(episodeId) })),
 })
 
-export const SavePosition = Command.define("SavePosition", {
+/**
+ * A listener's action moved an episode to `positionMs`: stamps it with the device clock now and stores it.
+ * Only listener actions save, so loading an episode without playing it never makes a new stamp.
+ */
+export const SaveProgress = Command.define("SaveProgress", {
   args: { episodeId: EpisodeId, positionMs: Schema.Number },
-  messages: [Message.CompletedSavePosition],
+  messages: [Message.SavedProgress],
   execute: ({ episodeId, positionMs }) =>
-    writeStorage(`fama.position.${episodeId}`, positionMs).pipe(Effect.as(Message.CompletedSavePosition())),
+    Effect.gen(function* () {
+      const now = yield* Effect.clockWith((clock) => clock.currentTimeMillis)
+      const progress = { positionMs: Math.max(0, Math.round(positionMs)), updatedAt: new Date(now).toISOString() }
+      yield* writeStorage(PROGRESS_PREFIX + episodeId, encodeProgress(progress))
+      return Message.SavedProgress({ episodeId, progress })
+    }),
+})
+
+/** Stores progress the server sent, with the server's stamp. */
+export const StoreProgress = Command.define("StoreProgress", {
+  args: { episodeId: EpisodeId, progress: EpisodeProgress },
+  messages: [Message.CompletedStoreProgress],
+  execute: ({ episodeId, progress }) =>
+    writeStorage(PROGRESS_PREFIX + episodeId, encodeProgress(progress)).pipe(Effect.as(Message.CompletedStoreProgress())),
 })
 
 // DOM

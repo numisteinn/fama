@@ -1,9 +1,11 @@
-import type { VoiceRef } from "@fama/contracts"
-import { Effect, Option } from "effect"
+import { EpisodeProgress, type VoiceRef } from "@fama/contracts"
+import { Effect, Option, Schema } from "effect"
 import { type Connection, apiToken } from "~/api"
-import { type Flags, StoredPosition } from "~/model"
+import { type Flags, StoredProgress } from "~/model"
 
-const POSITION_PREFIX = "fama.position."
+/** `fama.progress.<episodeId>` holds that episode's `EpisodeProgress` as JSON. */
+export const PROGRESS_PREFIX = "fama.progress."
+const decodeProgress = Schema.decodeUnknownOption(EpisodeProgress)
 
 /** Reads a JSON value the React app stored. Missing, broken or blocked storage gives `undefined`. */
 function read(key: string): unknown {
@@ -18,35 +20,38 @@ function read(key: string): unknown {
 const asString = (raw: unknown) => (typeof raw === "string" ? raw : undefined)
 const asNumber = (raw: unknown) => (typeof raw === "number" && Number.isFinite(raw) ? raw : undefined)
 
-function storedPositions(): Record<string, number> {
-  const positions: Record<string, number> = {}
+function storedProgressEntries(): Record<string, EpisodeProgress> {
+  const entries: Record<string, EpisodeProgress> = {}
   try {
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index)
-      if (!key?.startsWith(POSITION_PREFIX)) continue
-      const value = asNumber(read(key))
-      if (value !== undefined) positions[key.slice(POSITION_PREFIX.length)] = value
+      if (!key?.startsWith(PROGRESS_PREFIX)) continue
+      Option.map(decodeProgress(read(key)), (progress) => {
+        entries[key.slice(PROGRESS_PREFIX.length)] = progress
+      })
     }
   } catch {
-    // Storage blocked: start with no saved positions.
+    // Storage blocked: start with no local progress.
   }
-  return positions
+  return entries
 }
 
-/** The position saved for an episode, read now. A broken value counts as not saved, as in the React app. */
-export const storedPosition = (episodeId: string): StoredPosition => {
+/** The progress stored for an episode, read now. A broken value counts as not saved. */
+export const storedProgress = (episodeId: string): StoredProgress => {
   let raw: string | null
   try {
-    raw = localStorage.getItem(POSITION_PREFIX + episodeId)
+    raw = localStorage.getItem(PROGRESS_PREFIX + episodeId)
   } catch {
-    return StoredPosition.Unreadable()
+    return StoredProgress.Unreadable()
   }
-  if (raw === null) return StoredPosition.NotSaved()
+  if (raw === null) return StoredProgress.NotSaved()
   try {
-    const positionMs = asNumber(JSON.parse(raw))
-    return positionMs === undefined ? StoredPosition.NotSaved() : StoredPosition.Saved({ positionMs })
+    return Option.match(decodeProgress(JSON.parse(raw)), {
+      onNone: () => StoredProgress.NotSaved(),
+      onSome: (progress) => StoredProgress.Saved({ progress }),
+    })
   } catch {
-    return StoredPosition.NotSaved()
+    return StoredProgress.NotSaved()
   }
 }
 
@@ -77,6 +82,6 @@ export const flags: Effect.Effect<Flags> = Effect.sync(() => {
     voice: Option.getOrNull(maybeVoice),
     speed,
     rate,
-    savedPositions: storedPositions(),
+    localProgress: storedProgressEntries(),
   }
 })

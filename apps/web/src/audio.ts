@@ -26,7 +26,23 @@ const stop = (audio: HTMLAudioElement) => {
   audio.load()
 }
 
-/** Points the element at a chapter file, seeks into it, and plays when `isAutoplay`. */
+/**
+ * The audio Commands are absolute: each says what the element has or does after it, never "the other state". So a
+ * repeated Command changes nothing. Only `reconcile` in `update.ts` sends them, at most one for each Message.
+ */
+
+/** `play()` was stopped by a later load or pause. That is not a refusal: the later Command says what the element does. */
+const isInterrupted = (error: unknown): boolean =>
+  typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
+
+/** Starts the element. A browser that refuses (no user gesture, a broken file) gives `FailedPlayAudio`. */
+const play = <Completed>(audio: HTMLAudioElement, completed: Completed) =>
+  Effect.tryPromise({ try: () => audio.play(), catch: (error) => error }).pipe(
+    Effect.as(completed),
+    Effect.catch((error) => Effect.succeed(isInterrupted(error) ? completed : Message.FailedPlayAudio())),
+  )
+
+/** Points the element at a chapter file and seeks into it. It plays when `isAutoplay`, and rests when not. */
 export const LoadChapter = Command.define("LoadChapter", {
   args: { src: Schema.String, offsetMs: Schema.Number, rate: Schema.Number, isAutoplay: Schema.Boolean },
   messages: [Message.CompletedLoadChapter, Message.FailedPlayAudio],
@@ -37,22 +53,29 @@ export const LoadChapter = Command.define("LoadChapter", {
       audio.currentTime = offsetMs / 1000
       audio.defaultPlaybackRate = rate
       audio.playbackRate = rate
-      if (isAutoplay) yield* Effect.tryPromise(() => audio.play())
-      return Message.CompletedLoadChapter()
-    }).pipe(Effect.catch(() => Effect.succeed(Message.FailedPlayAudio()))),
+      return isAutoplay ? yield* play(audio, Message.CompletedLoadChapter()) : Message.CompletedLoadChapter()
+    }),
 })
 
-/** Plays when paused, pauses when playing. */
-export const ToggleAudio = Command.define("ToggleAudio", {
-  messages: [Message.CompletedToggleAudio],
+/** The element plays. */
+export const PlayAudio = Command.define("PlayAudio", {
+  messages: [Message.CompletedPlayAudio, Message.FailedPlayAudio],
   execute: Effect.gen(function* () {
-    const audio = yield* AudioPlayer
-    if (audio.paused) yield* Effect.tryPromise(() => audio.play()).pipe(Effect.ignore)
-    else audio.pause()
-    return Message.CompletedToggleAudio()
+    return yield* play(yield* AudioPlayer, Message.CompletedPlayAudio())
   }),
 })
 
+/** The element does not play. */
+export const PauseAudio = Command.define("PauseAudio", {
+  messages: [Message.CompletedPauseAudio],
+  execute: Effect.gen(function* () {
+    const audio = yield* AudioPlayer
+    audio.pause()
+    return Message.CompletedPauseAudio()
+  }),
+})
+
+/** The element is at `offsetMs` of its file. Whether it plays does not change. */
 export const SeekAudio = Command.define("SeekAudio", {
   args: { offsetMs: Schema.Number },
   messages: [Message.CompletedSeekAudio],

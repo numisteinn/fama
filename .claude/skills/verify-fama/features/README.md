@@ -4,7 +4,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Run `fama-verify up` from the repo root. Each run starts from an empty library on `http://localhost:8788`.
+- Run `fama-verify up` from the repo root. Each run starts from an empty library on `http://localhost:8788`, owned by the seeded user `dev-user` (client token `dev-api-token`, feed token `dev-feed-token`). The worker uses `dev-worker-token`.
 - Run `fama-verify doctor`. It must print `healthy`, and the build commit must match the current commit.
 - Web: a T3 preview tab you opened on port 8788, with `dev-api-token` saved in Settings.
 - iPhone: `fama-verify metro`, `dev.fama.app` opened with `agent-device`, `Server URL` set to `http://localhost:8788` (old value recorded), status `Connected`.
@@ -34,5 +34,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Add a link](./add-link.md): paste a web article link on the web or the iPhone, and get a narrated episode with the real title, the detected language and the default voice.
 - [Add a file](./add-file.md): attach a PDF, EPUB, Markdown or text file, and get one chapter for each table-of-contents entry.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
+- [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
+- [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
 - [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode and streamable book files.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.

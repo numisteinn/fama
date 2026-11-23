@@ -15,11 +15,18 @@ export default function SettingsScreen() {
   const [token, setToken] = useState(connection?.token ?? "")
   const [check, setCheck] = useState<Check>({ _tag: "Idle" })
 
+  // A pairing link can change the connection while this screen is open.
+  useEffect(() => {
+    setServerUrl(connection?.serverUrl ?? "")
+    setToken(connection?.token ?? "")
+  }, [connection])
+
   useEffect(() => {
     if (!api) return setCheck({ _tag: "Idle" })
     let live = true
     setCheck({ _tag: "Checking" })
-    api.listEpisodes().then(
+    // Connected means the server knows the token's user (GET /api/me).
+    api.me().then(
       () => live && setCheck({ _tag: "Ok" }),
       (error: unknown) => live && setCheck({ _tag: "Failed", message: error instanceof ApiError ? error.message : "Could not connect." }),
     )

@@ -16,7 +16,7 @@ import {
 } from "foldkit/scene"
 import { Option, Redacted } from "effect"
 import { describe, test, expect as expectValue } from "vitest"
-import { LoadChapter, ToggleAudio } from "~/audio"
+import { LoadChapter, PauseAudio, PlayAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
   FILE_INPUT_ID,
@@ -25,16 +25,17 @@ import {
   FocusAddText,
   FocusPicker,
   FocusPickerTrigger,
-  ReadSavedPosition,
-  SavePosition,
+  PushProgress,
+  ReadStoredProgress,
+  SaveProgress,
   ScrollPickerItem,
   StoreSetting,
   StoreConnection,
   WaitBeforeResetTypeAhead,
 } from "~/command"
-import { baseModel, connection, harbourDays, queuedArticle, withEpisodes } from "~/fixture"
+import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
 import { Message } from "~/message"
-import { Playback, StoredPosition } from "~/model"
+import { Playback, StoredProgress } from "~/model"
 import { apiToken } from "~/api"
 import { update } from "~/update"
 import { OpenFilePickerOnKey } from "~/view/addBar"
@@ -106,12 +107,12 @@ describe("settings", () => {
       click(role("button", { name: "Save" })),
       Command.expectExact(
         StoreConnection,
-        FetchEpisodes({ connection: savedConnection, generation: 1 }),
+        FetchEpisodes({ connection: savedConnection, generation: 1, request: 2 }),
         FetchFeed({ connection: savedConnection, request: 2 }),
         Dialog.CloseDialog,
       ),
       Command.resolve(StoreConnection, Message.CompletedStoreSetting()),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, episodes: [] })),
+      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] })),
       Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 2, url: "http://localhost:8788/feed/t/rss.xml" })),
       Command.resolve(Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()),
       Mount.expectEnded(Dialog.AcquireResources),
@@ -198,17 +199,10 @@ describe("menu placement", () => {
 
 describe("chapters menu", () => {
   test("typing a chapter number highlights that chapter, as the item shows it", () => {
-    const loaded = {
-      ...withEpisodes(baseModel(), [harbourDays]),
-      playback: Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 0,
-        isPlaying: false,
-        isWaiting: false,
-        isEnded: false,
-      }),
-    }
+    const loaded = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 0, isPlaying: false, isWaiting: false }),
+    )
     const chaptersMenu = role("menu")
     scene(
       { update, view },
@@ -237,10 +231,10 @@ describe("play and pause", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       resolveAttachKeys,
       click(role("button", { name: "Play Harbour Days" })),
-      Command.expectExact(ReadSavedPosition),
+      Command.expectExact(ReadStoredProgress),
       Command.resolve(
-        ReadSavedPosition,
-        Message.GotSavedPosition({ episodeId: harbourDays.id, intent: 1, stored: StoredPosition.NotSaved() }),
+        ReadStoredProgress,
+        Message.GotStoredProgress({ episodeId: harbourDays.id, intent: 1, stored: StoredProgress.NotSaved() }),
       ),
       Command.expectExact(LoadChapter),
       Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
@@ -254,13 +248,14 @@ describe("play and pause", () => {
         expect(role("link", { name: "Download" })).toExist(),
       ),
       click(role("button", { name: /^Pause$/ })),
-      Command.expectExact(ToggleAudio),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      Command.expectExact(PauseAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 0 })),
+      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
+      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) })),
+      Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
       Subscription.emit(Message.PausedAudio()),
-      Command.resolve(SavePosition, Message.CompletedSavePosition()),
       expect(role("button", { name: "Play Harbour Days" })).toExist(),
       click(role("button", { name: /^Play$/ })),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
     )
   })
 })

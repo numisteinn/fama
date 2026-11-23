@@ -45,7 +45,7 @@ class Progress:
 class Heartbeat:
     """Holds the latest progress and sends it on change (throttled) and every HEARTBEAT_S."""
 
-    def __init__(self, api: Api, job: str, interval: float = HEARTBEAT_S) -> None:
+    def __init__(self, api: Api, job: ClaimedJob, interval: float = HEARTBEAT_S) -> None:
         self.api, self.job, self.interval = api, job, interval
         self.progress = Progress()
         self.lost = threading.Event()
@@ -97,7 +97,7 @@ class Heartbeat:
 class JobReporter:
     """Pipeline reporter: progress goes to the heartbeat, finished chapters go up at once."""
 
-    def __init__(self, api: Api, job: str, heartbeat: Heartbeat) -> None:
+    def __init__(self, api: Api, job: ClaimedJob, heartbeat: Heartbeat) -> None:
         self.api, self.job, self.heartbeat = api, job, heartbeat
 
     def stage(self, stage: str, done: int, total: int) -> None:
@@ -105,51 +105,53 @@ class JobReporter:
 
     def chapter_ready(self, chapter: ChapterFile) -> None:
         self.api.put_chapter(self.job, chapter.index, chapter.title, chapter.duration_ms, chapter.path)
-        log(f"{self.job}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
+        log(f"{self.job.episode_id}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
 
 
 def _source(api: Api, job: ClaimedJob, directory: Path) -> Source:
     if not isinstance(job.source, FileRef):
         return job.source
-    if not job.source_path:
-        raise ApiError("File job has no sourcePath")
     path = directory / Path(job.source.file_name).name
-    path.write_bytes(api.source(job.source_path))
+    path.write_bytes(api.source(job))
     return FileSource(path, job.source.content_type)
 
 
-def _upload_book(api: Api, job: str, book: Path) -> None:
+def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     if book.stat().st_size > MAX_UPLOAD_BYTES:
         smaller = book.with_name("book-upload.m4b")
         if not audio.shrink_book(book, smaller, MAX_UPLOAD_BYTES):
-            log(f"{job}: book file is too long to fit {MAX_UPLOAD_BYTES} bytes; chapters only")
+            log(f"{job.episode_id}: book file is too long to fit {MAX_UPLOAD_BYTES} bytes; chapters only")
             return
         book = smaller
     api.put_book(job, book)
 
 
-def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
+def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
+    """Make one episode. Returns its audio length in ms when it is ready, else None."""
     episode = job.episode_id
+    started = time.monotonic()
     workdir = out_dir / episode
     workdir.mkdir(parents=True, exist_ok=True)
     log(f"{episode}: claimed, skipping chapters {sorted(job.completed_chapters)}")
     try:
-        with Heartbeat(api, episode) as heartbeat:
+        with Heartbeat(api, job) as heartbeat:
             with tempfile.TemporaryDirectory() as tmp:
                 document = extract(_source(api, job, Path(tmp)))
             voice = job.voice or default_voice(document.language)
             heartbeat.update(stage="extracting", done=1, total=1, title=document.title, author=document.author,
                              language=document.language, voice=str(voice))
             if document.cover:
-                api.put_cover(episode, audio.write_cover(document.cover, workdir))
-            book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, episode, heartbeat),
+                api.put_cover(job, audio.write_cover(document.cover, workdir))
+            book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, job, heartbeat),
                            skip=job.completed_chapters)
             heartbeat.update(stage="uploading", done=0, total=1)
-            _upload_book(api, episode, book.path)
+            _upload_book(api, job, book.path)
             heartbeat.update(stage="uploading", done=1, total=1)
-            api.complete(episode, book.duration_ms)
-        log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s in {len(book.chapters)} chapters")
+            api.complete(job, book.duration_ms)
+        log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
+            f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)
+        return book.duration_ms
     except LeaseLost as error:
         log(f"{episode}: dropped, lease lost ({error})")
     except Exception as error:  # the job fails; the loop goes on
@@ -157,31 +159,42 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> None:
         reason = str(error) if isinstance(error, ValueError) else f"{type(error).__name__}: {error}"
         log(f"{episode}: failed: {reason}")
         try:
-            api.fail(episode, reason)
+            api.fail(job, reason)
         except (LeaseLost, ApiError) as fail_error:
             log(f"{episode}: could not report failure: {fail_error}")
+    return None
 
 
-def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False,
-        stop: threading.Event | None = None, api: Api | None = None) -> None:
+def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False, drain: bool = False,
+        first_job: ClaimedJob | None = None, stop: threading.Event | None = None, api: Api | None = None) -> None:
+    """Pull jobs until stopped. `once` stops after one job or an empty queue.
+    `drain` takes jobs until the queue is empty, then stops (the cloud worker runs this).
+    `first_job` is a job this worker id already claimed; it is made before the first claim."""
     api = api or Api(api_url, token, worker_id)
     stop = stop or threading.Event()
     voices = [v.to_json() for v in all_voices()]
     delay = IDLE_MIN_S
+    started, jobs, audio_ms = time.monotonic(), 0, 0
     log(f"worker {worker_id} polling {api_url} with {len(voices)} voices")
     while not stop.is_set():
-        try:
-            job = api.claim(voices)
-        except ApiError as error:
-            log(f"claim failed: {error}")
-            job = None
+        if first_job is not None:
+            job, first_job = first_job, None
+        else:
+            try:
+                job = api.claim(voices)
+            except ApiError as error:
+                log(f"claim failed: {error}")
+                job = None
         if job is None:
-            if once:
-                return
+            if once or drain:
+                break
             stop.wait(delay)
             delay = min(delay * 2, IDLE_MAX_S)
             continue
         delay = IDLE_MIN_S
-        process(api, job, out_dir)
+        jobs += 1
+        audio_ms += process(api, job, out_dir) or 0
         if once:
-            return
+            break
+    if drain:
+        log(f"drained {jobs} jobs, {audio_ms / 1000:.0f}s audio in {time.monotonic() - started:.0f}s wall")

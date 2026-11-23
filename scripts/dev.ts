@@ -1,15 +1,21 @@
 // `pnpm dev`: the API (wrangler dev, local D1 and R2, serving the web build), the web build in watch
-// mode, and the Mac worker. Ctrl-C stops all three. Each child runs in its own process group, so stopping a group
+// mode, and the Mac worker. Ctrl-C stops all three. Local D1 gets a dev user with client token `dev-api-token` and
+// feed token `dev-feed-token`. Each child runs in its own process group, so stopping a group
 // also stops what it spawned (workerd, Python), and nothing else on the machine.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process"
-import { copyFileSync, existsSync, readFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, readFileSync } from "node:fs"
 import { createInterface } from "node:readline"
 
 const root = new URL("..", import.meta.url).pathname
 const devVars = `${root}apps/api/.dev.vars`
 if (!existsSync(devVars)) copyFileSync(`${root}apps/api/.dev.vars.example`, devVars)
-const token = /^FAMA_API_TOKEN=(.*)$/m.exec(readFileSync(devVars, "utf8"))?.[1]?.trim()
-if (!token) throw new Error(`FAMA_API_TOKEN missing in ${devVars}`)
+if (!/^FAMA_WORKER_TOKEN=/m.test(readFileSync(devVars, "utf8"))) {
+  // A .dev.vars from before workers had their own token.
+  appendFileSync(devVars, "\nFAMA_WORKER_TOKEN=dev-worker-token\n")
+  console.log(`Added FAMA_WORKER_TOKEN=dev-worker-token to ${devVars}`)
+}
+const workerToken = /^FAMA_WORKER_TOKEN=(.*)$/m.exec(readFileSync(devVars, "utf8"))?.[1]?.trim()
+if (!workerToken) throw new Error(`FAMA_WORKER_TOKEN is empty in ${devVars}`)
 
 const bin = (app: string, name: string) => `${root}apps/${app}/node_modules/.bin/${name}`
 const once = (command: string, args: Array<string>, cwd: string) =>
@@ -17,6 +23,26 @@ const once = (command: string, args: Array<string>, cwd: string) =>
 // wrangler serves apps/web/dist, so it must exist before wrangler starts.
 once(bin("web", "vite"), ["build"], "apps/web")
 once(bin("api", "wrangler"), ["d1", "migrations", "apply", "DB", "--local"], "apps/api")
+try {
+  once(
+    "node",
+    [
+      "scripts/create-user.ts",
+      "--user-id=dev-user",
+      "--client-token=dev-api-token",
+      "--feed-token=dev-feed-token",
+      "--",
+      "--local",
+    ],
+    "apps/api",
+  )
+} catch {
+  console.error(
+    "Could not seed the dev user. If the error says `no such table: users`, the local D1 has the schema from before " +
+      "users. Delete apps/api/.wrangler/state/v3/d1 (local test data only) and run `pnpm dev` again.",
+  )
+  process.exit(1)
+}
 
 const services: Array<{ name: string; color: number; cwd: string; command: Array<string> }> = [
   { name: "api", color: 36, cwd: "apps/api", command: [bin("api", "wrangler"), "dev"] },
@@ -25,7 +51,7 @@ const services: Array<{ name: string; color: number; cwd: string; command: Array
     name: "worker",
     color: 33,
     cwd: "worker",
-    command: ["uv", "run", "fama", "work", "--api", "http://localhost:8787", "--token", token],
+    command: ["uv", "run", "fama", "work", "--api", "http://localhost:8787", "--token", workerToken],
   },
 ]
 

@@ -8,7 +8,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter @fama/api dev",
-    "smoke:api": "pnpm --filter @fama/api smoke"
+    "smoke:api": "pnpm --filter @fama/api smoke",
+    "fama": "pnpm --filter @fama/infra fama"
   },
   "devDependencies": {
     "typescript": "catalog:"

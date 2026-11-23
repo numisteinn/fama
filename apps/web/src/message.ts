@@ -1,10 +1,10 @@
-import { Episode, EpisodeId, Voice, VoiceRef } from "@fama/contracts"
+import { Episode, EpisodeId, EpisodeProgress, Voice, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Schema } from "effect"
 import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
-import { PickerId, StoredPosition } from "~/model"
+import { PickerId, StoredProgress } from "~/model"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
 export type PlayerShortcut = typeof PlayerShortcut.Type
@@ -12,8 +12,8 @@ export type PlayerShortcut = typeof PlayerShortcut.Type
 export const Message = defineMessageUnion({
   // Library
   /** Library results carry the connection generation they were fetched for, so a late one from an old connection is dropped. */
-  SucceededFetchEpisodes: { generation: Schema.Number, episodes: Schema.Array(Episode) },
-  FailedFetchEpisodes: { generation: Schema.Number, failure: ApiFailure },
+  SucceededFetchEpisodes: { generation: Schema.Number, request: Schema.Number, episodes: Schema.Array(Episode) },
+  FailedFetchEpisodes: { generation: Schema.Number, request: Schema.Number, failure: ApiFailure },
   SucceededFetchVoices: { voices: Schema.Array(Voice) },
   FailedFetchVoices: {},
   ClickedTryAgain: {},
@@ -101,16 +101,26 @@ export const Message = defineMessageUnion({
   PausedAudio: {},
   EndedChapter: {},
   CompletedLoadChapter: {},
+  /** The browser refused to play: no user gesture, or a file it cannot play. */
   FailedPlayAudio: {},
-  CompletedToggleAudio: {},
+  CompletedPlayAudio: {},
+  CompletedPauseAudio: {},
   CompletedSeekAudio: {},
   CompletedSetAudioRate: {},
   CompletedStopAudio: {},
-  CompletedSavePosition: {},
   /**
-   * The position storage holds for an episode when it starts, so a pause in another tab is honored.
+   * The progress storage holds for an episode when it starts, so a pause in another tab is honored.
    * `intent` is the playback action that started it.
    */
-  GotSavedPosition: { episodeId: EpisodeId, intent: Schema.Number, stored: StoredPosition },
+  GotStoredProgress: { episodeId: EpisodeId, intent: Schema.Number, stored: StoredProgress },
+
+  // Progress sync
+  /** A listener's action stamped and stored this progress on the device. */
+  SavedProgress: { episodeId: EpisodeId, progress: EpisodeProgress },
+  /** The server answered a push with what it stores now, `sent` or a newer entry. */
+  SucceededPushProgress: { episodeId: EpisodeId, sent: EpisodeProgress, stored: EpisodeProgress },
+  /** The push did not arrive. The local entry stays newer, so the next library load sends it again. */
+  FailedPushProgress: { episodeId: EpisodeId },
+  CompletedStoreProgress: {},
 })
 export type Message = typeof Message.Type
