@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "fama": "node src/cli.ts",
     "plan:offline": "node scripts/plan-offline.ts",
     "typecheck": "tsc -p .",
     "test": "vitest run"
