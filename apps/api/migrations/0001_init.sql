@@ -54,6 +54,17 @@ CREATE TABLE chapters (
   PRIMARY KEY (episode_id, idx)
 );
 
+-- Listening progress of one user in one episode. The newest updated_at wins.
+CREATE TABLE progress (
+  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  episode_id TEXT NOT NULL REFERENCES episodes (id) ON DELETE CASCADE,
+  -- Whole milliseconds on the episode timeline. A finished episode holds its total length.
+  position_ms INTEGER NOT NULL,
+  -- ISO 8601 from toISOString, so text order is time order. Never later than the server clock at the write.
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, episode_id)
+);
+
 CREATE TABLE voices (
   id TEXT PRIMARY KEY,
   engine TEXT NOT NULL,

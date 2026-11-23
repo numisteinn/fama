@@ -32,6 +32,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 | `GET /api/episodes/:id` | | `Episode` or `404` |
 | `DELETE /api/episodes/:id` | | `204`, also deletes its media |
 | `POST /api/episodes/:id/retry` | | `Episode`, job back to `Queued` |
+| `PUT /api/episodes/:id/progress` | `EpisodeProgress` `{ positionMs, updatedAt }` | `200 EpisodeProgress`, the stored value after the write |
 | `GET /api/voices` | | `{ voices: Voice[] }` from workers seen in the last 30 days |
 | `GET /api/feed` | | `{ url }`, the full feed URL for "Add to Podcasts" |
 | `POST /api/feed/rotate` | | `{ url }`, the feed URL with a new feed token |
@@ -40,7 +41,9 @@ Every episode has one owner, a user. There are three credentials, and each opens
 
 The client routes see only the token user's episodes.
 
-`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url}], bookUrl, coverUrl, job`.
+`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url}], bookUrl, coverUrl, job, progress`.
+
+`progress` is the token user's `EpisodeProgress` for the episode, or `null` when there is none.
 
 `job` is one of:
 
@@ -52,6 +55,21 @@ The client routes see only the token user's episodes.
 A new episode gets a provisional `title`: the URL host and path, the file name, or the first words of the text. The worker replaces it with the real title.
 
 `chapters` grows while the job runs. A client can play chapter 0 while the job is still `Running`.
+
+## Listening progress
+
+`EpisodeProgress` is `{ positionMs, updatedAt }`. `positionMs` is a whole number of milliseconds, 0 or more, on the whole episode timeline (all chapters in order). `updatedAt` is an ISO 8601 time: when the listener was at that position.
+
+- The newest `updatedAt` wins. `PUT` stores the body only when its `updatedAt` is later than the stored one. An equal or older write changes nothing. Both get `200` with the stored value.
+- An `updatedAt` later than the server clock is stored as the server clock. The client keeps the response in place of what it sent, so a fast device clock does not win every later write.
+- A finished episode stores its total length, not 0. `FINISHED_MARGIN_MS` (3000) in the contract: a position at most that far from the end is finished, and the next play starts at 0. The end of the chapters of a job that still runs is not finished.
+- Another user's episode gets `404`. Deleting an episode deletes its progress.
+
+Clients keep `{ positionMs, updatedAt }` per episode on the device and use `mergeProgress` from the contract:
+
+- On every library load, a local entry newer than the episode's `progress` is sent (offline listening syncs this way), and a newer `progress` replaces the local entry.
+- While playing, a client sends about every 5 s of playback, on pause, and when the app goes to the background or the page hides.
+- Only the listener's own actions stamp a new `updatedAt`. Loading an episode without playing it, at app start or on a library load, stamps and sends nothing.
 
 ## Worker endpoints
 

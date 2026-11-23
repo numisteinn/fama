@@ -1,5 +1,5 @@
 // The HTTP routes against real local D1 and R2 (miniflare through wrangler's platform proxy): ownership between two
-// users, the three auth boundaries, and the lease token on job routes.
+// users, the three auth boundaries, the lease token on job routes, and listening progress.
 import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
@@ -50,7 +50,7 @@ const statements = (sql: string) =>
     .filter((statement) => statement !== "")
 
 beforeEach(async () => {
-  const tables = ["chapters", "episodes", "tokens", "users", "voices"]
+  const tables = ["progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
   await env.DB.batch(statements(migration).map((statement) => env.DB.prepare(statement)))
   for (const user of Object.values(users)) {
@@ -296,5 +296,96 @@ describe("leases", () => {
     expect(second.leaseToken).not.toBe(first.leaseToken)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${first.leaseToken}`)).status).toBe(409)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${second.leaseToken}`)).status).toBe(200)
+  })
+})
+
+describe("progress", () => {
+  type Progress = { positionMs: number; updatedAt: string }
+  const putProgress = (client: typeof alice, id: string, body: unknown) =>
+    client("PUT", `/api/episodes/${id}/progress`, { json: body })
+  const progressOf = async (id: string) =>
+    ((await (await alice("GET", `/api/episodes/${id}`)).json()) as { progress: Progress | null }).progress
+  const stamp = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
+
+  it("stores a write, returns it, and shows it on the episode", async () => {
+    const episode = await readyEpisode()
+    expect(await progressOf(episode.id)).toBeNull()
+    const write = { positionMs: 10_000, updatedAt: stamp(-60_000) }
+    const response = await putProgress(alice, episode.id, write)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(write)
+    expect(await progressOf(episode.id)).toEqual(write)
+    const list = (await (await alice("GET", "/api/episodes")).json()) as { episodes: Array<{ progress: Progress }> }
+    expect(list.episodes[0]!.progress).toEqual(write)
+  })
+
+  it("an older write loses: it changes nothing and gets the stored value back", async () => {
+    const episode = await readyEpisode()
+    const newer = { positionMs: 60_000, updatedAt: stamp(-10_000) }
+    expect((await putProgress(alice, episode.id, newer)).status).toBe(200)
+    const older = await putProgress(alice, episode.id, { positionMs: 5_000, updatedAt: stamp(-20_000) })
+    expect(older.status).toBe(200)
+    expect(await older.json()).toEqual(newer)
+    const tie = await putProgress(alice, episode.id, { positionMs: 7_000, updatedAt: newer.updatedAt })
+    expect(await tie.json(), "an equal stamp also loses").toEqual(newer)
+    expect(await progressOf(episode.id)).toEqual(newer)
+    const latest = { positionMs: 70_000, updatedAt: stamp(-5_000) }
+    expect(await (await putProgress(alice, episode.id, latest)).json()).toEqual(latest)
+  })
+
+  it("a stamp from the future is clamped to the server clock", async () => {
+    const episode = await readyEpisode()
+    const before = Date.now()
+    const response = await putProgress(alice, episode.id, { positionMs: 30_000, updatedAt: "2100-01-01T00:00:00.000Z" })
+    const after = Date.now()
+    const stored = (await response.json()) as Progress
+    expect(stored.positionMs).toBe(30_000)
+    expect(Date.parse(stored.updatedAt)).toBeGreaterThanOrEqual(before)
+    expect(Date.parse(stored.updatedAt)).toBeLessThanOrEqual(after)
+    expect(await progressOf(episode.id)).toEqual(stored)
+    // So a later honest write still wins.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    const honest = { positionMs: 31_000, updatedAt: new Date().toISOString() }
+    expect(await (await putProgress(alice, episode.id, honest)).json()).toEqual(honest)
+  })
+
+  it("a second user gets 404 and changes nothing", async () => {
+    const episode = await readyEpisode()
+    const mine = { positionMs: 10_000, updatedAt: stamp(-60_000) }
+    await putProgress(alice, episode.id, mine)
+    const response = await putProgress(bob, episode.id, { positionMs: 1, updatedAt: stamp(0) })
+    expect(response.status).toBe(404)
+    expect(await progressOf(episode.id)).toEqual(mine)
+    const rows = await env.DB.prepare("SELECT user_id FROM progress").all()
+    expect(rows.results).toEqual([{ user_id: users.alice.id }])
+    expect((await putProgress(alice, "no-such-episode", mine)).status).toBe(404)
+  })
+
+  it("deleting the episode deletes its progress", async () => {
+    const episode = await readyEpisode()
+    await putProgress(alice, episode.id, { positionMs: 10_000, updatedAt: stamp(-60_000) })
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM progress").first())?.n).toBe(1)
+    expect((await alice("DELETE", `/api/episodes/${episode.id}`)).status).toBe(204)
+    expect((await env.DB.prepare("SELECT count(*) AS n FROM progress").first())?.n).toBe(0)
+  })
+
+  it("refuses a body that is not EpisodeProgress", async () => {
+    const episode = await readyEpisode()
+    for (const body of [
+      { positionMs: -1, updatedAt: stamp(0) },
+      { positionMs: 1.5, updatedAt: stamp(0) },
+      { positionMs: 1, updatedAt: "yesterday" },
+      { positionMs: 1 },
+    ]) {
+      expect((await putProgress(alice, episode.id, body)).status, JSON.stringify(body)).toBe(400)
+    }
+    expect(await progressOf(episode.id)).toBeNull()
+  })
+
+  it("needs a client token", async () => {
+    const episode = await readyEpisode()
+    const body = { positionMs: 1, updatedAt: stamp(0) }
+    expect((await call(null, "PUT", `/api/episodes/${episode.id}/progress`, { json: body })).status).toBe(401)
+    expect((await call(WORKER_TOKEN, "PUT", `/api/episodes/${episode.id}/progress`, { json: body })).status).toBe(401)
   })
 })

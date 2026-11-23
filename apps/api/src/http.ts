@@ -5,6 +5,7 @@ import {
   CompleteRequest,
   CreateEpisode,
   EpisodeId,
+  EpisodeProgress,
   FailRequest,
   ProgressRequest,
   type Source,
@@ -215,6 +216,17 @@ const clientRoutes = HttpRouter.addAll([
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         return json(yield* (yield* EpisodeRepo).retry(userId, id))
+      }),
+    ),
+  ),
+  HttpRouter.route(
+    "PUT",
+    "/api/episodes/:id/progress",
+    api(({ userId }) =>
+      Effect.gen(function* () {
+        const { id } = yield* HttpRouter.schemaPathParams(IdParams)
+        const body = yield* HttpServerRequest.schemaBodyJson(EpisodeProgress)
+        return json(yield* (yield* EpisodeRepo).putProgress(userId, id, body))
       }),
     ),
   ),

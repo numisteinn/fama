@@ -2,6 +2,7 @@ import {
   ClaimedJob,
   Episode,
   type EpisodeId,
+  EpisodeProgress,
   JobState,
   LEASE_MS,
   type LeaseToken,
@@ -52,6 +53,9 @@ const EpisodeRow = Schema.Struct({
   finished_at: Schema.NullOr(Schema.String),
   fail_reason: Schema.NullOr(Schema.String),
   failed_at: Schema.NullOr(Schema.String),
+  /** From the owner's row in `progress`. Both null when the owner has none. */
+  progress_position_ms: Schema.NullOr(Schema.Number),
+  progress_updated_at: Schema.NullOr(Schema.String),
 })
 interface EpisodeRow extends Schema.Schema.Type<typeof EpisodeRow> {}
 
@@ -164,6 +168,15 @@ export interface Interface {
   readonly setCover: (id: string, key: string) => Effect.Effect<void, DatabaseError>
   readonly feedItems: (userId: UserId, origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, Failure>
   readonly voices: Effect.Effect<ReadonlyArray<Voice>, Failure>
+  /**
+   * Stores `progress` when its `updatedAt` is newer than the stored one, in one statement. A future stamp counts as
+   * now. Returns what is stored after the write. Another user's episode is not found.
+   */
+  readonly putProgress: (
+    userId: UserId,
+    id: string,
+    progress: EpisodeProgress,
+  ) => Effect.Effect<EpisodeProgress, EpisodeNotFound | Failure>
 }
 
 export class EpisodeRepo extends Context.Service<EpisodeRepo, Interface>()("@fama/api/EpisodeRepo") {}
@@ -211,9 +224,15 @@ export const layer = Layer.effect(
         bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id)),
         coverUrl: row.cover_key === null ? null : media(row, row.cover_key),
         job: jobOf(row),
+        progress:
+          row.progress_position_ms === null || row.progress_updated_at === null
+            ? null
+            : { positionMs: row.progress_position_ms, updatedAt: row.progress_updated_at },
       })
 
-    const selectEpisodes = "SELECT e.*, u.feed_token FROM episodes e JOIN users u ON u.id = e.user_id"
+    const selectEpisodes = `SELECT e.*, u.feed_token, p.position_ms AS progress_position_ms, p.updated_at AS progress_updated_at
+      FROM episodes e JOIN users u ON u.id = e.user_id
+      LEFT JOIN progress p ON p.user_id = e.user_id AND p.episode_id = e.id`
 
     /** One episode. With `userId`, only when that user owns it, so another user's id reads as not found. */
     const findRow = Effect.fnUntraced(function* (id: string, userId: UserId | null = null) {
@@ -318,6 +337,9 @@ export const layer = Layer.effect(
         db.batch([
           db
             .prepare("DELETE FROM chapters WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
+            .bind(id, userId),
+          db
+            .prepare("DELETE FROM progress WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
             .bind(id, userId),
           db.prepare("DELETE FROM episodes WHERE id = ? AND user_id = ?").bind(id, userId),
         ]),
@@ -473,7 +495,42 @@ export const layer = Layer.effect(
       return yield* decodeRows(Voice)(rows)
     }).pipe(Effect.withSpan("EpisodeRepo.voices"))
 
+    const putProgress = Effect.fn("EpisodeRepo.putProgress")(function* (
+      userId: UserId,
+      id: string,
+      progress: EpisodeProgress,
+    ) {
+      // A clock ahead of the server's must not win every later write, so the server's clock caps the stamp.
+      const updatedAt = new Date(Math.min(Date.parse(progress.updatedAt), yield* now)).toISOString()
+      const [, stored] = yield* query("progress.put", () =>
+        db.batch([
+          // The insert reads the episode row, so an episode the user does not own writes nothing. An equal or older
+          // stamp leaves the stored row as it is.
+          db
+            .prepare(
+              `INSERT INTO progress (user_id, episode_id, position_ms, updated_at)
+               SELECT user_id, id, ?, ? FROM episodes WHERE id = ? AND user_id = ?
+               ON CONFLICT (user_id, episode_id) DO UPDATE SET
+                 position_ms = excluded.position_ms, updated_at = excluded.updated_at
+               WHERE excluded.updated_at > progress.updated_at`,
+            )
+            .bind(progress.positionMs, updatedAt, id, userId),
+          db
+            .prepare(
+              `SELECT p.position_ms AS positionMs, p.updated_at AS updatedAt FROM progress p
+               JOIN episodes e ON e.id = p.episode_id AND e.user_id = p.user_id
+               WHERE p.user_id = ? AND p.episode_id = ?`,
+            )
+            .bind(userId, id),
+        ]),
+      )
+      const row = stored?.results[0]
+      if (row === undefined) return yield* new EpisodeNotFound({ id })
+      return yield* Schema.decodeUnknownEffect(EpisodeProgress)(row)
+    })
+
     return EpisodeRepo.of({
+      putProgress,
       create,
       list,
       get,

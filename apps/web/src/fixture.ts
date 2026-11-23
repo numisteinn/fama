@@ -34,6 +34,7 @@ export const harbourDays: Episode = {
   bookUrl: "/media/t/episodes/harbour-days/book.m4b",
   coverUrl: null,
   job: { _tag: "Ready", finishedAt: at },
+  progress: null,
 }
 
 export const queuedArticle: Episode = {
@@ -50,6 +51,7 @@ export const queuedArticle: Episode = {
   bookUrl: null,
   coverUrl: null,
   job: { _tag: "Queued" },
+  progress: null,
 }
 
 /** Harbour Days while its second chapter is still being narrated. */

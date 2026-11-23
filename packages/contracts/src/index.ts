@@ -64,6 +64,49 @@ export const Chapter = Schema.Struct({
 })
 export interface Chapter extends Schema.Schema.Type<typeof Chapter> {}
 
+/** A whole number of milliseconds, 0 or more. */
+const Millis = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+
+/** An ISO 8601 time that `Date.parse` reads. */
+const Instant = Schema.String.pipe(
+  Schema.check(Schema.makeFilter((value: string) => Number.isFinite(Date.parse(value)), { expected: "an ISO 8601 time" })),
+)
+
+/**
+ * Where one user is in one episode. `positionMs` is on the whole episode timeline (all chapters in order).
+ * A finished episode holds its total length. The newest `updatedAt` wins.
+ */
+export const EpisodeProgress = Schema.Struct({ positionMs: Millis, updatedAt: Instant })
+export interface EpisodeProgress extends Schema.Schema.Type<typeof EpisodeProgress> {}
+
+/** Closer than this to the end counts as finished, so the next play starts from the top. */
+export const FINISHED_MARGIN_MS = 3000
+
+/**
+ * Whether a position is the end of an episode of `totalMs`. Only for a finished job: the end of the chapters a
+ * running job has made so far is not the end of the episode.
+ */
+export const isFinished = (positionMs: number, totalMs: number): boolean =>
+  totalMs > 0 && positionMs >= totalMs - FINISHED_MARGIN_MS
+
+/** `a` was written after `b`. */
+export const isNewerProgress = (a: EpisodeProgress, b: EpisodeProgress): boolean =>
+  Date.parse(a.updatedAt) > Date.parse(b.updatedAt)
+
+/**
+ * The client's rule for one episode, on library load: the newer entry wins. `progress` is what the client keeps
+ * (`null` when neither side has one). `isPushed` says the local entry is newer, so the client sends it. A tie keeps
+ * the server's entry and sends nothing.
+ */
+export const mergeProgress = (
+  local: EpisodeProgress | null,
+  server: EpisodeProgress | null,
+): { readonly progress: EpisodeProgress | null; readonly isPushed: boolean } => {
+  if (local === null) return { progress: server, isPushed: false }
+  if (server === null || isNewerProgress(local, server)) return { progress: local, isPushed: true }
+  return { progress: server, isPushed: false }
+}
+
 export const Episode = Schema.Struct({
   id: EpisodeId,
   createdAt: Schema.String,
@@ -78,6 +121,8 @@ export const Episode = Schema.Struct({
   bookUrl: Schema.NullOr(Schema.String),
   coverUrl: Schema.NullOr(Schema.String),
   job: JobState,
+  /** The client token user's progress, as the server stores it. */
+  progress: Schema.NullOr(EpisodeProgress),
 })
 export interface Episode extends Schema.Schema.Type<typeof Episode> {}
 
