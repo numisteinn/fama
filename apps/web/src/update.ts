@@ -488,7 +488,7 @@ const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Ste
 
 /**
  * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
- * A loaded, paused episode moves there, so the next Play resumes where the other device stopped.
+ * A loaded, paused episode rests there, so the next Play resumes where the other device stopped.
  */
 const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => {
   const local = model.localProgress[episodeId]
@@ -501,7 +501,7 @@ const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step =>
       model: modifyFields(stepModel, { localProgress: Record.set(episodeId, progress) }),
       commands: [StoreProgress({ episodeId, progress })],
     }),
-    isLoadedPaused ? moveTo(progress.positionMs) : unchanged,
+    isLoadedPaused ? restAt(progress.positionMs) : unchanged,
   ])
 }
 
@@ -534,6 +534,13 @@ const syncProgress: Step = (model) =>
       return progress === null ? unchanged : adoptProgress(episode.id, progress)
     }),
   )
+
+/**
+ * The finished rule the devices share: `positionMs` is the end of `episode`, or within the last seconds of it.
+ * Play then starts at 0. The end of the chapters of a working job is not the end of the episode.
+ */
+const isPlayedThrough = (episode: Episode, positionMs: number) =>
+  !isWorking(episode.job) && isFinished(positionMs, totalMs(episode.chapters))
 
 const loadChapter =
   (episode: Episode, index: number, offsetMs: number, isAutoplay: boolean): Step =>
@@ -604,8 +611,7 @@ const playFromSaved =
     })
     const { progress } = mergeProgress(local, episode.progress)
     const saved = progress?.positionMs ?? 0
-    const isDone = !isWorking(episode.job) && isFinished(saved, totalMs(episode.chapters))
-    const target = locate(episode.chapters, isDone ? 0 : saved)
+    const target = locate(episode.chapters, isPlayedThrough(episode, saved) ? 0 : saved)
     // Storage is the truth for this device: an entry gone from it (site data cleared) is gone here too.
     const known: Step =
       progress !== null
@@ -637,6 +643,18 @@ const moveTo = (ms: number): Step =>
         })
       : Update.combine([loadChapter(episode, target.index, target.offsetMs, willPlay), setPlayback({ isEnded })])
   })
+
+/**
+ * Rests the loaded, paused episode at a synced `positionMs`, without saving. A played-through position leaves it
+ * ended, as its own end of episode does: the next Play starts at 0.
+ */
+const restAt = (positionMs: number): Step =>
+  withLoaded(({ episode }) =>
+    Update.combine([
+      moveTo(positionMs),
+      isPlayedThrough(episode, positionMs) ? setPlayback({ isEnded: true }) : unchanged,
+    ]),
+  )
 
 /** The listener moves to `ms`: the move, saved. */
 const seek = (ms: number): Step =>

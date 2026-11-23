@@ -1071,6 +1071,85 @@ describe("progress sync", () => {
     )
   })
 
+  test("a paused episode that takes a finished entry is ended: the next Play starts at 0, as on its own end", () => {
+    const paused = {
+      ...withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        offsetMs: 10_000,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    // The phone stopped 1.5 s before the end of the 46,525 ms episode: inside the finished margin.
+    const finished = progressAt(45_000, "2026-11-23T11:00:00.000Z")
+    story(
+      update,
+      given(paused),
+      message(loaded([{ ...harbourDays, progress: finished }])),
+      model((next) => {
+        expect(next.playback).toEqual(
+          Playback.Loaded({
+            episodeId: harbourDays.id,
+            chapter: 1,
+            offsetMs: 45_000 - 26_825,
+            isPlaying: false,
+            isWaiting: false,
+            isEnded: true,
+          }),
+        )
+        expect(next.localProgress[harbourDays.id]).toEqual(finished)
+      }),
+      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: finished }), LoadChapter),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      // The player rests on the phone's position, so a hidden page stamps nothing.
+      message(Message.HidPage()),
+      Command.expectNone(),
+      message(Message.ClickedPlayPause()),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
+        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
+      }),
+      Command.expectExact(LoadChapter),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("a finished entry of a job that still works is not the end: the paused episode resumes there", () => {
+    const encoding = {
+      ...harbourDays,
+      durationMs: null,
+      bookUrl: null,
+      job: { ...runningHarbourDays.job, stage: "encoding" as const },
+    }
+    const paused = {
+      ...withEpisodes(baseModel({ [harbourDays.id]: older }), [encoding]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 1,
+        offsetMs: 1_000,
+        isPlaying: false,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    story(
+      update,
+      given(paused),
+      message(loaded([{ ...encoding, progress: progressAt(45_000, "2026-11-23T11:00:00.000Z") }])),
+      model((next) => {
+        expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(45_000 - 26_825)
+        expect(next.playback._tag === "Loaded" && next.playback.isEnded).toBe(false)
+      }),
+      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+    )
+  })
+
   test("a newer server entry leaves a playing episode where it is", () => {
     const playing = {
       ...withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
