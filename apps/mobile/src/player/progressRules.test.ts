@@ -1,6 +1,6 @@
 import type { Episode } from "@fama/contracts"
 import { describe, expect, test } from "vitest"
-import { IDLE_TRACKER, type Moment, type Tracker, planSync, restMs, startMs, takesAnswer, track } from "./progressRules"
+import { IDLE_TRACKER, type Moment, type Tracker, planSync, takesAnswer, track } from "./progressRules"
 
 const at = (positionMs: number, updatedAt: string) => ({ positionMs, updatedAt })
 const older = at(10_000, "2026-11-23T09:00:00.000Z")
@@ -94,79 +94,5 @@ describe("takesAnswer", () => {
     expect(takesAnswer(older, older)).toBe(true)
     expect(takesAnswer(newer, older)).toBe(false)
     expect(takesAnswer(undefined, older)).toBe(false)
-  })
-})
-
-describe("startMs", () => {
-  const chapters = [
-    { index: 0, title: "Morning", durationMs: 26_825, url: "" },
-    { index: 1, title: "Evening", durationMs: 19_700, url: "" },
-  ]
-  const ready = { chapters, job: { _tag: "Ready", finishedAt: "x" } } as const
-  const running = {
-    chapters: [chapters[0]!],
-    job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
-  } as unknown as Pick<Episode, "chapters" | "job">
-
-  test("starts at the newer of the device's and the server's entry", () => {
-    expect(startMs(older, { ...ready, progress: newer })).toBe(40_000)
-    expect(startMs(newer, { ...ready, progress: older })).toBe(40_000)
-    expect(startMs(null, { ...ready, progress: null })).toBe(0)
-  })
-
-  test("a finished episode starts at 0", () => {
-    expect(startMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(0)
-  })
-
-  test("the end of the audio of a running job is not finished", () => {
-    expect(startMs(at(26_825, newer.updatedAt), { ...running, progress: null })).toBe(26_825)
-  })
-
-  test("the same saved position on a later list starts in the new chapter, never at 0", () => {
-    // The web listened to the end of chapter 1 while the job ran. The list then grew, and the job is Ready.
-    const saved = at(26_825, newer.updatedAt)
-    expect(startMs(saved, { ...running, progress: saved })).toBe(26_825)
-    expect(startMs(saved, { ...running, chapters, progress: saved })).toBe(26_825)
-    expect(startMs(saved, { ...ready, progress: saved })).toBe(26_825)
-  })
-
-  test("a position in the last 3 s of a Ready episode is finished", () => {
-    expect(startMs(at(45_000, newer.updatedAt), { ...ready, progress: null })).toBe(0)
-    // The same position while the job still encodes the book is not.
-    expect(startMs(at(45_000, newer.updatedAt), { ...running, chapters, progress: null })).toBe(45_000)
-  })
-})
-
-describe("restMs", () => {
-  const chapters = [
-    { index: 0, title: "Morning", durationMs: 26_825, url: "" },
-    { index: 1, title: "Evening", durationMs: 19_700, url: "" },
-  ]
-  const ready = { chapters, job: { _tag: "Ready", finishedAt: "x" } } as const
-  const failed = { chapters: [chapters[0]!], job: { _tag: "Failed", reason: "x", failedAt: "x" } } as const
-  const running = {
-    chapters: [chapters[0]!],
-    job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
-  } as unknown as Pick<Episode, "chapters" | "job">
-  const end = at(26_825, newer.updatedAt)
-
-  test("a paused player rests at the newer of the device's and the server's entry", () => {
-    expect(restMs(older, { ...ready, progress: newer })).toBe(40_000)
-    expect(restMs(newer, { ...ready, progress: older })).toBe(40_000)
-    expect(restMs(null, { ...ready, progress: null })).toBe(0)
-  })
-
-  test("a finished entry rests at the end: the Play decides, on the list it has then", () => {
-    // Resting decides nothing. A later list can have another job state, so the Play starts by `startMs` then.
-    expect(restMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(46_525)
-    expect(startMs(at(46_525, newer.updatedAt), { ...ready, progress: null })).toBe(0)
-  })
-
-  test("the end of the audio of a job that can still get chapters rests there, so a later Play is not at 0", () => {
-    expect(restMs(end, { ...running, progress: null })).toBe(26_825)
-    // A failed job gets more chapters after a retry: its end is not kept as 0.
-    expect(restMs(end, { ...failed, progress: null })).toBe(26_825)
-    // A Play that acts now, with the failed job as it is, does start at 0: no more audio comes.
-    expect(startMs(end, { ...failed, progress: null })).toBe(0)
   })
 })

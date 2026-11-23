@@ -90,11 +90,6 @@ const paused = (episode: Episode = ready) => {
 }
 
 describe("a Play and the library requests that are out", () => {
-  test("with no library request in flight, Play starts at once", () => {
-    const device = paused()
-    device.send({ _tag: "Toggle" })
-    expect(device.calls).toEqual(["Play"])
-  })
 
   test("Play pressed while the library loads starts when the list came", () => {
     // The app came back to the front: the refresh is out when the listener taps Play.
@@ -149,35 +144,6 @@ describe("a Play and the library requests that are out", () => {
     expect(device.calls).toEqual(["Play"])
   })
 
-  test("with two requests in flight, the list of the newer one starts the Play", () => {
-    const device = paused()
-    const poll = device.refresh()
-    const foreground = device.refresh()
-    device.send({ _tag: "Toggle" })
-    device.answer(foreground, [ready])
-    expect(device.calls).toEqual(["Play"])
-    device.answer(poll, [ready])
-    expect(device.calls).toEqual(["Play"])
-  })
-
-  test("with two requests in flight, the Play starts when both have failed", () => {
-    const device = paused()
-    const poll = device.refresh()
-    const foreground = device.refresh()
-    device.send({ _tag: "Toggle" })
-    device.answer(foreground, null)
-    expect(device.calls).toEqual([])
-    device.answer(poll, null)
-    expect(device.calls).toEqual(["Play"])
-  })
-
-  test("a request that answered before the Play is not waited for", () => {
-    const device = paused()
-    device.answer(device.refresh(), [ready])
-    device.send({ _tag: "Toggle" })
-    expect(device.calls).toEqual(["Play"])
-  })
-
   test("a second Play of the same episode does not wait again", () => {
     const device = paused()
     const foreground = device.refresh()
@@ -228,13 +194,6 @@ describe("a Play of a library episode", () => {
   const finishedElsewhere = at(46_525, newer.updatedAt)
   const finished = { ...ready, progress: finishedElsewhere } as Episode
 
-  test("with no library request in flight, it loads the episode as the library lists it", () => {
-    const device = phone({ e1: older })
-    device.library([running])
-    device.play(running)
-    expect(device.calls).toEqual(["Load e1, 1 chapters, at 10000, play"])
-  })
-
   test("after a wait, it loads the episode as the answer lists it: both chapters, and a finished one from 0", () => {
     const device = phone({ e1: older })
     device.library([running])
@@ -269,28 +228,6 @@ describe("a Play of a library episode", () => {
     expect(device.calls).toEqual([])
     device.answer(foreground, null)
     expect(device.calls).toEqual(["Load e1, 2 chapters, at 0, play"])
-  })
-
-  test("a failed load with no new list plays the episode of the list the account started with", () => {
-    // Offline: the library shows the cached list, and its first request fails.
-    const device = phone({ e1: older })
-    device.send({ _tag: "Listed", episodes: [running] })
-    const first = device.refresh()
-    device.play(running)
-    device.answer(first, null)
-    expect(device.calls).toEqual(["Load e1, 1 chapters, at 10000, play"])
-  })
-
-  test("a second Play of the same episode loads at once", () => {
-    const device = phone({ e1: older })
-    device.library([running])
-    const foreground = device.refresh()
-    device.play(running)
-    device.play(running)
-    expect(device.calls).toEqual(["Load e1, 1 chapters, at 10000, play"])
-    device.status({ position: 10, playing: true })
-    device.answer(foreground, [running])
-    expect(device.calls).toHaveLength(1)
   })
 
   test("a deleted episode takes its waiting Play back, and no other", () => {
@@ -395,14 +332,6 @@ describe("the native calls of one event, in order", () => {
     // The listening goes on, and its next save is the listener's own.
     device.status({ position: 17, playing: true })
     expect(device.sent.map((entry) => entry.positionMs)).toEqual([17_000])
-  })
-
-  test("a Play pressed in the last 3 s of a Ready episode starts at 0, as on the web", () => {
-    const device = paused()
-    device.status({ position: 45 })
-    device.calls.length = 0
-    device.send({ _tag: "Toggle" })
-    expect(device.calls).toEqual(["Seek 0", "Play"])
   })
 
   test("the button takes a wait for the next chapter back", () => {

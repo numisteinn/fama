@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": { "types": "./src/index.ts", "import": "./src/index.ts" },
-    "./sequences": { "types": "./src/sequences.ts", "import": "./src/sequences.ts" }
+    ".": { "types": "./src/index.ts", "import": "./src/index.ts" }
   },
   "scripts": { "typecheck": "tsc -p .", "test": "vitest run" },
   "dependencies": { "effect": "catalog:" },
