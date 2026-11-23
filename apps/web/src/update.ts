@@ -667,16 +667,19 @@ const skip = (deltaMs: number): Step =>
 
 const playChapter = (index: number): Step => withLoaded(({ episode }) => intend(loadChapter(episode, index, 0, true)))
 
+/** The episode played to its end: its total length is stored, so every device shows it played. The next Play starts at 0. */
+const finish = (episode: Episode): Step =>
+  Update.combine([
+    setPlayback({ isPlaying: false, isWaiting: false, isEnded: true }),
+    savePositionAt(episode.id, totalMs(episode.chapters)),
+  ])
+
 const endChapter: Step = withLoaded(({ playback, episode }) => {
   const next = playback.chapter + 1
   if (episode.chapters[next]) return loadChapter(episode, next, 0, true)
   // The end of the chapters made so far is not the end of the episode: wait, and save nothing new.
   if (isWorking(episode.job)) return setPlayback({ isPlaying: false, isWaiting: true, isEnded: true })
-  // Finished: the episode's total length is stored, so every device shows it played. The next Play starts at 0.
-  return Update.combine([
-    setPlayback({ isPlaying: false, isEnded: true }),
-    savePositionAt(episode.id, totalMs(episode.chapters)),
-  ])
+  return finish(episode)
 })
 
 const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
@@ -688,7 +691,10 @@ const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
   ])
 }
 
-/** The rules that follow a change of the episode list: a deleted episode stops, and a waiting player moves on. */
+/**
+ * The rules that follow a change of the episode list: a deleted episode stops, and a waiting player moves on. When
+ * the job ends with no chapter after the last one played, the wait was the end of the episode.
+ */
 const reconcilePlayback: Step = (model) => {
   const playback = model.playback
   if (playback._tag !== "Loaded") return { model }
@@ -705,7 +711,7 @@ const reconcilePlayback: Step = (model) => {
   }
   if (!playback.isWaiting) return { model }
   if (episode.chapters[playback.chapter + 1]) return loadChapter(episode, playback.chapter + 1, 0, true)(model)
-  if (!isWorking(episode.job)) return setPlayback({ isWaiting: false })(model)
+  if (!isWorking(episode.job)) return finish(episode)(model)
   return { model }
 }
 

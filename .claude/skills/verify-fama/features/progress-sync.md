@@ -7,7 +7,7 @@ A listener's position in an episode follows them between the web app and the iPh
 - `sync-web-push` a pause on the web stores the position on the server (`progress` on `GET /api/episodes/<id>`), with the same stamp as the tab's `fama.progress.<id>`.
 - `sync-web-resume` a second web storage (another profile, or the entry removed) resumes at the server's position.
 - `sync-web-passive` a web library load takes the server entry with the server's stamp and sends no `/progress` request.
-- `sync-finished` the end of an episode stores the total length, not 0, and the next Play starts at 0:00. A position in the last 3 s counts as the end on every device: a loaded, paused web player that takes such an entry from the server also starts its next Play at 0:00.
+- `sync-finished` the end of an episode stores the total length, not 0, and the next Play starts at 0:00. When the last chapter ends while the job still encodes the book, the web stores the total length when the job is Ready. A position in the last 3 s counts as the end on every device: a loaded, paused web player that takes such an entry from the server also starts its next Play at 0:00.
 - `sync-ios-push` a pause on the iPhone stores its position on the server.
 - `sync-ios-passive` an app relaunch restores the last episode paused and sends no `PUT`.
 - `sync-ios-resume` after the web moves an episode, an iPhone relaunch restores it at the web's position.

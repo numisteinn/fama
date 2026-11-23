@@ -786,6 +786,54 @@ describe("player", () => {
     )
   })
 
+  test("the last chapter ends while the job still encodes the book: the finish is saved when the job is Ready", () => {
+    const encoding = {
+      ...harbourDays,
+      durationMs: null,
+      bookUrl: null,
+      job: { ...runningHarbourDays.job, stage: "encoding" as const },
+    }
+    const playing = {
+      ...withEpisodes(baseModel({ [harbourDays.id]: progressAt(42_500) }), [encoding]),
+      playback: Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 1,
+        offsetMs: 19_700,
+        isPlaying: true,
+        isWaiting: false,
+        isEnded: false,
+      }),
+    }
+    story(
+      update,
+      given(playing),
+      message(Message.EndedChapter()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
+      Command.expectNone(),
+      // No chapter came after the last one played: the wait was the end of the episode.
+      message(Message.SucceededFetchEpisodes({ generation: 0, episodes: [{ ...harbourDays, progress: progressAt(42_500) }] })),
+      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
+      saved(46_525),
+      model((next) => {
+        expect(next.localProgress[harbourDays.id]?.positionMs).toBe(46_525)
+        expect(next.playback).toEqual(
+          Playback.Loaded({
+            episodeId: harbourDays.id,
+            chapter: 1,
+            offsetMs: 19_700,
+            isPlaying: false,
+            isWaiting: false,
+            isEnded: true,
+          }),
+        )
+      }),
+      message(Message.ClickedPlayPause()),
+      model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
+      Command.expectExact(LoadChapter),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
   test("a skip inside the chapter seeks, then saves and sends the position", () => {
     story(
       updateKeepingReads,
