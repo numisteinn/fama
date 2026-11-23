@@ -3,6 +3,8 @@ import { useSyncExternalStore } from "react"
 import { isActive } from "../lib/format"
 import { jsonFile } from "../lib/jsonFile"
 import { FamaPlayer, type NativeStatus, type Track } from "./native"
+import { progress } from "./progress"
+import { IDLE_TRACKER, type Moment, type Tracker, startMs, track } from "./progressRules"
 
 // One native player per app, so its state lives in one module-level store.
 
@@ -20,35 +22,50 @@ const IDLE: NativeStatus = {
 
 type Prefs = { rate: number; lastEpisodeId: string | null }
 
-const positionsFile = jsonFile<Record<string, number>>("positions.json", {})
 const prefsFile = jsonFile<Prefs>("player.json", { rate: 1, lastEpisodeId: null })
 
 let status: NativeStatus = IDLE
-let positions = positionsFile.read()
 let prefs = prefsFile.read()
 let loadedChapters = 0
-let lastSaved = { id: "", position: -1, playing: false }
+let tracker: Tracker = IDLE_TRACKER
+/** The episode in the native player, as the library last listed it. */
+let loadedEpisode: Episode | null = null
 
 const statusListeners = new Set<() => void>()
-const positionListeners = new Set<() => void>()
 
-function savePosition(next: NativeStatus) {
-  const id = next.episodeId
-  if (!id) return
-  const moved = Math.abs(next.position - lastSaved.position) >= 5
-  const stopped = lastSaved.playing && !next.playing
-  if (id !== lastSaved.id || moved || stopped || next.ended) {
-    positions = { ...positions, [id]: next.position }
-    positionsFile.write(positions)
-    lastSaved = { id, position: next.position, playing: next.playing }
-    positionListeners.forEach((listener) => listener())
-  }
-}
+/** The native status in whole-episode milliseconds. The native player speaks seconds. */
+const momentOf = (next: NativeStatus): Moment => ({
+  episodeId: next.episodeId,
+  positionMs: Math.round(next.position * 1000),
+  playing: next.playing,
+  ended: next.ended,
+})
 
 FamaPlayer.addListener("onStatus", (next) => {
   status = next
-  savePosition(next)
+  const step = track(tracker, momentOf(next))
+  tracker = step.tracker
+  if (step.isSaved && next.episodeId) progress.save(next.episodeId, step.tracker.savedMs)
   statusListeners.forEach((listener) => listener())
+})
+
+/** Saves where the loaded episode is now, when it moved since the last save: before a switch, and on background. */
+function saveNow() {
+  const moment = momentOf(status)
+  // Not moved since the last save or the load: nothing the listener did, so no stamp.
+  if (!moment.episodeId || moment.episodeId !== tracker.episodeId || moment.positionMs === tracker.savedMs) return
+  tracker = { ...tracker, savedMs: moment.positionMs }
+  progress.save(moment.episodeId, moment.positionMs)
+}
+
+// A newer server entry for the loaded, paused episode moves the player there, without a save: the move is not the
+// listener's. A finished episode moves to the top, where its next play starts.
+progress.onAdopt((episodeId, entry) => {
+  if (status.episodeId !== episodeId || status.playing) return
+  const episode = loadedEpisode
+  const targetMs = episode && episode.id === episodeId ? startMs(entry, episode) : entry.positionMs
+  tracker = { ...tracker, savedMs: targetMs }
+  void FamaPlayer.seek(targetMs / 1000)
 })
 
 export function usePlayerStatus(): NativeStatus {
@@ -58,17 +75,6 @@ export function usePlayerStatus(): NativeStatus {
       return () => statusListeners.delete(listener)
     },
     () => status,
-  )
-}
-
-/** Seconds listened, as last saved. */
-export function useSavedPosition(episodeId: string): number {
-  return useSyncExternalStore(
-    (listener) => {
-      positionListeners.add(listener)
-      return () => positionListeners.delete(listener)
-    },
-    () => positions[episodeId] ?? 0,
   )
 }
 
@@ -89,19 +95,19 @@ function tracksOf(episode: Episode, source: TrackSource): Track[] {
   }))
 }
 
-function totalOf(episode: Episode): number {
-  return episode.chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0) / 1000
-}
-
 export const player = {
-  /** Loads an episode at its saved position. A finished episode starts over. */
+  /**
+   * Loads an episode at the newer of the device's and the server's position. A finished episode starts over.
+   * Loading saves nothing for the new episode; only the listener's play and moves do.
+   */
   async load(episode: Episode, source: TrackSource, autoplay: boolean) {
     if (status.episodeId === episode.id) {
       if (autoplay && !status.playing) await FamaPlayer.play()
       return
     }
-    const saved = positions[episode.id] ?? 0
-    const finished = episode.job._tag === "Ready" && saved >= totalOf(episode) - 2
+    saveNow()
+    const position = startMs(progress.get(episode.id), episode) / 1000
+    loadedEpisode = episode
     loadedChapters = episode.chapters.length
     prefs = { ...prefs, lastEpisodeId: episode.id }
     prefsFile.write(prefs)
@@ -111,14 +117,16 @@ export const player = {
       artist: episode.author,
       artworkUrl: episode.coverUrl ? source.mediaUrl(episode.coverUrl) : null,
       tracks: tracksOf(episode, source),
-      position: finished ? 0 : saved,
+      position,
       rate: prefs.rate,
       autoplay,
     })
   },
   /** Feeds chapters that appeared while the job runs. */
   async sync(episode: Episode, source: TrackSource) {
-    if (status.episodeId !== episode.id || episode.chapters.length <= loadedChapters) return
+    if (status.episodeId !== episode.id) return
+    loadedEpisode = episode
+    if (episode.chapters.length <= loadedChapters) return
     loadedChapters = episode.chapters.length
     await FamaPlayer.updateTracks(tracksOf(episode, source))
   },
@@ -131,16 +139,19 @@ export const player = {
     await FamaPlayer.setRate(rate)
   },
   rate: () => prefs.rate,
+  /** The app goes to the background: save where the listener is, if it moved since the last save. */
+  saveNow,
   /** Stops and forgets an episode, for example after it was deleted. */
   async forget(episodeId: string) {
-    const { [episodeId]: _, ...rest } = positions
-    positions = rest
-    positionsFile.write(positions)
+    progress.forget(episodeId)
     if (prefs.lastEpisodeId === episodeId) {
       prefs = { ...prefs, lastEpisodeId: null }
       prefsFile.write(prefs)
     }
-    if (status.episodeId === episodeId) await FamaPlayer.unload()
+    if (status.episodeId === episodeId) {
+      loadedEpisode = null
+      await FamaPlayer.unload()
+    }
   },
 }
 

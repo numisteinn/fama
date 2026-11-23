@@ -6,7 +6,8 @@
   "scripts": {
     "start": "expo start --dev-client",
     "ios": "EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios && expo run:ios",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@expo-google-fonts/dm-sans": "^0.4.2",
@@ -44,6 +45,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "~19.3.0",
     "babel-preset-expo": "~58.0.24",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

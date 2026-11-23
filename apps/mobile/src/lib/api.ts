@@ -2,6 +2,7 @@ import {
   CreateEpisode,
   Episode,
   EpisodeList,
+  EpisodeProgress,
   FeedInfo,
   Me,
   VoiceList,
@@ -101,6 +102,12 @@ export function createApi(connection: Connection) {
     },
     retryEpisode: (id: string): Promise<Episode> =>
       json(Episode, `/api/episodes/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+    putProgress: (id: string, progress: EpisodeProgress): Promise<EpisodeProgress> =>
+      json(EpisodeProgress, `/api/episodes/${encodeURIComponent(id)}/progress`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Schema.encodeSync(EpisodeProgress)(progress)),
+      }),
     listVoices: async (): Promise<ReadonlyArray<Voice>> => (await json(VoiceList, "/api/voices")).voices,
     feedUrl: async (): Promise<string> => (await json(FeedInfo, "/api/feed")).url,
   }

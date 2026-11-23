@@ -1,10 +1,11 @@
-import type { Episode } from "@fama/contracts"
+import { type Episode, isFinished } from "@fama/contracts"
 import { useRef, useState } from "react"
 import { StyleSheet, Text, View } from "react-native"
 import ReanimatedSwipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable"
 import { useDownloads } from "../lib/downloads"
 import { duration, isPlayable, jobLabel, totalSeconds } from "../lib/format"
-import { usePlayerStatus, useSavedPosition } from "../player/player"
+import { usePlayerStatus } from "../player/player"
+import { useProgressMs } from "../player/progress"
 import { colors, fonts, radius, space } from "../theme"
 import { Artwork } from "./Artwork"
 import { Icon, Tap } from "./ui"
@@ -67,7 +68,7 @@ export function EpisodeRow({ episode, onPlay, onRetry, onDelete }: Props) {
 function Meta({ episode }: { episode: Episode }) {
   const downloads = useDownloads()
   const status = usePlayerStatus()
-  const saved = useSavedPosition(episode.id)
+  const savedMs = useProgressMs(episode.id)
   const nowPlaying = status.episodeId === episode.id && status.playing
   const download = downloads.state(episode)
   const { job } = episode
@@ -94,8 +95,8 @@ function Meta({ episode }: { episode: Episode }) {
   }
 
   const total = totalSeconds(episode)
-  const left = total - saved
-  const text = saved >= total - 2 ? "Played" : saved > 5 ? `${duration(left)} left` : duration(total)
+  const saved = savedMs / 1000
+  const text = isFinished(savedMs, total * 1000) ? "Played" : saved > 5 ? `${duration(total - saved)} left` : duration(total)
   return (
     <View style={styles.meta}>
       {nowPlaying ? <Icon name="speaker.wave.2.fill" size={15} color={colors.accent} /> : null}
