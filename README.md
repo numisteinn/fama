@@ -32,24 +32,36 @@ Build and install the app as `apps/mobile/README.md` says. In the app, open Sett
 - Server: `http://localhost:8787` on the simulator. On a phone on the same Wi-Fi, the Mac's LAN address, for example `http://192.168.0.5:8787`. `wrangler dev` prints it at start.
 - API token: `dev-api-token`.
 
-## Deploy
+## Self-host
 
-The API and web app run as one Cloudflare Worker with D1 and R2. To deploy your own:
+Put Fama on your own Cloudflare account: one Worker (API, feed and web app), one D1 database and one R2 bucket. `infra/` holds the [Alchemy](https://alchemy.run) stack. `infra/README.md` has the details.
+
+You need a Cloudflare account and [mise](https://mise.jdx.dev).
 
 ```sh
-cd apps/api
-npx wrangler d1 create fama            # put the id in wrangler.jsonc
-npx wrangler r2 bucket create fama-media
-npx wrangler d1 migrations apply DB --remote
-pnpm --filter @fama/web build
-npx wrangler deploy --secrets-file <file>   # JSON: {"FAMA_WORKER_TOKEN": "<random secret>"}
-node scripts/create-user.ts -- --remote     # prints the user id, client token and feed token once
+mise install
+pnpm install
+pnpm --filter @fama/infra exec alchemy profile edit --add Cloudflare   # log in once
+pnpm fama setup --stage home
 ```
 
-Enter the client token in the apps. Then point the Mac worker at it with the worker token:
+`--stage` names the deployment. Use lowercase letters, digits and hyphens, and use the same name each time. Setup shows the plan and asks before it changes anything.
+
+The first run prints the server URL, the client token, the worker token, the worker start command and a QR code. Scan the QR code with the iPhone camera to connect the app, or enter the server URL and client token in Settings. Copy the tokens: setup does not show them again. Run `pnpm fama setup --stage home` again after a pull to update the deployment. A rerun keeps the user and the tokens.
+
+Start a worker with the worker token. On a Mac:
 
 ```sh
-cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <FAMA_WORKER_TOKEN>
+cd worker && uv sync
+uv run fama work --api <server URL> --token <worker token>
+```
+
+For Docker or Modal, see `worker/README.md`.
+
+To remove the deployment and all its data:
+
+```sh
+pnpm --filter @fama/infra exec alchemy destroy --stage home
 ```
 
 ## Parts
@@ -57,6 +69,7 @@ cd worker && uv run fama work --api https://<your-worker>.workers.dev --token <F
 | Path | What |
 |---|---|
 | `packages/contracts` | The HTTP contract as Effect Schema. `docs/api.md` is the same contract in words. |
+| `infra` | Alchemy stack and `fama setup` for a self-hosted deployment. |
 | `apps/api` | Cloudflare Worker: API, D1, R2, RSS feed. |
 | `apps/web` | Vite + Foldkit web app (The Elm Architecture on Effect). |
 | `apps/mobile` | Expo iOS app. |
