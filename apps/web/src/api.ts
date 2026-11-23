@@ -1,41 +1,29 @@
-import {
-  CreateEpisode,
-  Episode,
-  EpisodeList,
-  FeedInfo,
-  VoiceList,
-  type EpisodeId,
-  type VoiceRef,
-} from "@fama/contracts"
-import { Schema } from "effect"
-import { apiOrigin, apiToken } from "~/settings"
+import { Effect, Redacted, Schema } from "effect"
+import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http"
 
-export class ApiError extends Error {
-  readonly status: number
-  constructor(status: number, message: string) {
-    super(message)
-    this.status = status
-  }
-}
+/** Bearer token for `/api/*`. Redacted, so DevTools and logs never show it. */
+export const ApiToken = Schema.Redacted(Schema.String, { label: "API token", disallowJsonEncode: true })
+export type ApiToken = typeof ApiToken.Type
 
-async function call(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers)
-  const token = apiToken.get()
-  if (token) headers.set("Authorization", `Bearer ${token}`)
-  let response: Response
-  try {
-    response = await fetch(apiOrigin.get() + path, { ...init, headers })
-  } catch {
-    throw new ApiError(0, "Can't reach the server")
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "")
-    throw new ApiError(response.status, messageFor(response.status, text))
-  }
-  return response
-}
+/** Wraps a token the way `ApiToken` expects: Redacted, with its label. */
+export const apiToken = (value: string): ApiToken => Redacted.make(value, { label: "API token" })
 
-function messageFor(status: number, body: string): string {
+/** Where requests go. An empty origin is the page's own origin, which is the production setup. */
+export const Connection = Schema.Struct({ origin: Schema.String, token: ApiToken })
+export type Connection = typeof Connection.Type
+
+/** Two connections reach the same server with the same token. */
+export const isSameConnection = (a: Connection, b: Connection): boolean =>
+  a.origin === b.origin && Redacted.value(a.token) === Redacted.value(b.token)
+
+/** A request that did not work. Status 0 means no HTTP response. */
+export const ApiFailure = Schema.Struct({ status: Schema.Number, message: Schema.String })
+export type ApiFailure = typeof ApiFailure.Type
+
+const unreachable: ApiFailure = { status: 0, message: "Can't reach the server" }
+const undecodable: ApiFailure = { status: 0, message: "The server sent a response this app does not understand" }
+
+export function messageFor(status: number, body: string): string {
   if (status === 401) return "The API token is wrong or missing"
   if (status === 404) return "Not found"
   if (status === 413) return "The file is too large"
@@ -50,41 +38,41 @@ function messageFor(status: number, body: string): string {
   return body.trim() || `Request failed (${status})`
 }
 
-async function json<S extends Schema.ConstraintDecoder<unknown>>(
-  schema: S,
+/** Sends a request to the Fama API. Fails with an `ApiFailure` the user can read. */
+export const send = (
+  connection: Connection,
+  method: "GET" | "POST" | "DELETE",
   path: string,
-  init?: RequestInit,
-): Promise<S["Type"]> {
-  const response = await call(path, init)
-  return Schema.decodeUnknownSync(schema)(await response.json())
-}
+  withBody: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest = (request) =>
+    request,
+): Effect.Effect<HttpClientResponse.HttpClientResponse, ApiFailure, HttpClient.HttpClient> =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient
+    const token = Redacted.value(connection.token)
+    const request = withBody(HttpClientRequest.make(method)(connection.origin + path))
+    const response = yield* client
+      .execute(token === "" ? request : HttpClientRequest.bearerToken(request, token))
+      .pipe(Effect.mapError(() => unreachable))
+    if (response.status >= 200 && response.status < 300) return response
+    const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
+    return yield* Effect.fail<ApiFailure>({ status: response.status, message: messageFor(response.status, body) })
+  })
 
-const encodeCreate = Schema.encodeSync(CreateEpisode)
+/** Sends a request and decodes the JSON body with `schema`. */
+export const sendJson = <S extends Schema.Decoder<unknown>>(
+  schema: S,
+  connection: Connection,
+  method: "GET" | "POST",
+  path: string,
+  withBody?: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest,
+): Effect.Effect<S["Type"], ApiFailure, HttpClient.HttpClient> =>
+  send(connection, method, path, withBody).pipe(
+    Effect.flatMap((response) =>
+      response.json.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+        Effect.mapError(() => undecodable),
+      ),
+    ),
+  )
 
-export const api = {
-  episodes: async () => (await json(EpisodeList, "/api/episodes")).episodes,
-  voices: async () => (await json(VoiceList, "/api/voices")).voices,
-  feed: async () => (await json(FeedInfo, "/api/feed")).url,
-
-  create: (input: CreateEpisode) =>
-    json(Episode, "/api/episodes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(encodeCreate(input)),
-    }),
-
-  upload: (file: File, voice: VoiceRef | null, speed: number) => {
-    const form = new FormData()
-    form.set("file", file)
-    if (voice) form.set("voice", voice)
-    form.set("speed", String(speed))
-    return json(Episode, "/api/episodes/upload", { method: "POST", body: form })
-  },
-
-  retry: (id: EpisodeId) =>
-    json(Episode, `/api/episodes/${encodeURIComponent(id)}/retry`, { method: "POST" }),
-
-  remove: async (id: EpisodeId) => {
-    await call(`/api/episodes/${encodeURIComponent(id)}`, { method: "DELETE" })
-  },
-}
+export const episodePath = (id: string) => `/api/episodes/${encodeURIComponent(id)}`
