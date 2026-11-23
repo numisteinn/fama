@@ -63,6 +63,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     try {
       const list = await current.api.listEpisodes()
       if (!isCurrent()) return
+      // The player takes each list first, so a move to a newer entry and a waiting Play use these episodes.
+      playGate.list(list)
       // Every list the server sent: pending local entries go out, newer server entries come in. This runs before
       // the gate opens, so a waiting Play starts from the newer position.
       progress.sync(list)
@@ -83,7 +85,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
 
   // A new server, token or user starts a fresh library.
   useEffect(() => {
-    setEpisodes(cachedEpisodes(accountKey))
+    const cached = cachedEpisodes(accountKey)
+    playGate.list(cached)
+    setEpisodes(cached)
     setLoaded(false)
     setError(null)
     void load()

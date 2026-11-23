@@ -257,3 +257,124 @@ describe("makePlayGate", () => {
     expect(started).toEqual(["e2"])
   })
 })
+
+describe("makePlayGate, a Play of a library episode", () => {
+  const chapters = [
+    { index: 0, title: "Morning", durationMs: 26_825, url: "/000.m4a" },
+    { index: 1, title: "Evening", durationMs: 19_700, url: "/001.m4a" },
+  ]
+  type Listed = Pick<Episode, "id" | "chapters" | "job" | "progress">
+  /** The job still narrates: one chapter so far. */
+  const running = {
+    id: "e1",
+    chapters: [chapters[0]!],
+    job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
+    progress: older,
+  } as unknown as Listed
+  /** The other device played it to the end after the job turned Ready. */
+  const finishedElsewhere = at(46_525, newer.updatedAt)
+  const ready = { ...running, chapters, job: { _tag: "Ready", finishedAt: "x" }, progress: finishedElsewhere } as Listed
+  /** A gate and what its Plays gave the native player: the chapters, and the start as `loadNow` works it out. */
+  const gateWithLoads = (local: typeof older | null = null) => {
+    const loads: Array<{ readonly id: string; readonly chapters: number; readonly startMs: number }> = []
+    const gate = makePlayGate<Listed>()
+    const play = (episode: Listed) =>
+      gate.playEpisode(episode, (listed) =>
+        loads.push({ id: listed.id, chapters: listed.chapters.length, startMs: startMs(local, listed) }),
+      )
+    return { gate, loads, play }
+  }
+
+  test("with no library request in flight, it loads the episode as given", () => {
+    const { gate, loads, play } = gateWithLoads()
+    gate.list([running])
+    play(running)
+    expect(loads).toEqual([{ id: "e1", chapters: 1, startMs: 10_000 }])
+  })
+
+  test("after a wait, it loads the episode as the answer lists it: both chapters, and a finished one from 0", () => {
+    // The device took the server's entry when the list merged, before the gate opened.
+    const { gate, loads, play } = gateWithLoads(finishedElsewhere)
+    gate.list([running])
+    const foreground = gate.refreshStarted()
+    play(running)
+    expect(loads).toEqual([])
+    // The answer: the job is Ready with two chapters, and the other device finished the episode.
+    gate.list([ready])
+    gate.refreshSettled(foreground, true)
+    expect(loads).toEqual([{ id: "e1", chapters: 2, startMs: 0 }])
+  })
+
+  test("an episode the answer no longer lists does not play", () => {
+    const { gate, loads, play } = gateWithLoads()
+    gate.list([running])
+    const foreground = gate.refreshStarted()
+    play(running)
+    gate.list([])
+    gate.refreshSettled(foreground, true)
+    expect(loads).toEqual([])
+    // The Play is off: a later answer that lists the episode again starts nothing.
+    const poll = gate.refreshStarted()
+    gate.list([ready])
+    gate.refreshSettled(poll, true)
+    expect(loads).toEqual([])
+  })
+
+  test("when each awaited request failed, it loads the episode as the library last listed it", () => {
+    const { gate, loads, play } = gateWithLoads(finishedElsewhere)
+    gate.list([running])
+    const poll = gate.refreshStarted()
+    const foreground = gate.refreshStarted()
+    play(running)
+    // The poll brought the new list; the foreground request then failed.
+    gate.list([ready])
+    gate.refreshSettled(poll, true)
+    expect(loads).toEqual([])
+    gate.refreshSettled(foreground, false)
+    expect(loads).toEqual([{ id: "e1", chapters: 2, startMs: 0 }])
+  })
+
+  test("a failed load with no new list plays the episode of the list the account started with", () => {
+    // Offline: the library shows the cached list, and its first request fails.
+    const { gate, loads, play } = gateWithLoads()
+    gate.list([running])
+    const first = gate.refreshStarted()
+    play(running)
+    gate.refreshSettled(first, false)
+    expect(loads).toEqual([{ id: "e1", chapters: 1, startMs: 10_000 }])
+  })
+
+  test("a second Play of the same episode loads at once, with the episode it was given", () => {
+    const { gate, loads, play } = gateWithLoads()
+    gate.list([running])
+    const foreground = gate.refreshStarted()
+    play(running)
+    play(running)
+    expect(loads).toEqual([{ id: "e1", chapters: 1, startMs: 10_000 }])
+    gate.list([ready])
+    gate.refreshSettled(foreground, true)
+    expect(loads).toHaveLength(1)
+  })
+
+  test("a deleted episode takes its waiting Play back, and no other", () => {
+    const { gate, loads, play } = gateWithLoads()
+    gate.list([running])
+    const foreground = gate.refreshStarted()
+    play(running)
+    gate.forget("other")
+    gate.forget("e1")
+    // The answer was sent before the delete, so it still lists the episode.
+    gate.refreshSettled(foreground, true)
+    expect(loads).toEqual([])
+  })
+
+  test("listed gives the episode of the newest list, or null", () => {
+    const { gate } = gateWithLoads()
+    expect(gate.listed("e1")).toBeNull()
+    gate.list([running])
+    expect(gate.listed("e1")).toBe(running)
+    gate.list([ready])
+    expect(gate.listed("e1")).toBe(ready)
+    expect(gate.listed("gone")).toBeNull()
+  })
+})

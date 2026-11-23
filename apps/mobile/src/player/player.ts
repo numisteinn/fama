@@ -28,16 +28,15 @@ let status: NativeStatus = IDLE
 let prefs = prefsFile.read()
 let loadedChapters = 0
 let tracker: Tracker = IDLE_TRACKER
-/** The episode in the native player, as the library last listed it. */
-let loadedEpisode: Episode | null = null
 
 const statusListeners = new Set<() => void>()
 
 /**
- * Holds a Play that was pressed while the library loads. The library reports each request and its answer, after it
- * merged the list with the device's progress, so the Play starts from the newer position (see `makePlayGate`).
+ * Holds a Play that was pressed while the library loads. The library reports each list, each request and its
+ * answer, after it merged the list with the device's progress. So the Play starts from the newer position, with
+ * the episode as the library lists it then (see `makePlayGate`).
  */
-export const playGate = makePlayGate()
+export const playGate = makePlayGate<Episode>()
 
 /** The native status in whole-episode milliseconds. The native player speaks seconds. */
 const momentOf = (next: NativeStatus): Moment => ({
@@ -65,11 +64,12 @@ function saveNow() {
 }
 
 // A newer server entry for the loaded, paused episode moves the player there, without a save: the move is not the
-// listener's. A finished episode moves to the top, where its next play starts.
+// listener's. A finished episode moves to the top, where its next play starts. The episode is the one the library
+// lists now, so a job that just turned Ready counts as finished.
 progress.onAdopt((episodeId, entry) => {
   if (status.episodeId !== episodeId || status.playing) return
-  const episode = loadedEpisode
-  const targetMs = episode && episode.id === episodeId ? startMs(entry, episode) : entry.positionMs
+  const episode = playGate.listed(episodeId)
+  const targetMs = episode ? startMs(entry, episode) : entry.positionMs
   tracker = { ...tracker, savedMs: targetMs }
   void FamaPlayer.seek(targetMs / 1000)
 })
@@ -112,7 +112,6 @@ async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean)
   }
   saveNow()
   const position = startMs(progress.get(episode.id), episode) / 1000
-  loadedEpisode = episode
   loadedChapters = episode.chapters.length
   prefs = { ...prefs, lastEpisodeId: episode.id }
   prefsFile.write(prefs)
@@ -130,17 +129,17 @@ async function loadNow(episode: Episode, source: TrackSource, autoplay: boolean)
 
 export const player = {
   /**
-   * Loads an episode (see `loadNow`). With `autoplay` it is a Play: pressed while the library loads, it waits for
-   * the answer. Without it (the restore after launch) it loads at once.
+   * Loads an episode (see `loadNow`). With `autoplay` it is a Play: pressed while the library loads, it waits, and
+   * then loads the episode as the library lists it after the answer. Without it (the restore after launch) it
+   * loads at once.
    */
   async load(episode: Episode, source: TrackSource, autoplay: boolean) {
     if (!autoplay) return loadNow(episode, source, false)
-    playGate.play(episode.id, () => void loadNow(episode, source, true))
+    playGate.playEpisode(episode, (listed) => void loadNow(listed, source, true))
   },
   /** Feeds chapters that appeared while the job runs. */
   async sync(episode: Episode, source: TrackSource) {
     if (status.episodeId !== episode.id) return
-    loadedEpisode = episode
     if (episode.chapters.length <= loadedChapters) return
     loadedChapters = episode.chapters.length
     await FamaPlayer.updateTracks(tracksOf(episode, source))
@@ -172,15 +171,13 @@ export const player = {
   saveNow,
   /** Stops and forgets an episode, for example after it was deleted. */
   async forget(episodeId: string) {
+    playGate.forget(episodeId)
     progress.forget(episodeId)
     if (prefs.lastEpisodeId === episodeId) {
       prefs = { ...prefs, lastEpisodeId: null }
       prefsFile.write(prefs)
     }
-    if (status.episodeId === episodeId) {
-      loadedEpisode = null
-      await FamaPlayer.unload()
-    }
+    if (status.episodeId === episodeId) await FamaPlayer.unload()
   },
 }
 

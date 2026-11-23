@@ -1263,6 +1263,99 @@ describe("player", () => {
         Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
       )
     })
+
+    describe("the waiting Play keeps the episode's id: it plays the episode as the answer lists it", () => {
+      /** The job still narrates: the tab lists one chapter. */
+      const growing = { ...runningHarbourDays, progress: old }
+      /** The answer lists the job Ready with both chapters, and the phone played the episode to the end. */
+      const finishedElsewhere = progressAt(46_525, phone.updatedAt)
+      const firstChapter = LoadChapter({ src: harbourDays.chapters[0]!.url, offsetMs: 0, rate: 1, isAutoplay: true })
+      const listedGrowing = update(withEpisodes(baseModel({ [id]: old }), [growing]), Message.BecameVisible()).model
+      const loadedGrowing = update(withEpisodes(paused, [growing]), Message.BecameVisible()).model
+      const answerWithout = Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [queuedArticle] })
+
+      test("from its row: a finished episode starts at 0, and its new chapter plays", () => {
+        story(
+          updateKeepingReads,
+          given(listedGrowing),
+          message(Message.ClickedPlayEpisode({ episodeId: id })),
+          Command.expectNone(),
+          message(answer(finishedElsewhere)),
+          Command.expectExact(StoreProgress({ episodeId: id, progress: finishedElsewhere }), ReadStoredProgress),
+          Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+          readStorage,
+          model((next) =>
+            expect(next.playback).toEqual(
+              Playback.Loaded({
+                episodeId: id,
+                chapter: 0,
+                offsetMs: 0,
+                isPlaying: true,
+                isWaiting: false,
+                isEnded: false,
+              }),
+            ),
+          ),
+          Command.expectExact(firstChapter),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+          // The second chapter came with the answer: the end of the first goes on to it.
+          message(Message.EndedChapter()),
+          Command.expectExact(secondChapter(0, true)),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        )
+      })
+
+      test("loaded and paused: a finished episode starts at 0", () => {
+        story(
+          update,
+          given(loadedGrowing),
+          message(Message.ClickedPlayPause()),
+          Command.expectNone(),
+          message(answer(finishedElsewhere)),
+          Command.expectExact(StoreProgress({ episodeId: id, progress: finishedElsewhere }), firstChapter),
+          Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        )
+      })
+
+      test("loaded and paused: a position in the new chapter plays there", () => {
+        story(
+          update,
+          given(loadedGrowing),
+          message(Message.ClickedPlayPause()),
+          message(answer(phone)),
+          Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+          Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        )
+      })
+
+      test("an episode the answer no longer lists does not play", () => {
+        story(
+          updateKeepingReads,
+          given(listedGrowing),
+          message(Message.ClickedPlayEpisode({ episodeId: id })),
+          message(answerWithout),
+          Command.expectNone(),
+          model((next) => {
+            expect(next.maybePendingPlay).toEqual(Option.none())
+            expect(next.playback).toEqual(Playback.Stopped())
+          }),
+        )
+        story(
+          update,
+          given(loadedGrowing),
+          message(Message.ClickedPlayPause()),
+          message(answerWithout),
+          model((next) => {
+            expect(next.maybePendingPlay).toEqual(Option.none())
+            expect(next.playback).toEqual(Playback.Stopped())
+          }),
+          Command.expectExact(StopAudio),
+          Command.resolve(StopAudio, Message.CompletedStopAudio()),
+        )
+      })
+    })
   })
 
   test("deleting the loaded episode stops the audio", () => {
