@@ -1,4 +1,5 @@
-// Drives the full Fama protocol against a running `pnpm dev` server.
+// Drives the full Fama protocol against a running `pnpm dev` server, as the seeded dev user (client token
+// `dev-api-token`, feed token `dev-feed-token`) and a worker with FAMA_WORKER_TOKEN from .dev.vars.
 // Usage: node scripts/smoke.ts [baseUrl]. Exits non-zero on the first failed check.
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
@@ -12,8 +13,9 @@ const vars = Object.fromEntries(
     .filter((line) => line.includes("="))
     .map((line) => [line.slice(0, line.indexOf("=")).trim(), line.slice(line.indexOf("=") + 1).trim()]),
 )
-const apiToken = vars.FAMA_API_TOKEN ?? ""
-const feedToken = vars.FAMA_FEED_TOKEN ?? ""
+const apiToken = "dev-api-token"
+const feedToken = "dev-feed-token"
+const workerToken = vars.FAMA_WORKER_TOKEN ?? ""
 
 let checks = 0
 function check(condition: unknown, label: string, detail?: unknown): asserts condition {
@@ -24,16 +26,21 @@ function check(condition: unknown, label: string, detail?: unknown): asserts con
   console.log(`ok   ${label}`)
 }
 
-const call = (method: string, path: string, init: { body?: BodyInit; json?: unknown; headers?: Record<string, string> } = {}) =>
+type Init = { body?: BodyInit; json?: unknown; headers?: Record<string, string> }
+const send = (token: string, method: string, path: string, init: Init = {}) =>
   fetch(base + path, {
     method,
     headers: {
-      authorization: `Bearer ${apiToken}`,
+      authorization: `Bearer ${token}`,
       ...(init.json === undefined ? {} : { "content-type": "application/json" }),
       ...init.headers,
     },
     body: init.json === undefined ? (init.body ?? null) : JSON.stringify(init.json),
   })
+/** A client call as the dev user. */
+const call = (method: string, path: string, init?: Init) => send(apiToken, method, path, init)
+/** A worker call with the worker token. */
+const work = (method: string, path: string, init?: Init) => send(workerToken, method, path, init)
 
 const expectStatus = async (response: Response, status: number, label: string) => {
   const text = await response.text()
@@ -62,6 +69,11 @@ try {
   check(pending.length === 0, "no pending jobs before the run (smoke claims the oldest job)", pending.map((e: any) => e.id))
 
   check((await call("GET", "/api/episodes", { headers: { authorization: "Bearer wrong" } })).status === 401, "wrong API token -> 401")
+  const me = await expectStatus(await call("GET", "/api/me"), 200, "GET /api/me")
+  check(me.userId === "dev-user" && me.apiVersion === 1, "me is the dev user", me)
+  check((await send(feedToken, "GET", "/api/episodes")).status === 401, "feed token on /api/* -> 401")
+  check((await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [] } })).status === 401, "client token on /api/worker/* -> 401")
+  check((await work("GET", "/api/episodes")).status === 401, "worker token on client routes -> 401")
 
   // Client creates a Text episode and a File episode.
   const text = await expectStatus(
@@ -87,34 +99,37 @@ try {
   )
 
   // Worker A claims both jobs, oldest first.
-  const claim1 = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #1")
-  check(claim1.job.episodeId === text.id && claim1.job.sourcePath === null && claim1.job.completedChapters.length === 0, "claim #1 returns the Text job", claim1)
-  const claim2 = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #2")
+  const claim1 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #1")
+  check(claim1.job.episodeId === text.id && claim1.job.sourcePath === null && claim1.job.completedChapters.length === 0 && claim1.job.leaseToken, "claim #1 returns the Text job with a lease", claim1)
+  const claim2 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #2")
   check(claim2.job.episodeId === file.id && claim2.job.sourcePath === `/api/worker/jobs/${file.id}/source`, "claim #2 returns the File job with sourcePath", claim2)
-  const sourceResponse = await call("GET", claim2.job.sourcePath)
+  const leaseText = encodeURIComponent(claim1.job.leaseToken)
+  const leaseFile = claim2.job.leaseToken
+  await expectStatus(await work("GET", `${claim2.job.sourcePath}?leaseToken=${leaseText}`), 409, "GET source with another job's lease")
+  const sourceResponse = await work("GET", `${claim2.job.sourcePath}?leaseToken=${encodeURIComponent(leaseFile)}`)
   check(sourceResponse.status === 200 && (await sourceResponse.text()) === "Hello from an uploaded file.", "GET source returns the uploaded bytes")
 
   const voices = await expectStatus(await call("GET", "/api/voices"), 200, "GET /api/voices")
   check(voices.voices.some((v: any) => v.id === voice.id), "claim registered the worker's voice", voices)
 
-  // A second worker cannot take a live lease.
-  check((await call("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } })).status === 204, "worker B claim -> 204 (leases are live)")
-  const progressBody = (workerId: string, done: number) => ({
-    workerId, stage: "synthesizing", done, total: 2, title: "Smoke Text", author: "Smoke Author", language: "en", voice: voice.id,
+  // A second worker cannot take a live lease, and a wrong lease token is refused.
+  check((await work("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } })).status === 204, "worker B claim -> 204 (leases are live)")
+  const progressBody = (workerId: string, leaseToken: string, done: number) => ({
+    workerId, leaseToken, stage: "synthesizing", done, total: 2, title: "Smoke Text", author: "Smoke Author", language: "en", voice: voice.id,
   })
-  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerB, 1) }), 409, "worker B progress on A's lease")
+  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerB, "wrong", 1) }), 409, "progress with a wrong lease")
   await expectStatus(
-    await call("PUT", `/api/worker/jobs/${text.id}/chapters/0?workerId=${workerB}&title=x&durationMs=1`, { body: chapter0, headers: { "content-type": "audio/mp4" } }),
+    await work("PUT", `/api/worker/jobs/${text.id}/chapters/0?workerId=${workerB}&leaseToken=${encodeURIComponent(leaseFile)}&title=x&durationMs=1`, { body: chapter0, headers: { "content-type": "audio/mp4" } }),
     409,
-    "worker B chapter upload on A's lease",
+    "chapter upload with another job's lease",
   )
 
   // Worker A reports progress, uploads chapters and the book, then completes.
-  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerA, 0) }), 204, "progress")
+  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerA, claim1.job.leaseToken, 0) }), 204, "progress")
   const chapters = [chapter0, chapter1]
   for (const [index, bytes] of chapters.entries()) {
     await expectStatus(
-      await call("PUT", `/api/worker/jobs/${text.id}/chapters/${index}?workerId=${workerA}&title=${encodeURIComponent(`Part ${index + 1} & more`)}&durationMs=1000`, {
+      await work("PUT", `/api/worker/jobs/${text.id}/chapters/${index}?workerId=${workerA}&leaseToken=${leaseText}&title=${encodeURIComponent(`Part ${index + 1} & more`)}&durationMs=1000`, {
         body: bytes,
         headers: { "content-type": "audio/mp4" },
       }),
@@ -134,9 +149,10 @@ try {
     "chapter 0 plays while the job runs",
   )
 
-  await expectStatus(await call("PUT", `/api/worker/jobs/${text.id}/book?workerId=${workerA}`, { body: book, headers: { "content-type": "audio/mp4" } }), 204, "PUT book")
-  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/complete`, { json: { workerId: workerA, durationMs: 2000 } }), 204, "complete")
-  await expectStatus(await call("POST", `/api/worker/jobs/${text.id}/complete`, { json: { workerId: workerA, durationMs: 2000 } }), 204, "complete again (idempotent)")
+  await expectStatus(await work("PUT", `/api/worker/jobs/${text.id}/book?workerId=${workerA}&leaseToken=${leaseText}`, { body: book, headers: { "content-type": "audio/mp4" } }), 204, "PUT book")
+  const completeBody = { workerId: workerA, leaseToken: claim1.job.leaseToken, durationMs: 2000 }
+  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/complete`, { json: completeBody }), 204, "complete")
+  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/complete`, { json: completeBody }), 204, "complete again (idempotent)")
   await expectStatus(await call("POST", `/api/episodes/${text.id}/retry`), 409, "retry of a Ready job")
 
   const list = await expectStatus(await call("GET", "/api/episodes"), 200, "GET /api/episodes")
@@ -194,18 +210,20 @@ try {
   const head = await fetch(bookUrl, { method: "HEAD" })
   check(head.status === 200 && head.headers.get("content-length") === String(book.length), "HEAD book -> 200 with length")
   check((await fetch(`${base}/media/wrong/episodes/${text.id}/book.m4b`)).status === 401, "media with wrong feed token -> 401")
+  check((await fetch(`${base}/media/${feedToken}/uploads/${file.id}/notes.txt`)).status === 404, "media never serves uploads/ -> 404")
 
   // Failure and retry of the File job.
-  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, reason: "nope" } }), 409, "worker B fail on A's lease")
-  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerA, reason: "extraction failed" } }), 204, "fail")
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, leaseToken: "wrong", reason: "nope" } }), 409, "fail with a wrong lease")
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerA, leaseToken: leaseFile, reason: "extraction failed" } }), 204, "fail")
   const failed = await expectStatus(await call("GET", `/api/episodes/${file.id}`), 200, "GET failed episode")
   check(failed.job._tag === "Failed" && failed.job.reason === "extraction failed", "job is Failed with reason", failed.job)
-  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/progress`, { json: progressBody(workerA, 1) }), 409, "progress after fail")
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/progress`, { json: progressBody(workerA, leaseFile, 1) }), 409, "progress after fail")
   const retried = await expectStatus(await call("POST", `/api/episodes/${file.id}/retry`), 200, "retry")
   check(retried.job._tag === "Queued", "retry puts the job back to Queued", retried.job)
-  const reclaim = await expectStatus(await call("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } }), 200, "worker B claims the retried job")
-  check(reclaim.job.episodeId === file.id, "retried job is claimable", reclaim)
-  await expectStatus(await call("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, reason: "smoke cleanup" } }), 204, "worker B fails it")
+  const reclaim = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } }), 200, "worker B claims the retried job")
+  check(reclaim.job.episodeId === file.id && reclaim.job.leaseToken !== leaseFile, "retried job is claimable with a new lease", reclaim)
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerA, leaseToken: leaseFile, reason: "old" } }), 409, "the old lease is refused after a new claim")
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, leaseToken: reclaim.job.leaseToken, reason: "smoke cleanup" } }), 204, "worker B fails it")
 
   // Delete removes the episode and its media.
   for (const episode of [text, file]) {
@@ -215,7 +233,7 @@ try {
   for (const url of [...ready.chapters.map((c: any) => c.url), ready.bookUrl]) {
     check((await fetch(base + url)).status === 404, `media gone: ${url.split("/").slice(-2).join("/")}`)
   }
-  await expectStatus(await call("GET", `/api/worker/jobs/${file.id}/source`), 404, "upload gone")
+  await expectStatus(await work("GET", `/api/worker/jobs/${file.id}/source?leaseToken=${encodeURIComponent(reclaim.job.leaseToken)}`), 404, "upload gone")
 
   console.log(`\nsmoke passed: ${checks} checks`)
 } catch (error) {
