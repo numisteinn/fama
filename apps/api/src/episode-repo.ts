@@ -4,29 +4,33 @@ import {
   type EpisodeId,
   JobState,
   LEASE_MS,
+  type LeaseToken,
   type ProgressRequest,
   Source,
+  UserId,
   Voice,
   type VoiceRef,
   type WorkerId,
 } from "@fama/contracts"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { Bindings } from "./bindings.ts"
+import { DatabaseError, query } from "./db.ts"
 import type { FeedItem } from "./feed.ts"
 import * as Job from "./job.ts"
-import { keys } from "./media-store.ts"
+import { keys, mediaPath } from "./media-store.ts"
+import { randomToken, sha256Hex } from "./secrets.ts"
+
+export { DatabaseError } from "./db.ts"
 
 export class EpisodeNotFound extends Schema.TaggedError<EpisodeNotFound>()("EpisodeNotFound", {
   id: Schema.String,
 }) {}
 
-export class DatabaseError extends Schema.TaggedError<DatabaseError>()("DatabaseError", {
-  operation: Schema.String,
-  cause: Schema.Defect(),
-}) {}
-
 const EpisodeRow = Schema.Struct({
   id: Schema.String,
+  user_id: UserId,
+  /** From the owner's row in `users`, to build media paths. */
+  feed_token: Schema.String,
   created_at: Schema.String,
   source: Schema.fromJsonString(Source),
   title: Schema.String,
@@ -40,6 +44,7 @@ const EpisodeRow = Schema.Struct({
   job_version: Schema.Number,
   job_state: Schema.Literals(["Queued", "Running", "Ready", "Failed"]),
   worker_id: Schema.NullOr(Schema.String),
+  lease_hash: Schema.NullOr(Schema.String),
   stage: Schema.NullOr(Schema.String),
   done: Schema.NullOr(Schema.Number),
   total: Schema.NullOr(Schema.Number),
@@ -92,7 +97,8 @@ const jobColumns = (job: JobState) => {
     failed_at: null,
   }
   return JobState.match(job, {
-    Queued: () => ({ ...none, job_state: "Queued" }),
+    // A job back in the queue has no lease, so no earlier attempt can write to it.
+    Queued: () => ({ ...none, job_state: "Queued", lease_hash: null }),
     Running: (s) => ({
       ...none,
       job_state: "Running",
@@ -114,6 +120,7 @@ interface EpisodeUpdate {
   readonly language?: string | null
   readonly voice?: string | null
   readonly duration_ms?: number | null
+  readonly lease_hash?: string | null
 }
 
 export interface NewEpisode {
@@ -124,45 +131,39 @@ export interface NewEpisode {
   readonly speed: number
 }
 
+type Failure = DatabaseError | Schema.SchemaError
+
+/**
+ * Client methods take the owner and only see that user's episodes. Worker methods are scoped to one claimed episode
+ * and its lease token, and return the owner so routes can build storage keys.
+ */
 export interface Interface {
-  readonly create: (input: NewEpisode) => Effect.Effect<Episode, DatabaseError | Schema.SchemaError>
-  readonly list: Effect.Effect<ReadonlyArray<Episode>, DatabaseError | Schema.SchemaError>
-  readonly get: (id: string) => Effect.Effect<Episode, EpisodeNotFound | DatabaseError | Schema.SchemaError>
-  readonly remove: (id: string) => Effect.Effect<void, DatabaseError>
-  readonly retry: (
-    id: string,
-  ) => Effect.Effect<Episode, EpisodeNotFound | Job.NotRetryable | DatabaseError | Schema.SchemaError>
-  readonly claim: (
-    workerId: WorkerId,
-    voices: ReadonlyArray<Voice>,
-  ) => Effect.Effect<ClaimedJob | null, DatabaseError | Schema.SchemaError>
-  readonly progress: (
-    id: string,
-    request: ProgressRequest,
-  ) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | DatabaseError | Schema.SchemaError>
+  readonly create: (userId: UserId, input: NewEpisode) => Effect.Effect<Episode, Failure>
+  readonly list: (userId: UserId) => Effect.Effect<ReadonlyArray<Episode>, Failure>
+  readonly get: (userId: UserId, id: string) => Effect.Effect<Episode, EpisodeNotFound | Failure>
+  readonly remove: (userId: UserId, id: string) => Effect.Effect<void, DatabaseError>
+  readonly retry: (userId: UserId, id: string) => Effect.Effect<Episode, EpisodeNotFound | Job.NotRetryable | Failure>
+  readonly claim: (workerId: WorkerId, voices: ReadonlyArray<Voice>) => Effect.Effect<ClaimedJob | null, Failure>
+  readonly progress: (id: string, request: ProgressRequest) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly complete: (
     id: string,
-    workerId: WorkerId,
+    lease: LeaseToken,
     durationMs: number,
-  ) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | DatabaseError | Schema.SchemaError>
-  readonly fail: (
-    id: string,
-    workerId: WorkerId,
-    reason: string,
-  ) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | DatabaseError | Schema.SchemaError>
+  ) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
+  readonly fail: (id: string, lease: LeaseToken, reason: string) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
+  /** Checks the lease and returns what a job route needs: the source and the owner. */
   readonly holdLease: (
     id: string,
-    workerId: WorkerId,
-  ) => Effect.Effect<Source, EpisodeNotFound | Job.LeaseLost | DatabaseError | Schema.SchemaError>
-  readonly source: (id: string) => Effect.Effect<Source, EpisodeNotFound | DatabaseError | Schema.SchemaError>
+    lease: LeaseToken,
+  ) => Effect.Effect<{ readonly source: Source; readonly userId: UserId }, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly putChapter: (
     id: string,
     chapter: { readonly index: number; readonly title: string; readonly durationMs: number; readonly size: number },
   ) => Effect.Effect<void, DatabaseError>
   readonly setBook: (id: string, size: number) => Effect.Effect<void, DatabaseError>
   readonly setCover: (id: string, key: string) => Effect.Effect<void, DatabaseError>
-  readonly feedItems: (origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, DatabaseError | Schema.SchemaError>
-  readonly voices: Effect.Effect<ReadonlyArray<Voice>, DatabaseError | Schema.SchemaError>
+  readonly feedItems: (userId: UserId, origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, Failure>
+  readonly voices: Effect.Effect<ReadonlyArray<Voice>, Failure>
 }
 
 export class EpisodeRepo extends Context.Service<EpisodeRepo, Interface>()("@fama/api/EpisodeRepo") {}
@@ -173,11 +174,8 @@ const MAX_CAS_ATTEMPTS = 5
 export const layer = Layer.effect(
   EpisodeRepo,
   Effect.gen(function* () {
-    const { DB: db, FAMA_FEED_TOKEN: feedToken } = yield* Bindings
-    const mediaPath = (key: string) => `/media/${feedToken}/${key}`
-
-    const query = <A>(operation: string, run: () => Promise<A>) =>
-      Effect.tryPromise({ try: run, catch: (cause) => new DatabaseError({ operation, cause }) })
+    const { DB: db } = yield* Bindings
+    const media = (row: EpisodeRow, key: string) => mediaPath(row.feed_token, row.user_id, key)
 
     const all = (operation: string, sql: string, ...binds: ReadonlyArray<unknown>) =>
       query(operation, () =>
@@ -208,17 +206,21 @@ export const layer = Layer.effect(
           index: chapter.idx,
           title: chapter.title,
           durationMs: chapter.duration_ms,
-          url: mediaPath(keys.chapter(row.id, chapter.idx)),
+          url: media(row, keys.chapter(row.user_id, row.id, chapter.idx)),
         })),
-        bookUrl: row.book_size === null ? null : mediaPath(keys.book(row.id)),
-        coverUrl: row.cover_key === null ? null : mediaPath(row.cover_key),
+        bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id)),
+        coverUrl: row.cover_key === null ? null : media(row, row.cover_key),
         job: jobOf(row),
       })
 
-    const findRow = Effect.fnUntraced(function* (id: string) {
-      const rows = yield* all("episode.find", "SELECT * FROM episodes WHERE id = ?", id).pipe(
-        Effect.flatMap(decodeRows(EpisodeRow)),
-      )
+    const selectEpisodes = "SELECT e.*, u.feed_token FROM episodes e JOIN users u ON u.id = e.user_id"
+
+    /** One episode. With `userId`, only when that user owns it, so another user's id reads as not found. */
+    const findRow = Effect.fnUntraced(function* (id: string, userId: UserId | null = null) {
+      const rows = yield* (userId === null
+        ? all("episode.find", `${selectEpisodes} WHERE e.id = ?`, id)
+        : all("episode.findOwned", `${selectEpisodes} WHERE e.id = ? AND e.user_id = ?`, id, userId)
+      ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
       const row = rows[0]
       if (row === undefined) return yield* new EpisodeNotFound({ id })
       return row
@@ -229,8 +231,8 @@ export const layer = Layer.effect(
         Effect.flatMap(decodeRows(ChapterRow)),
       )
 
-    const get = Effect.fn("EpisodeRepo.get")(function* (id: string) {
-      const row = yield* findRow(id)
+    const get = Effect.fn("EpisodeRepo.get")(function* (userId: UserId, id: string) {
+      const row = yield* findRow(id, userId)
       return yield* toEpisode(row, yield* chaptersOf(id))
     })
 
@@ -240,14 +242,14 @@ export const layer = Layer.effect(
      */
     const transition = Effect.fn("EpisodeRepo.transition")(function* <E>(
       id: string,
-      step: (job: JobState, now: number) => Result.Result<JobState, E>,
+      step: (job: JobState, now: number, row: EpisodeRow) => Result.Result<JobState, E>,
       update: EpisodeUpdate = {},
     ) {
       for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
         const row = yield* findRow(id)
         const job = yield* Schema.decodeUnknownEffect(JobState)(jobOf(row))
         const at = yield* now
-        const next = step(job, at)
+        const next = step(job, at, row)
         if (Result.isFailure(next)) return yield* Effect.fail(next.failure)
         if (next.success === job && Object.keys(update).length === 0) return { row, job }
         const columns: Record<string, unknown> = jobColumns(next.success)
@@ -273,13 +275,14 @@ export const layer = Layer.effect(
       return yield* Effect.die(new Error(`job ${id} kept changing under ${MAX_CAS_ATTEMPTS} writes`))
     })
 
-    const create = Effect.fn("EpisodeRepo.create")(function* (input: NewEpisode) {
+    const create = Effect.fn("EpisodeRepo.create")(function* (userId: UserId, input: NewEpisode) {
       const createdAt = new Date(yield* now).toISOString()
       yield* run(
         "episode.create",
-        `INSERT INTO episodes (id, created_at, source, title, voice, speed, job_state, queued_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'Queued', ?)`,
+        `INSERT INTO episodes (id, user_id, created_at, source, title, voice, speed, job_state, queued_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'Queued', ?)`,
         input.id,
+        userId,
         createdAt,
         JSON.stringify(Schema.encodeSync(Source)(input.source)),
         input.title,
@@ -287,37 +290,49 @@ export const layer = Layer.effect(
         input.speed,
         createdAt,
       )
-      return yield* get(input.id).pipe(Effect.catchTag("EpisodeNotFound", Effect.die))
+      return yield* get(userId, input.id).pipe(Effect.catchTag("EpisodeNotFound", Effect.die))
     })
 
-    const list = Effect.gen(function* () {
-      const rows = yield* all("episode.list", "SELECT * FROM episodes ORDER BY created_at DESC, id DESC").pipe(
-        Effect.flatMap(decodeRows(EpisodeRow)),
-      )
-      const chapters = yield* all("chapters.all", "SELECT * FROM chapters ORDER BY episode_id, idx").pipe(
-        Effect.flatMap(decodeRows(ChapterRow)),
-      )
+    const list = Effect.fn("EpisodeRepo.list")(function* (userId: UserId) {
+      const rows = yield* all(
+        "episode.list",
+        `${selectEpisodes} WHERE e.user_id = ? ORDER BY e.created_at DESC, e.id DESC`,
+        userId,
+      ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
+      const chapters = yield* all(
+        "chapters.ofUser",
+        `SELECT c.* FROM chapters c JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ?
+         ORDER BY c.episode_id, c.idx`,
+        userId,
+      ).pipe(Effect.flatMap(decodeRows(ChapterRow)))
       return yield* Effect.forEach(rows, (row) =>
         toEpisode(
           row,
           chapters.filter((chapter) => chapter.episode_id === row.id),
         ),
       )
-    }).pipe(Effect.withSpan("EpisodeRepo.list"))
+    })
 
-    const remove = Effect.fn("EpisodeRepo.remove")(function* (id: string) {
+    const remove = Effect.fn("EpisodeRepo.remove")(function* (userId: UserId, id: string) {
       yield* query("episode.remove", () =>
         db.batch([
-          db.prepare("DELETE FROM chapters WHERE episode_id = ?").bind(id),
-          db.prepare("DELETE FROM episodes WHERE id = ?").bind(id),
+          db
+            .prepare("DELETE FROM chapters WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
+            .bind(id, userId),
+          db.prepare("DELETE FROM episodes WHERE id = ? AND user_id = ?").bind(id, userId),
         ]),
       )
     })
 
-    const retry = Effect.fn("EpisodeRepo.retry")(function* (id: string) {
+    const retry = Effect.fn("EpisodeRepo.retry")(function* (userId: UserId, id: string) {
+      yield* findRow(id, userId)
       yield* transition(id, Job.retry)
-      return yield* get(id)
+      return yield* get(userId, id)
     })
+
+    /** Whether `lease` is the token of the row's current claim. */
+    const leaseOf = (lease: string) => Effect.promise(() => sha256Hex(lease))
+    const holds = (row: EpisodeRow, leaseHash: string) => row.lease_hash !== null && row.lease_hash === leaseHash
 
     const claim = Effect.fn("EpisodeRepo.claim")(function* (workerId: WorkerId, voices: ReadonlyArray<Voice>) {
       const at = yield* now
@@ -346,7 +361,11 @@ export const layer = Layer.effect(
         staleBefore,
       ).pipe(Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String }))))
       for (const { id } of candidates) {
-        const claimed = yield* transition(id, (job, at) => Job.claim(job, { workerId, now: at })).pipe(
+        const leaseToken = randomToken()
+        const leaseHash = yield* leaseOf(leaseToken)
+        const claimed = yield* transition(id, (job, at) => Job.claim(job, { workerId, now: at }), {
+          lease_hash: leaseHash,
+        }).pipe(
           Effect.map(({ row }) => row),
           Effect.catchTags({ NotClaimable: () => Effect.succeed(null), EpisodeNotFound: () => Effect.succeed(null) }),
         )
@@ -354,6 +373,7 @@ export const layer = Layer.effect(
         const chapters = yield* chaptersOf(id)
         return yield* Schema.decodeUnknownEffect(ClaimedJob)({
           episodeId: claimed.id,
+          leaseToken,
           source: Schema.encodeSync(Source)(claimed.source),
           sourcePath: claimed.source._tag === "File" ? `/api/worker/jobs/${claimed.id}/source` : null,
           voice: claimed.voice,
@@ -365,7 +385,8 @@ export const layer = Layer.effect(
     })
 
     const progress = Effect.fn("EpisodeRepo.progress")(function* (id: string, request: ProgressRequest) {
-      yield* transition(id, (job, at) => Job.progress(job, { ...request, now: at }), {
+      const leaseHash = yield* leaseOf(request.leaseToken)
+      yield* transition(id, (job, at, row) => Job.progress(job, { ...request, held: holds(row, leaseHash), now: at }), {
         title: request.title,
         author: request.author,
         language: request.language,
@@ -373,28 +394,25 @@ export const layer = Layer.effect(
       })
     })
 
-    const complete = Effect.fn("EpisodeRepo.complete")(function* (
-      id: string,
-      workerId: WorkerId,
-      durationMs: number,
-    ) {
-      yield* transition(id, (job, at) => Job.complete(job, { workerId, now: at }), { duration_ms: durationMs })
+    const complete = Effect.fn("EpisodeRepo.complete")(function* (id: string, lease: LeaseToken, durationMs: number) {
+      const leaseHash = yield* leaseOf(lease)
+      yield* transition(id, (job, at, row) => Job.complete(job, { held: holds(row, leaseHash), now: at }), {
+        duration_ms: durationMs,
+      })
     })
 
-    const fail = Effect.fn("EpisodeRepo.fail")(function* (id: string, workerId: WorkerId, reason: string) {
-      yield* transition(id, (job, at) => Job.fail(job, { workerId, reason, now: at }))
+    const fail = Effect.fn("EpisodeRepo.fail")(function* (id: string, lease: LeaseToken, reason: string) {
+      const leaseHash = yield* leaseOf(lease)
+      yield* transition(id, (job, at, row) => Job.fail(job, { held: holds(row, leaseHash), reason, now: at }))
     })
 
-    const holdLease = Effect.fn("EpisodeRepo.holdLease")(function* (id: string, workerId: WorkerId) {
+    const holdLease = Effect.fn("EpisodeRepo.holdLease")(function* (id: string, lease: LeaseToken) {
+      const leaseHash = yield* leaseOf(lease)
       const row = yield* findRow(id)
       const job = yield* Schema.decodeUnknownEffect(JobState)(jobOf(row))
-      const held = Job.holdLease(job, workerId)
+      const held = Job.holdLease(job, holds(row, leaseHash))
       if (Result.isFailure(held)) return yield* Effect.fail(held.failure)
-      return row.source
-    })
-
-    const source = Effect.fn("EpisodeRepo.source")(function* (id: string) {
-      return (yield* findRow(id)).source
+      return { source: row.source, userId: row.user_id }
     })
 
     const putChapter = Effect.fn("EpisodeRepo.putChapter")(function* (
@@ -420,10 +438,12 @@ export const layer = Layer.effect(
     const setCover = (id: string, key: string) =>
       run("episode.setCover", "UPDATE episodes SET cover_key = ? WHERE id = ?", key, id)
 
-    const feedItems = Effect.fn("EpisodeRepo.feedItems")(function* (origin: string) {
+    const feedItems = Effect.fn("EpisodeRepo.feedItems")(function* (userId: UserId, origin: string) {
       const rows = yield* all(
         "episode.feed",
-        `SELECT * FROM episodes WHERE job_state = 'Ready' AND book_size IS NOT NULL ORDER BY finished_at DESC`,
+        `${selectEpisodes} WHERE e.user_id = ? AND e.job_state = 'Ready' AND e.book_size IS NOT NULL
+         ORDER BY e.finished_at DESC`,
+        userId,
       ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
       return rows.flatMap((row): ReadonlyArray<FeedItem> =>
         row.finished_at === null || row.book_size === null
@@ -435,9 +455,9 @@ export const layer = Layer.effect(
                 author: row.author,
                 finishedAt: row.finished_at,
                 durationMs: row.duration_ms,
-                bookUrl: origin + mediaPath(keys.book(row.id)),
+                bookUrl: origin + media(row, keys.book(row.user_id, row.id)),
                 bookSize: row.book_size,
-                coverUrl: row.cover_key === null ? null : origin + mediaPath(row.cover_key),
+                coverUrl: row.cover_key === null ? null : origin + media(row, row.cover_key),
               },
             ],
       )
@@ -464,7 +484,6 @@ export const layer = Layer.effect(
       complete,
       fail,
       holdLease,
-      source,
       putChapter,
       setBook,
       setCover,

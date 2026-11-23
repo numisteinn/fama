@@ -57,10 +57,10 @@ describe("claim", () => {
 })
 
 describe("progress", () => {
+  const step = (held: boolean) => ({ held, workerId: a, stage: "encoding" as const, done: 3, total: 3 })
+
   it("moves the stage and the heartbeat for the lease holder", () => {
-    const next = ok(
-      Job.progress(runningFor(a, t0), { workerId: a, stage: "encoding", done: 3, total: 3, now: t0 + 5000 }),
-    )
+    const next = ok(Job.progress(runningFor(a, t0), { ...step(true), now: t0 + 5000 }))
     expect(next).toEqual(
       JobState.cases.Running.make({
         workerId: a,
@@ -73,55 +73,56 @@ describe("progress", () => {
   })
 
   it("keeps an expired lease for its holder until another worker takes it", () => {
-    const next = ok(
-      Job.progress(runningFor(a, t0), { workerId: a, stage: "encoding", done: 3, total: 3, now: t0 + 2 * LEASE_MS }),
-    )
+    const next = ok(Job.progress(runningFor(a, t0), { ...step(true), now: t0 + 2 * LEASE_MS }))
     expect(next._tag).toBe("Running")
   })
 
-  it.each([runningFor(b, t0), queued, ready, failed])("rejects a worker without the lease ($_tag)", (state) => {
-    expect(
-      rejection(Job.progress(state, { workerId: a, stage: "encoding", done: 0, total: 0, now: t0 }))._tag,
-    ).toBe("LeaseLost")
+  it("rejects a running job without its lease token", () => {
+    expect(rejection(Job.progress(runningFor(a, t0), { ...step(false), now: t0 }))._tag).toBe("LeaseLost")
   })
 
-  it("rejects the old holder after a takeover", () => {
-    const takenOver = ok(Job.claim(runningFor(a, t0), { workerId: b, now: t0 + LEASE_MS }))
-    expect(
-      rejection(Job.progress(takenOver, { workerId: a, stage: "encoding", done: 0, total: 0, now: t0 }))._tag,
-    ).toBe("LeaseLost")
+  it.each([queued, ready, failed])("rejects progress on a $_tag job, even with the token", (state) => {
+    expect(rejection(Job.progress(state, { ...step(true), now: t0 }))._tag).toBe("LeaseLost")
   })
 })
 
 describe("complete", () => {
   it("makes the holder's job ready", () => {
-    expect(ok(Job.complete(runningFor(a, t0), { workerId: a, now: t0 }))).toEqual(
+    expect(ok(Job.complete(runningFor(a, t0), { held: true, now: t0 }))).toEqual(
       JobState.cases.Ready.make({ finishedAt: "2026-11-18T12:00:00.000Z" }),
     )
   })
 
-  it("is a no-op on a ready job, so a worker can retry it", () => {
-    expect(ok(Job.complete(ready, { workerId: a, now: t0 }))).toBe(ready)
+  it("is a no-op on a ready job for the same lease, so a worker can retry it", () => {
+    expect(ok(Job.complete(ready, { held: true, now: t0 }))).toBe(ready)
   })
 
-  it.each([runningFor(b, t0), queued, failed])("rejects a worker without the lease ($_tag)", (state) => {
-    expect(rejection(Job.complete(state, { workerId: a, now: t0 }))._tag).toBe("LeaseLost")
+  it.each([runningFor(a, t0), ready])("rejects a $_tag job without its lease token", (state) => {
+    expect(rejection(Job.complete(state, { held: false, now: t0 }))._tag).toBe("LeaseLost")
+  })
+
+  it.each([queued, failed])("rejects a $_tag job", (state) => {
+    expect(rejection(Job.complete(state, { held: true, now: t0 }))._tag).toBe("LeaseLost")
   })
 })
 
 describe("fail", () => {
   it("fails the holder's job with a reason", () => {
-    expect(ok(Job.fail(runningFor(a, t0), { workerId: a, reason: "no text", now: t0 }))).toEqual(
+    expect(ok(Job.fail(runningFor(a, t0), { held: true, reason: "no text", now: t0 }))).toEqual(
       JobState.cases.Failed.make({ reason: "no text", failedAt: "2026-11-18T12:00:00.000Z" }),
     )
   })
 
-  it("is a no-op on a failed job", () => {
-    expect(ok(Job.fail(failed, { workerId: a, reason: "again", now: t0 }))).toBe(failed)
+  it("is a no-op on a failed job for the same lease", () => {
+    expect(ok(Job.fail(failed, { held: true, reason: "again", now: t0 }))).toBe(failed)
   })
 
-  it.each([runningFor(b, t0), queued, ready])("rejects a worker without the lease ($_tag)", (state) => {
-    expect(rejection(Job.fail(state, { workerId: a, reason: "x", now: t0 }))._tag).toBe("LeaseLost")
+  it.each([runningFor(a, t0), failed])("rejects a $_tag job without its lease token", (state) => {
+    expect(rejection(Job.fail(state, { held: false, reason: "x", now: t0 }))._tag).toBe("LeaseLost")
+  })
+
+  it.each([queued, ready])("rejects a $_tag job", (state) => {
+    expect(rejection(Job.fail(state, { held: true, reason: "x", now: t0 }))._tag).toBe("LeaseLost")
   })
 })
 

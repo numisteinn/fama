@@ -1,13 +1,14 @@
 import { env } from "cloudflare:workers"
 import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
+import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 
 // Route handlers read these services per request, so the app layer must expose them.
-const services = Layer.mergeAll(EpisodeRepo.layer, MediaStore.layer).pipe(
+const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer).pipe(
   Layer.provideMerge(Layer.succeed(Bindings, env)),
 )
 

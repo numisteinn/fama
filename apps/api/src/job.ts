@@ -1,9 +1,7 @@
 import { JobState, LEASE_MS, type Stage, type WorkerId } from "@fama/contracts"
 import { Result, Schema } from "effect"
 
-export class LeaseLost extends Schema.TaggedError<LeaseLost>()("LeaseLost", {
-  workerId: Schema.String,
-}) {}
+export class LeaseLost extends Schema.TaggedError<LeaseLost>()("LeaseLost", {}) {}
 
 export class NotClaimable extends Schema.TaggedError<NotClaimable>()("NotClaimable", {}) {}
 
@@ -35,18 +33,17 @@ export const claim = (
     : Result.fail(new NotClaimable())
 }
 
-/** The lease holder is the worker named in a `Running` state, expired or not, until another worker takes it over. */
-export const holdLease = (
-  state: JobState,
-  workerId: WorkerId,
-): Result.Result<JobState, LeaseLost> =>
-  state._tag === "Running" && state.workerId === workerId
-    ? Result.succeed(state)
-    : Result.fail(new LeaseLost({ workerId }))
+/**
+ * A worker holds the lease when it shows the lease token of the current claim (`held`) and the job is `Running`,
+ * expired or not, until another worker claims it and gets a new token.
+ */
+export const holdLease = (state: JobState, held: boolean): Result.Result<JobState, LeaseLost> =>
+  held && state._tag === "Running" ? Result.succeed(state) : Result.fail(new LeaseLost())
 
 export const progress = (
   state: JobState,
   event: {
+    readonly held: boolean
     readonly workerId: WorkerId
     readonly stage: Stage
     readonly done: number
@@ -54,7 +51,7 @@ export const progress = (
     readonly now: number
   },
 ): Result.Result<JobState, LeaseLost> =>
-  Result.map(holdLease(state, event.workerId), () =>
+  Result.map(holdLease(state, event.held), () =>
     JobState.cases.Running.make({
       workerId: event.workerId,
       stage: event.stage,
@@ -64,25 +61,23 @@ export const progress = (
     }),
   )
 
-/** A repeated `complete` after success is a no-op, so a worker can retry it. */
+/** A repeated `complete` by the same lease after success is a no-op, so a worker can retry it. */
 export const complete = (
   state: JobState,
-  event: { readonly workerId: WorkerId; readonly now: number },
+  event: { readonly held: boolean; readonly now: number },
 ): Result.Result<JobState, LeaseLost> =>
-  state._tag === "Ready"
+  event.held && state._tag === "Ready"
     ? Result.succeed(state)
-    : Result.map(holdLease(state, event.workerId), () =>
-        JobState.cases.Ready.make({ finishedAt: iso(event.now) }),
-      )
+    : Result.map(holdLease(state, event.held), () => JobState.cases.Ready.make({ finishedAt: iso(event.now) }))
 
-/** A repeated `fail` after failure is a no-op, so a worker can retry it. */
+/** A repeated `fail` by the same lease after failure is a no-op, so a worker can retry it. */
 export const fail = (
   state: JobState,
-  event: { readonly workerId: WorkerId; readonly reason: string; readonly now: number },
+  event: { readonly held: boolean; readonly reason: string; readonly now: number },
 ): Result.Result<JobState, LeaseLost> =>
-  state._tag === "Failed"
+  event.held && state._tag === "Failed"
     ? Result.succeed(state)
-    : Result.map(holdLease(state, event.workerId), () =>
+    : Result.map(holdLease(state, event.held), () =>
         JobState.cases.Failed.make({ reason: event.reason, failedAt: iso(event.now) }),
       )
 

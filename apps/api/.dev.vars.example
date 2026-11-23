@@ -1,2 +1,1 @@
-FAMA_API_TOKEN=dev-api-token
-FAMA_FEED_TOKEN=dev-feed-token
+FAMA_WORKER_TOKEN=dev-worker-token
