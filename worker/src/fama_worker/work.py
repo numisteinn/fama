@@ -168,9 +168,10 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
 
 
 def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False, drain: bool = False,
-        stop: threading.Event | None = None, api: Api | None = None) -> None:
+        first_job: ClaimedJob | None = None, stop: threading.Event | None = None, api: Api | None = None) -> None:
     """Pull jobs until stopped. `once` stops after one job or an empty queue.
-    `drain` takes jobs until the queue is empty, then stops (the cloud worker runs this)."""
+    `drain` takes jobs until the queue is empty, then stops (the cloud worker runs this).
+    `first_job` is a job this worker id already claimed; it is made before the first claim."""
     api = api or Api(api_url, token, worker_id)
     stop = stop or threading.Event()
     voices = [v.to_json() for v in all_voices()]
@@ -178,11 +179,14 @@ def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool =
     started, jobs, audio_ms = time.monotonic(), 0, 0
     log(f"worker {worker_id} polling {api_url} with {len(voices)} voices")
     while not stop.is_set():
-        try:
-            job = api.claim(voices)
-        except ApiError as error:
-            log(f"claim failed: {error}")
-            job = None
+        if first_job is not None:
+            job, first_job = first_job, None
+        else:
+            try:
+                job = api.claim(voices)
+            except ApiError as error:
+                log(f"claim failed: {error}")
+                job = None
         if job is None:
             if once or drain:
                 break

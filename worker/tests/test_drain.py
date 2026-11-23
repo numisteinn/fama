@@ -84,3 +84,9 @@ def test_cli_rejects_once_with_drain(capsys):
     with pytest.raises(SystemExit):
         cli.main(["work", "--api", "http://api", "--token", "t", "--once", "--drain"])
     assert "not allowed with" in capsys.readouterr().err
+
+
+def test_drain_makes_the_first_job_before_it_claims(made, tmp_path):
+    api = QueueApi("b")
+    assert _run(api, tmp_path, drain=True, first_job="a")
+    assert made == ["a", "b"] and api.claims == 2

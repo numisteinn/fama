@@ -11,7 +11,8 @@ Three functions share one dispatcher:
   nothing, then exit. Modal then stops the container, so an idle queue costs nothing.
 
 The dispatcher starts `drain` only when no drain is waiting to start, and Modal runs at
-most `MAX_DRAINS` at once. See `plan_drain`.
+most `MAX_DRAINS` at once. See `plan_drain`. Before it starts a GPU, it claims one job on
+the CPU and hands it to the drain, so a sweep of an empty queue starts no GPU.
 
 Settings come from the Modal Secret `fama`: `FAMA_API_URL`, `FAMA_WORKER_TOKEN` and
 `WORKER_WAKE_SECRET`. See README.md, "Cloud worker on Modal".
@@ -22,6 +23,8 @@ from __future__ import annotations
 import hmac
 import os
 import shlex
+import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import modal
@@ -68,13 +71,40 @@ def authorized(header: str | None, secret: str) -> bool:
     return bool(secret) and hmac.compare_digest((header or "").encode(), f"Bearer {secret}".encode())
 
 
-def dispatch(drain_function) -> str:
+def claim_on_cpu(api_url: str, token: str, worker_id: str, transport=None) -> dict | None:
+    """Claim one job without a GPU: the raw `ClaimedJob`, or None when the queue is empty.
+
+    An empty voice list leaves the voice registry as it is; the drain registers the voices.
+    """
+    import httpx
+
+    with httpx.Client(base_url=api_url.rstrip("/"), transport=transport, timeout=30,
+                      headers={"Authorization": f"Bearer {token}"}) as client:
+        response = client.post("/api/worker/claim", json={"workerId": worker_id, "voices": []})
+    response.raise_for_status()
+    return None if response.status_code == 204 else response.json()["job"]
+
+
+def dispatch(drain_function, claim: Callable[[str], dict | None]) -> str:
+    """Run the plan. Returns it, or `idle` when a start found the queue empty."""
     stats = drain_function.get_current_stats()
     plan = plan_drain(stats.backlog, stats.num_running_inputs)
-    if plan != "skip":
+    if plan == "follow-up":
         drain_function.spawn()
+    elif plan == "start":
+        worker_id = f"modal-{uuid.uuid4().hex[:12]}"
+        job = claim(worker_id)
+        if job is None:
+            plan = "idle"
+        else:
+            drain_function.spawn(job, worker_id)
     print(f"[fama dispatch] {plan} (queued {stats.backlog}, running {stats.num_running_inputs})", flush=True)
     return plan
+
+
+def _dispatch() -> str:
+    api_url, token = os.environ["FAMA_API_URL"], os.environ["FAMA_WORKER_TOKEN"]
+    return dispatch(drain, lambda worker_id: claim_on_cpu(api_url, token, worker_id))
 
 
 def _bake_command() -> str:
@@ -122,7 +152,7 @@ worker_image = (
     )
 )
 
-dispatch_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]>=0.115")
+dispatch_image = modal.Image.debian_slim(python_version="3.12").pip_install("fastapi[standard]>=0.115", "httpx>=0.27")
 
 with dispatch_image.imports():
     from fastapi import Request
@@ -134,13 +164,14 @@ secret = modal.Secret.from_name(SECRET_NAME)
 
 @app.function(image=worker_image, gpu=GPU, secrets=[secret], timeout=DRAIN_TIMEOUT_S,
               max_containers=MAX_DRAINS, scaledown_window=SCALEDOWN_S)
-def drain() -> None:
-    """`fama work --drain` on the GPU."""
+def drain(job: dict | None = None, worker_id: str | None = None) -> None:
+    """`fama work --drain` on the GPU. `job` is one the dispatcher claimed as `worker_id`."""
+    from fama_worker.api import ClaimedJob
     from fama_worker.work import run
 
-    worker_id = f"modal-{os.environ.get('MODAL_TASK_ID', 'drain')}"
+    worker_id = worker_id or f"modal-{os.environ.get('MODAL_TASK_ID', 'drain')}"
     run(os.environ["FAMA_API_URL"], os.environ["FAMA_WORKER_TOKEN"], worker_id,
-        out_dir=Path("/tmp/fama/work"), drain=True)
+        out_dir=Path("/tmp/fama/work"), drain=True, first_job=ClaimedJob.parse(job) if job else None)
 
 
 @app.function(image=dispatch_image, secrets=[secret])
@@ -148,9 +179,9 @@ def drain() -> None:
 def wake(request: Request):
     if not authorized(request.headers.get("authorization"), os.environ.get("WORKER_WAKE_SECRET", "")):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return JSONResponse({"dispatch": dispatch(drain)}, status_code=202)
+    return JSONResponse({"dispatch": _dispatch()}, status_code=202)
 
 
-@app.function(image=dispatch_image, schedule=modal.Cron(SWEEP_SCHEDULE))
+@app.function(image=dispatch_image, secrets=[secret], schedule=modal.Cron(SWEEP_SCHEDULE))
 def sweep() -> None:
-    dispatch(drain)
+    _dispatch()

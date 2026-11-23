@@ -2,10 +2,12 @@
 
 import contextlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from fama_worker.engines import kokoro, piper
@@ -65,20 +67,73 @@ def test_concurrency_cap_is_one(modal_app):
 class FakeDrain:
     def __init__(self, backlog, running):
         self.stats = SimpleNamespace(backlog=backlog, num_running_inputs=running, num_total_runners=running)
-        self.spawned = 0
+        self.spawned = []
 
     def get_current_stats(self):
         return self.stats
 
-    def spawn(self):
-        self.spawned += 1
+    def spawn(self, *args):
+        self.spawned.append(args)
 
 
-@pytest.mark.parametrize(("backlog", "running", "spawned"), [(0, 0, 1), (0, 1, 1), (1, 1, 0)])
-def test_dispatch_spawns_by_plan(modal_app, backlog, running, spawned):
-    drain = FakeDrain(backlog, running)
-    modal_app.dispatch(drain)
-    assert drain.spawned == spawned
+class FakeClaim:
+    def __init__(self, job):
+        self.job, self.worker_ids = job, []
+
+    def __call__(self, worker_id):
+        self.worker_ids.append(worker_id)
+        return self.job
+
+
+def test_start_hands_the_claimed_job_to_the_drain(modal_app):
+    drain, claim = FakeDrain(0, 0), FakeClaim({"episodeId": "ep1"})
+    assert modal_app.dispatch(drain, claim) == "start"
+    assert drain.spawned == [({"episodeId": "ep1"}, claim.worker_ids[0])]
+
+
+def test_start_on_an_empty_queue_starts_no_gpu(modal_app):
+    drain = FakeDrain(0, 0)
+    assert modal_app.dispatch(drain, FakeClaim(None)) == "idle"
+    assert drain.spawned == []
+
+
+def test_follow_up_spawns_a_plain_drain_without_a_claim(modal_app):
+    drain, claim = FakeDrain(0, 1), FakeClaim({"episodeId": "ep1"})
+    assert modal_app.dispatch(drain, claim) == "follow-up"
+    assert drain.spawned == [()] and claim.worker_ids == []
+
+
+def test_skip_does_nothing(modal_app):
+    drain, claim = FakeDrain(1, 1), FakeClaim({"episodeId": "ep1"})
+    assert modal_app.dispatch(drain, claim) == "skip"
+    assert drain.spawned == [] and claim.worker_ids == []
+
+
+def _transport(status, body=None, seen=None):
+    def handle(request):
+        if seen is not None:
+            seen.append(request)
+        return httpx.Response(status, json=body) if body is not None else httpx.Response(status)
+    return httpx.MockTransport(handle)
+
+
+def test_claim_on_cpu_returns_the_job(modal_app):
+    seen = []
+    job = modal_app.claim_on_cpu("https://api/", "tok", "modal-1",
+                                 transport=_transport(200, {"job": {"episodeId": "ep1"}}, seen))
+    assert job == {"episodeId": "ep1"}
+    assert str(seen[0].url) == "https://api/api/worker/claim"
+    assert seen[0].headers["authorization"] == "Bearer tok"
+    assert json.loads(seen[0].content) == {"workerId": "modal-1", "voices": []}
+
+
+def test_claim_on_cpu_returns_none_on_204(modal_app):
+    assert modal_app.claim_on_cpu("https://api", "tok", "modal-1", transport=_transport(204)) is None
+
+
+def test_claim_on_cpu_raises_on_an_error(modal_app):
+    with pytest.raises(httpx.HTTPStatusError):
+        modal_app.claim_on_cpu("https://api", "tok", "modal-1", transport=_transport(401))
 
 
 def test_wake_needs_the_bearer_secret(modal_app):
