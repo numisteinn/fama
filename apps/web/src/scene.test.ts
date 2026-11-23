@@ -207,7 +207,6 @@ describe("chapters menu", () => {
         offsetMs: 0,
         isPlaying: false,
         isWaiting: false,
-        isEnded: false,
       }),
     }
     const chaptersMenu = role("menu")

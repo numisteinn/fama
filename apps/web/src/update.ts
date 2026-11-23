@@ -4,8 +4,8 @@ import {
   type EpisodeProgress,
   type VoiceRef,
   awaitedAfter,
-  isFinished,
   mergeProgress,
+  playStart,
 } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Record, Redacted } from "effect"
@@ -57,7 +57,6 @@ import {
   current,
   episodes,
   isPlayPending,
-  isWorking,
   pickerItemText,
   pickerItems,
   selectedVoice,
@@ -547,8 +546,9 @@ const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Ste
 
 /**
  * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
- * A loaded, paused episode rests there, so the next Play resumes where the other device stopped. With `isPlayDue`,
- * a Play waited for this entry: the loaded episode plays from there now.
+ * A loaded, paused episode rests there, so the next Play resumes where the other device stopped. Resting decides
+ * nothing about the end of the episode: the Play does, on the list it has then. With `isPlayDue`, a Play waited
+ * for this entry: the loaded episode plays from there now.
  */
 const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress, isPlayDue = false): Step => (model) => {
   const local = model.localProgress[episodeId]
@@ -564,7 +564,7 @@ const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress, isPlayDu
     isPlayDue && isLoaded
       ? withLoaded(({ episode }) => playFrom(episode, progress.positionMs))
       : isPaused
-        ? restAt(progress.positionMs)
+        ? moveTo(progress.positionMs)
         : unchanged,
   ])
 }
@@ -602,13 +602,6 @@ const syncProgress = (maybePlay: Option.Option<EpisodeId>): Step => (model) =>
     }),
   )
 
-/**
- * The finished rule the devices share: `positionMs` is the end of `episode`, or within the last seconds of it.
- * Play then starts at 0. The end of the chapters of a working job is not the end of the episode.
- */
-const isPlayedThrough = (episode: Episode, positionMs: number) =>
-  !isWorking(episode.job) && isFinished(positionMs, totalMs(episode.chapters))
-
 const loadChapter =
   (episode: Episode, index: number, offsetMs: number, isAutoplay: boolean): Step =>
   (model) => {
@@ -623,18 +616,50 @@ const loadChapter =
             offsetMs,
             isPlaying: isAutoplay,
             isWaiting: false,
-            isEnded: false,
           }),
       }),
       commands: [LoadChapter({ src: model.connection.origin + chapter.url, offsetMs, rate: model.rate, isAutoplay })],
     }
   }
 
-/** Plays `episode` from a saved `positionMs`. A played-through position starts from the top. */
-const playFrom = (episode: Episode, positionMs: number): Step => {
-  const target = locate(episode.chapters, isPlayedThrough(episode, positionMs) ? 0 : positionMs)
-  return loadChapter(episode, target.index, target.offsetMs, true)
-}
+/** The loaded player rests at `target` of `episodeId`. A fraction of a millisecond from the audio does not count. */
+const isRestingAt = (playback: Playback, episodeId: EpisodeId, target: { index: number; offsetMs: number }) =>
+  playback._tag === "Loaded" &&
+  playback.episodeId === episodeId &&
+  playback.chapter === target.index &&
+  Math.abs(playback.offsetMs - target.offsetMs) < 1
+
+/**
+ * A Play of `episode` from `positionMs`: a saved position, or where the loaded player rests. Every Play goes
+ * through here. `playStart` of the contract decides where it starts, on the chapters and the job of `episode`,
+ * which the caller takes from the list the library holds now:
+ *
+ * - a finished position starts at 0;
+ * - the end of the chapters of a job that still works waits there, and `playOn` goes on when the next chapter is
+ *   listed;
+ * - every other position plays there. The start of a chapter that was not listed when the player came to rest is
+ *   such a position.
+ *
+ * A paused player that already rests at the start takes a toggle and no new load.
+ */
+const playFrom =
+  (episode: Episode, positionMs: number): Step =>
+  (model) => {
+    const start = playStart(positionMs, episode.chapters, episode.job)
+    const target = locate(episode.chapters, start.positionMs)
+    const playback = model.playback
+    const isInPlace = isRestingAt(playback, episode.id, target)
+    if (start.isWaiting) {
+      return isInPlace
+        ? setPlayback({ isPlaying: false, isWaiting: true })(model)
+        : Update.combine(model, [
+            loadChapter(episode, target.index, target.offsetMs, false),
+            setPlayback({ isWaiting: true }),
+          ])
+    }
+    if (!isInPlace) return loadChapter(episode, target.index, target.offsetMs, true)(model)
+    return playback._tag === "Loaded" && playback.isPlaying ? { model } : { model, commands: [ToggleAudio()] }
+  }
 
 /**
  * A playback action of the user. A start still reading storage is no longer the latest intent, and a Play that
@@ -664,13 +689,12 @@ const play =
 /** A Pause while a Play waits for the library: the Play is off. */
 const cancelPlay: Step = (model) => (Option.isSome(model.maybePendingPlay) ? intend(unchanged)(model) : { model })
 
-/** Plays the loaded, paused episode from where it rests. After the end of the episode, that is the top. */
+/**
+ * Plays the loaded, paused episode from where it rests, on the list the library holds now (`playFrom`). The list
+ * the player came to rest on does not count: at the end of chapter 1 of 1, it plays chapter 2 when that is listed.
+ */
 const resume: Step = withLoaded(({ playback, episode }) =>
-  playback.isPlaying
-    ? unchanged
-    : playback.isEnded
-      ? loadChapter(episode, 0, 0, true)
-      : (model) => ({ model, commands: [ToggleAudio()] }),
+  playback.isPlaying ? unchanged : playFrom(episode, globalMs(playback, episode)),
 )
 
 const toggle: Step = withLoaded(({ playback, episode }) => {
@@ -714,8 +738,8 @@ const playDue = (maybePlay: Option.Option<EpisodeId>): Step =>
 
 /**
  * Plays an episode from the newer of the progress storage holds and the server's; with neither, from 0. Only
- * when storage cannot be read is the entry this tab knows used. A finished episode starts from the top. A result
- * whose start is no longer the latest playback intent is dropped: a later Pause, Play or seek wins.
+ * when storage cannot be read is the entry this tab knows used. `playFrom` decides where that position starts. A
+ * result whose start is no longer the latest playback intent is dropped: a later Pause, Play or seek wins.
  */
 const playFromSaved =
   (episodeId: EpisodeId, intent: number, stored: StoredProgress): Step =>
@@ -740,38 +764,21 @@ const playFromSaved =
 const clampToEpisode = (episode: Episode, ms: number) => Math.min(Math.max(0, ms), totalMs(episode.chapters))
 
 /**
- * Moves the loaded episode to `ms` on the timeline, without saving. A paused move to the very end leaves the
- * episode ended, as the audio element is: the next Play then starts from the top, not from the start of the
- * last chapter.
+ * Moves the loaded episode to `ms` on the timeline, without saving. A paused move only rests the player there. It
+ * decides nothing about the end of the episode: the next Play does (`playFrom`), on the list it has then.
  */
 const moveTo = (ms: number): Step =>
   withLoaded(({ playback, episode }) => {
-    const clamped = clampToEpisode(episode, ms)
-    const target = locate(episode.chapters, clamped)
-    const isSameChapter = target.index === playback.chapter
-    const willPlay = isSameChapter ? playback.isPlaying : playback.isPlaying || playback.isWaiting
-    const isEnded = clamped >= totalMs(episode.chapters) && !willPlay
-    return isSameChapter
+    const target = locate(episode.chapters, clampToEpisode(episode, ms))
+    return target.index === playback.chapter
       ? (model) => ({
           model: modifyFields(model, {
-            playback: () => Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false, isEnded }),
+            playback: () => Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false }),
           }),
           commands: [SeekAudio({ offsetMs: target.offsetMs })],
         })
-      : Update.combine([loadChapter(episode, target.index, target.offsetMs, willPlay), setPlayback({ isEnded })])
+      : loadChapter(episode, target.index, target.offsetMs, playback.isPlaying || playback.isWaiting)
   })
-
-/**
- * Rests the loaded, paused episode at a synced `positionMs`, without saving. A played-through position leaves it
- * ended, as its own end of episode does: the next Play starts at 0.
- */
-const restAt = (positionMs: number): Step =>
-  withLoaded(({ episode }) =>
-    Update.combine([
-      moveTo(positionMs),
-      isPlayedThrough(episode, positionMs) ? setPlayback({ isEnded: true }) : unchanged,
-    ]),
-  )
 
 /** The listener moves to `ms`: the move, saved. */
 const seek = (ms: number): Step =>
@@ -784,19 +791,41 @@ const skip = (deltaMs: number): Step =>
 
 const playChapter = (index: number): Step => withLoaded(({ episode }) => intend(loadChapter(episode, index, 0, true)))
 
-/** The episode played to its end: its total length is stored, so every device shows it played. The next Play starts at 0. */
+/**
+ * The episode played to its end: its total length is stored, so every device shows it played. The player rests
+ * at that end, so the next Play starts at 0 (`playFrom`).
+ */
 const finish = (episode: Episode): Step =>
   Update.combine([
-    setPlayback({ isPlaying: false, isWaiting: false, isEnded: true }),
+    setPlayback({ isPlaying: false, isWaiting: false }),
     savePositionAt(episode.id, totalMs(episode.chapters)),
   ])
 
+/**
+ * Playback ran out of audio where the player is: a chapter ended, or the player waits there. On the list the
+ * library holds now:
+ *
+ * - audio from there on plays. Also a last chapter shorter than the finished margin;
+ * - with none, a job that still works is waited for (`playStart`), and nothing new is saved;
+ * - with none after the job ended, that was the end of the episode.
+ */
+const playOn: Step = withLoaded(({ playback, episode }) => {
+  const positionMs = globalMs(playback, episode)
+  if (playStart(positionMs, episode.chapters, episode.job).isWaiting) {
+    return setPlayback({ isPlaying: false, isWaiting: true })
+  }
+  if (positionMs >= totalMs(episode.chapters)) return finish(episode)
+  const target = locate(episode.chapters, positionMs)
+  return loadChapter(episode, target.index, target.offsetMs, true)
+})
+
+/**
+ * The audio of the current chapter ended. The player is at the listed end of that chapter, which is the start of
+ * the next one: the length of the audio file can differ from the listed length by some milliseconds.
+ */
 const endChapter: Step = withLoaded(({ playback, episode }) => {
-  const next = playback.chapter + 1
-  if (episode.chapters[next]) return loadChapter(episode, next, 0, true)
-  // The end of the chapters made so far is not the end of the episode: wait, and save nothing new.
-  if (isWorking(episode.job)) return setPlayback({ isPlaying: false, isWaiting: true, isEnded: true })
-  return finish(episode)
+  const chapter = episode.chapters[playback.chapter]
+  return Update.combine([chapter ? setPlayback({ offsetMs: chapter.durationMs }) : unchanged, playOn])
 })
 
 const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
@@ -809,8 +838,8 @@ const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
 }
 
 /**
- * The rules that follow a change of the episode list: a deleted episode stops, and a waiting player moves on. When
- * the job ends with no chapter after the last one played, the wait was the end of the episode.
+ * The rules that follow a change of the episode list: a deleted episode stops, and a waiting player goes on by
+ * `playOn`. When the job ends with no audio after the place it waits at, the wait was the end of the episode.
  */
 const reconcilePlayback: Step = (model) => {
   const playback = model.playback
@@ -826,10 +855,7 @@ const reconcilePlayback: Step = (model) => {
       commands: [StopAudio()],
     }
   }
-  if (!playback.isWaiting) return { model }
-  if (episode.chapters[playback.chapter + 1]) return loadChapter(episode, playback.chapter + 1, 0, true)(model)
-  if (!isWorking(episode.job)) return finish(episode)(model)
-  return { model }
+  return playback.isWaiting ? playOn(model) : { model }
 }
 
 const shortcut = (name: PlayerShortcut): Step => {
@@ -1010,7 +1036,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       )(model),
 
     UpdatedAudioTime: ({ offsetMs, atMs }) => updateAudioTime(offsetMs, atMs)(model),
-    StartedAudio: () => setPlayback({ isPlaying: true, isWaiting: false, isEnded: false })(model),
+    StartedAudio: () => setPlayback({ isPlaying: true, isWaiting: false })(model),
     PausedAudio: () => Update.combine(model, [setPlayback({ isPlaying: false }), savePosition]),
     EndedChapter: () => endChapter(model),
     CompletedLoadChapter: () => ({ model }),

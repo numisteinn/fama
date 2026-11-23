@@ -70,6 +70,10 @@ Clients keep `{ positionMs, updatedAt }` per episode on the device and use `merg
 - On every library load, a local entry newer than the episode's `progress` is sent (offline listening syncs this way), and a newer `progress` replaces the local entry.
 - While playing, a client sends about every 5 s of playback, on pause, and when the app goes to the background or the page hides.
 - Only the listener's own actions stamp a new `updatedAt`. Loading an episode without playing it, at app start or on a library load, stamps and sends nothing.
+- `playStart` in the contract is the one rule for where a Play starts. It takes the position (saved, or where a loaded player rests), and the chapters and the job as the library lists them when the Play acts. A client keeps no "ended" state from an earlier list.
+  - The job ended (`Ready` or `Failed`) and the position is finished: the Play starts at 0.
+  - The job still works (`Queued` or `Running`) and the position is the end of the chapters made so far: the Play waits for the next chapter. When a later list has that chapter, the same position is its start, and the Play goes on there. It never starts at 0.
+  - Otherwise the Play starts at the position.
 - A Play pressed while library loads are out waits for them, so it does not start from a position another device moved on from. `awaitedAfter` in the contract is the rule: the Play starts on the list of the newest load that was out at the press, or of a later load, or when each of those loads has answered. A later load that fails starts nothing.
 
 ## Worker endpoints

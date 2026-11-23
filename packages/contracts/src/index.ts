@@ -91,6 +91,30 @@ export const FINISHED_MARGIN_MS = 3000
 export const isFinished = (positionMs: number, totalMs: number): boolean =>
   totalMs > 0 && positionMs >= totalMs - FINISHED_MARGIN_MS
 
+/**
+ * Where a Play starts: the one rule the clients share. `positionMs` is the saved position, or where a loaded player
+ * rests. `chapters` and `job` are the episode as the library lists it when the Play acts, never an earlier list:
+ * a client keeps no "ended" state of its own from a list it had before.
+ *
+ * - The job ended (Ready or Failed), so no more audio comes, and the position is finished (`isFinished`): the Play
+ *   starts at 0.
+ * - The job still works (Queued or Running) and the position is the end of the chapters made so far: the Play
+ *   waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
+ *   start, and the Play goes on there. It never starts at 0.
+ * - Otherwise the Play starts at the position.
+ */
+export const playStart = (
+  positionMs: number,
+  chapters: ReadonlyArray<{ readonly durationMs: number }>,
+  job: { readonly _tag: JobState["_tag"] },
+): { readonly positionMs: number; readonly isWaiting: boolean } => {
+  const totalMs = chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
+  if (job._tag === "Queued" || job._tag === "Running") {
+    return positionMs >= totalMs ? { positionMs: totalMs, isWaiting: true } : { positionMs, isWaiting: false }
+  }
+  return { positionMs: isFinished(positionMs, totalMs) ? 0 : positionMs, isWaiting: false }
+}
+
 /** `a` was written after `b`. */
 export const isNewerProgress = (a: EpisodeProgress, b: EpisodeProgress): boolean =>
   Date.parse(a.updatedAt) > Date.parse(b.updatedAt)

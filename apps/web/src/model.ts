@@ -78,6 +78,9 @@ export type Feed = typeof Feed.Type
 /**
  * The loaded episode. An episode plays as one timeline of its chapter files in order.
  * `offsetMs` is the position inside the current chapter file.
+ *
+ * It holds no "ended" state. Whether the position is the end of the episode depends on the chapters and the job
+ * the library lists, and those change. `playStart` of the contract decides it when a Play acts.
  */
 export const Playback = defineTaggedUnion({
   Stopped: {},
@@ -86,10 +89,8 @@ export const Playback = defineTaggedUnion({
     chapter: Schema.Number,
     offsetMs: Schema.Number,
     isPlaying: Schema.Boolean,
-    /** The current chapter ended and the next one is still rendering. */
+    /** A Play is on at the end of the chapters made so far: it goes on when the next chapter is listed. */
     isWaiting: Schema.Boolean,
-    /** The last chapter played to its end. */
-    isEnded: Schema.Boolean,
   },
 })
 export type Playback = typeof Playback.Type

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest"
-import { EpisodeProgress, FINISHED_MARGIN_MS, awaitedAfter, isFinished, mergeProgress } from "./index.ts"
+import { EpisodeProgress, FINISHED_MARGIN_MS, awaitedAfter, isFinished, mergeProgress, playStart } from "./index.ts"
 import { Schema } from "effect"
 
 const at = (iso: string, positionMs: number): EpisodeProgress => ({ positionMs, updatedAt: iso })
@@ -47,6 +47,46 @@ describe("isFinished", () => {
 
   test("an episode with no audio yet is never finished", () => {
     expect(isFinished(0, 0)).toBe(false)
+  })
+})
+
+describe("playStart", () => {
+  const morning = { durationMs: 26_825 }
+  const evening = { durationMs: 19_700 }
+  const ready = { _tag: "Ready" } as const
+  const running = { _tag: "Running" } as const
+
+  test("a position inside the audio plays there", () => {
+    expect(playStart(30_000, [morning, evening], ready)).toEqual({ positionMs: 30_000, isWaiting: false })
+    expect(playStart(10_000, [morning], running)).toEqual({ positionMs: 10_000, isWaiting: false })
+  })
+
+  test("a finished position of a job that ended starts at 0", () => {
+    expect(playStart(46_525, [morning, evening], ready)).toEqual({ positionMs: 0, isWaiting: false })
+    expect(playStart(46_525 - FINISHED_MARGIN_MS, [morning, evening], ready)).toEqual({ positionMs: 0, isWaiting: false })
+    expect(playStart(46_525 - FINISHED_MARGIN_MS - 1, [morning, evening], ready).positionMs).toBe(43_524)
+    // A failed job makes no more audio either.
+    expect(playStart(26_825, [morning], { _tag: "Failed" })).toEqual({ positionMs: 0, isWaiting: false })
+  })
+
+  test("the end of the chapters of a job that still works is a wait, not the end", () => {
+    expect(playStart(26_825, [morning], running)).toEqual({ positionMs: 26_825, isWaiting: true })
+    expect(playStart(26_825, [morning], { _tag: "Queued" })).toEqual({ positionMs: 26_825, isWaiting: true })
+    // Both chapters are made and the job still encodes the book.
+    expect(playStart(46_525, [morning, evening], running)).toEqual({ positionMs: 46_525, isWaiting: true })
+    // Inside the finished margin of the chapters made so far there is still audio to play.
+    expect(playStart(25_000, [morning], running)).toEqual({ positionMs: 25_000, isWaiting: false })
+  })
+
+  test("the same position on a later list goes on in the new chapter, never at 0", () => {
+    const saved = 26_825
+    expect(playStart(saved, [morning], running)).toEqual({ positionMs: saved, isWaiting: true })
+    expect(playStart(saved, [morning, evening], running)).toEqual({ positionMs: saved, isWaiting: false })
+    expect(playStart(saved, [morning, evening], ready)).toEqual({ positionMs: saved, isWaiting: false })
+  })
+
+  test("a position after the audio a stale list holds waits at the end of that audio", () => {
+    expect(playStart(40_000, [morning], running)).toEqual({ positionMs: 26_825, isWaiting: true })
   })
 })
 
