@@ -15,6 +15,12 @@ export default function SettingsScreen() {
   const [token, setToken] = useState(connection?.token ?? "")
   const [check, setCheck] = useState<Check>({ _tag: "Idle" })
 
+  // A pairing link can change the connection while this screen is open.
+  useEffect(() => {
+    setServerUrl(connection?.serverUrl ?? "")
+    setToken(connection?.token ?? "")
+  }, [connection])
+
   useEffect(() => {
     if (!api) return setCheck({ _tag: "Idle" })
     let live = true

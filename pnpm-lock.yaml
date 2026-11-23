@@ -221,6 +221,9 @@ importers:
       '@effect/platform-node':
         specifier: 4.1.4
         version: 4.1.4(effect@4.1.4)(redis@6.3.1)
+      '@fama/contracts':
+        specifier: workspace:*
+        version: link:../packages/contracts
       alchemy:
         specifier: 2.0.0-beta.87
         version: 2.0.0-beta.87(@effect/platform-node@4.1.4(effect@4.1.4)(redis@6.3.1))(@types/react@19.3.0)(effect@4.1.4)(react-devtools-core@6.1.5)(vite@8.3.8(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))(ws@8.23.0)

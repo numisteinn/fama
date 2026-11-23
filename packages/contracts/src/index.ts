@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+export * from "./connect.ts"
+
 export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
 export type EpisodeId = typeof EpisodeId.Type
 

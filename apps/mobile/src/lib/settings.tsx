@@ -19,7 +19,8 @@ type Settings = {
   readonly api: Api | null
   /** Null until the server named the token's user once. Kept offline after that. */
   readonly account: Account | null
-  save(connection: Connection): Promise<void>
+  /** Saves a new connection. With `userId` (already checked with `GET /api/me`) the account is known at once. */
+  save(connection: Connection, userId?: UserId): Promise<void>
 }
 
 const SettingsContext = createContext<Settings | null>(null)
@@ -74,12 +75,13 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       connection,
       api,
       account,
-      async save(next) {
+      async save(next, checkedUser) {
         const normalized = { serverUrl: normalizeServerUrl(next.serverUrl), token: next.token.trim() }
         await SecureStore.setItemAsync(SERVER_KEY, normalized.serverUrl)
         await SecureStore.setItemAsync(TOKEN_KEY, normalized.token)
-        await SecureStore.deleteItemAsync(USER_KEY)
-        setUserId(null)
+        if (checkedUser === undefined) await SecureStore.deleteItemAsync(USER_KEY)
+        else await SecureStore.setItemAsync(USER_KEY, checkedUser)
+        setUserId(checkedUser ?? null)
         setConnection(normalized.serverUrl && normalized.token ? normalized : null)
       },
     }),

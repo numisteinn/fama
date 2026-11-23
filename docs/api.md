@@ -96,6 +96,14 @@ Rules:
 - Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
 
+## Connect link
+
+`fama setup` prints a QR code of `fama://connect?server=<url>&token=<client token>`, both values URL-encoded. `connectUrl` and `parseConnectLink` in the contract build and check it. The phone app accepts the link only when:
+
+- `server` is `https`, or `http` on a local host (`isLocalHost`: loopback, private and link-local IPv4, `100.64.0.0/10`, IPv6 loopback and unique-local, `localhost`, a single-label name, `.local`, `.home.arpa`). No user name, query or fragment.
+- `token` is 1 to 512 visible ASCII characters.
+- `GET /api/me` on that server with that token answers `200`. Only then does the app save the connection.
+
 ## Wake
 
 A cloud worker can sleep while the queue is empty. Two optional secrets let the API wake it (D5):
