@@ -13,7 +13,7 @@ import type { HttpClient } from "effect/http"
 import { Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
 import { type Connection, apiToken, isSameConnection } from "~/api"
-import { type AudioPlayer, LoadChapter, SeekAudio, SetAudioRate, StopAudio, ToggleAudio } from "~/audio"
+import { type AudioPlayer, LoadChapter, PauseAudio, PlayAudio, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
 import {
   CopyFeedUrl,
   CreateEpisodeFromSource,
@@ -43,6 +43,7 @@ import {
   Draft,
   Feed,
   type Flags,
+  type Listening,
   type LoadedPlayback,
   type Model,
   Picker,
@@ -101,10 +102,13 @@ export const init = (flags: Flags): UpdateReturn => {
     isFeedUrlCopied: false,
     feedUrlCopies: 0,
     playback: Playback.Stopped(),
+    maybeListening: Option.none(),
     playIntents: 0,
     maybePendingPlay: Option.none(),
     rate: flags.rate,
     localProgress: flags.localProgress,
+    stamping: {},
+    isSaveDue: false,
     lastSavedAtMs: 0,
     maybeScrubMs: Option.none(),
   }
@@ -227,43 +231,14 @@ const fetchEpisodes: Step = (model) => {
   return { model: library.model, commands: [library.command] }
 }
 
-/**
- * Library request `request` answered: it is no longer in flight. `isListed` says it brought a list the tab takes; a
- * failure and a list for an earlier connection bring none. `maybePlay` is the episode of a pending Play that this
- * answer starts.
- *
- * A Play waits for the requests that were in flight when it was pressed, by number (`awaitedAfter`). The failure of
- * a request sent later, a poll for example, does not start it.
- */
-const answerLibrary = (
-  model: Model,
-  request: number,
-  isListed: boolean,
-): { model: Model; maybePlay: Option.Option<EpisodeId> } => {
-  const answered = modifyFields(model, {
-    libraryRequestsInFlight: (inFlight) => inFlight.filter((sent) => sent !== request),
-  })
-  return Option.match(model.maybePendingPlay, {
-    onNone: () => ({ model: answered, maybePlay: Option.none() }),
-    onSome: ({ episodeId, awaiting }) => {
-      const stillAwaiting = awaitedAfter(awaiting, request, isListed)
-      return stillAwaiting.length > 0
-        ? {
-            model: modifyFields(answered, {
-              maybePendingPlay: () => Option.some({ episodeId, awaiting: stillAwaiting }),
-            }),
-            maybePlay: Option.none(),
-          }
-        : { model: modifyFields(answered, { maybePendingPlay: () => Option.none() }), maybePlay: Option.some(episodeId) }
-    },
-  })
-}
+/** Library request `request` answered: it is no longer in flight. */
+const answerLibrary = (model: Model, request: number): Model =>
+  modifyFields(model, { libraryRequestsInFlight: (inFlight) => inFlight.filter((sent) => sent !== request) })
 
-/** Replaces the episode list, then applies the playback rules that depend on it. */
+/** Replaces the episode list. It is a fact: `reconcile` applies the playback rules that depend on it. */
 const withEpisodes =
   (toEpisodes: (list: ReadonlyArray<Episode>) => ReadonlyArray<Episode>): Step =>
-  (model) =>
-    reconcilePlayback(modifyFields(model, { maybeEpisodes: () => Option.some(toEpisodes(episodes(model))) }))
+  (model) => ({ model: modifyFields(model, { maybeEpisodes: () => Option.some(toEpisodes(episodes(model))) }) })
 
 const forgetRow = (episodeId: EpisodeId): Step => (model) => ({
   model: modifyFields(model, {
@@ -493,6 +468,12 @@ const applyPickerItem = (pickerId: PickerId, index: number): Step => (model) => 
 }
 
 // PLAYER
+//
+// Playback and progress sync have one shape. The Model holds intent (`maybeListening`, `maybePendingPlay`) and
+// facts (`playback`, `localProgress`, `stamping`, the library). The steps of this section only change intent and
+// facts. `reconcile` runs after every Message. It alone works out what the audio must do, tells the element so
+// with at most one audio Command, and stamps at most one position. So no order of Messages can make two steps
+// move, start or stamp against each other.
 
 const globalMs = (playback: LoadedPlayback, episode: Episode) =>
   chapterStartMs(episode.chapters, playback.chapter) + playback.offsetMs
@@ -502,6 +483,7 @@ const withLoaded =
   (model) =>
     Option.match(current(model), { onNone: () => ({ model }), onSome: (loaded) => toStep(loaded)(model) })
 
+/** A fact from the audio element. */
 const setPlayback =
   (fields: Partial<Omit<LoadedPlayback, "_tag">>): Step =>
   (model) => {
@@ -510,32 +492,24 @@ const setPlayback =
     return { model: modifyFields(model, { playback: () => Playback.Loaded({ ...playback, ...fields }) }) }
   }
 
-/**
- * A listener's action left `episodeId` at `positionMs`: stamp, store and send it. A position the device already
- * holds is not stamped again, so a pause or a hidden page with nothing new sends nothing, and a paused tab does not
- * overwrite what another device sent since.
- */
-const savePositionAt = (episodeId: EpisodeId, positionMs: number): Step => (model) =>
-  model.localProgress[episodeId]?.positionMs === Math.max(0, Math.round(positionMs))
-    ? { model }
-    : { model, commands: [SaveProgress({ episodeId, positionMs })] }
+/** What the listener asks of the episode they listen to. */
+const setListening =
+  (fields: Partial<Listening>): Step =>
+  (model) => ({
+    model: modifyFields(model, { maybeListening: Option.map((listening) => ({ ...listening, ...fields })) }),
+  })
 
-/**
- * Saves the position of the loaded episode now. While its Play waits for the library, nothing is stamped: the
- * position the tab holds may be one another device moved on from, also when the audio started by itself.
- */
-const savePosition: Step = withLoaded(({ playback, episode }) => (model) =>
-  isPlayPending(model, episode.id) ? { model } : savePositionAt(episode.id, globalMs(playback, episode))(model),
-)
+const isListeningTo = (model: Model, episodeId: EpisodeId) =>
+  Option.exists(model.maybeListening, (listening) => listening.episodeId === episodeId)
 
 const isSameProgress = (a: EpisodeProgress, b: EpisodeProgress) =>
   a.positionMs === b.positionMs && a.updatedAt === b.updatedAt
 
-/** A save stamped and stored: the tab now knows it, and sends it. */
-const sendSaved = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
-  model: modifyFields(model, { localProgress: Record.set(episodeId, progress) }),
-  commands: [PushProgress({ connection: model.connection, episodeId, progress })],
-})
+/** Where the device holds an episode: the position a save stamps now, else its entry. */
+const heldMs = (model: Model, episodeId: EpisodeId): number | undefined =>
+  model.stamping[episodeId] ?? model.localProgress[episodeId]?.positionMs
+
+// Facts
 
 /** Shows `progress` as the server's on the episode in the list. */
 const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
@@ -545,121 +519,100 @@ const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Ste
 })
 
 /**
- * Takes the server's entry as the device's, with the server's stamp, so it never counts as a new listener action.
- * A loaded, paused episode rests there, so the next Play resumes where the other device stopped. Resting decides
- * nothing about the end of the episode: the Play does, on the list it has then. With `isPlayDue`, a Play waited
- * for this entry: the loaded episode plays from there now.
+ * Takes an entry of the server or of storage as the device's, with its stamp, so it never counts as a new listener
+ * action. It moves nothing: `reconcile` sees an entry the player does not follow yet.
  */
-const adoptProgress = (episodeId: EpisodeId, progress: EpisodeProgress, isPlayDue = false): Step => (model) => {
+const takeEntry = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => {
   const local = model.localProgress[episodeId]
   if (local && isSameProgress(local, progress)) return { model }
-  const playback = model.playback
-  const isLoaded = playback._tag === "Loaded" && playback.episodeId === episodeId
-  const isPaused = isLoaded && !playback.isPlaying && !playback.isWaiting
-  return Update.combine(model, [
-    (stepModel) => ({
-      model: modifyFields(stepModel, { localProgress: Record.set(episodeId, progress) }),
-      commands: [StoreProgress({ episodeId, progress })],
-    }),
-    isPlayDue && isLoaded
-      ? withLoaded(({ episode }) => playFrom(episode, progress.positionMs))
-      : isPaused
-        ? moveTo(progress.positionMs)
-        : unchanged,
-  ])
+  return {
+    model: modifyFields(model, { localProgress: Record.set(episodeId, progress) }),
+    commands: [StoreProgress({ episodeId, progress })],
+  }
 }
 
 /**
+ * A save stamped and stored: the tab now knows it, and sends it. The stamp is the listener's own, so the player
+ * follows it already.
+ */
+const takeStamp = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
+  model: modifyFields(model, {
+    localProgress: Record.set(episodeId, progress),
+    stamping: (stamping) => (stamping[episodeId] === progress.positionMs ? Record.remove(stamping, episodeId) : stamping),
+    maybeListening: Option.map((listening) =>
+      listening.episodeId === episodeId ? { ...listening, maybeFollowedAt: Option.some(progress.updatedAt) } : listening,
+    ),
+  }),
+  commands: [PushProgress({ connection: model.connection, episodeId, progress })],
+})
+
+/**
  * The server answered a push with what it stores. The device takes that answer, a clamped stamp included, unless
- * the listener saved again since: that newer save goes out with its own push.
+ * the listener saved again since: that newer save goes out with its own push. The same position with the server's
+ * stamp is still the listener's own entry. Another position is news from another device.
  */
 const takePushAnswer = (episodeId: EpisodeId, sent: EpisodeProgress, stored: EpisodeProgress): Step => (model) => {
   const local = model.localProgress[episodeId]
   const isLatest = local !== undefined && isSameProgress(local, sent)
-  return Update.combine(model, [setServerProgress(episodeId, stored), isLatest ? adoptProgress(episodeId, stored) : unchanged])
+  const isOwn = stored.positionMs === sent.positionMs
+  return Update.combine(model, [
+    setServerProgress(episodeId, stored),
+    isLatest ? takeEntry(episodeId, stored) : unchanged,
+    isLatest && isOwn
+      ? (stepModel) => ({
+          model: modifyFields(stepModel, {
+            maybeListening: Option.map((listening) =>
+              listening.episodeId === episodeId && Option.contains(listening.maybeFollowedAt, sent.updatedAt)
+                ? { ...listening, maybeFollowedAt: Option.some(stored.updatedAt) }
+                : listening,
+            ),
+          }),
+        })
+      : unchanged,
+  ])
 }
 
 /**
  * After a library load: each local entry newer than the server's is sent, so listening done offline syncs, and
- * each newer server entry is taken. Nothing is stamped. `maybePlay` is the episode whose pending Play starts with
- * this load.
+ * each newer server entry is taken. Nothing is stamped. An episode whose save is being stamped is left alone: that
+ * stamp is newer than both, and goes out when it lands.
  */
-const syncProgress = (maybePlay: Option.Option<EpisodeId>): Step => (model) =>
+const syncProgress: Step = (model) =>
   Update.combine(
     model,
-    episodes(model).map((episode): Step => {
-      const local = model.localProgress[episode.id] ?? null
+    episodes(model).map((episode): Step => (stepModel) => {
+      if (stepModel.stamping[episode.id] !== undefined) return { model: stepModel }
+      const local = stepModel.localProgress[episode.id] ?? null
       const { progress, isPushed } = mergeProgress(local, episode.progress)
       if (isPushed && local !== null) {
-        return (stepModel) => ({
+        return {
           model: stepModel,
           commands: [PushProgress({ connection: stepModel.connection, episodeId: episode.id, progress: local })],
-        })
+        }
       }
-      return progress === null
-        ? unchanged
-        : adoptProgress(episode.id, progress, Option.exists(maybePlay, (id) => id === episode.id))
+      return progress === null ? { model: stepModel } : takeEntry(episode.id, progress)(stepModel)
     }),
   )
 
-const loadChapter =
-  (episode: Episode, index: number, offsetMs: number, isAutoplay: boolean): Step =>
-  (model) => {
-    const chapter = episode.chapters[index]
-    if (!chapter) return { model }
-    return {
-      model: modifyFields(model, {
-        playback: () =>
-          Playback.Loaded({
-            episodeId: episode.id,
-            chapter: index,
-            offsetMs,
-            isPlaying: isAutoplay,
-            isWaiting: false,
-          }),
-      }),
-      commands: [LoadChapter({ src: model.connection.origin + chapter.url, offsetMs, rate: model.rate, isAutoplay })],
-    }
-  }
+/** The audio of the current chapter ended. The element rests at the listed end of that chapter. */
+const endChapter: Step = withLoaded(({ playback, episode }) => {
+  const chapter = episode.chapters[playback.chapter]
+  return setPlayback({ ...(chapter ? { offsetMs: chapter.durationMs } : {}), isPlaying: false })
+})
 
-/** The loaded player rests at `target` of `episodeId`. A fraction of a millisecond from the audio does not count. */
-const isRestingAt = (playback: Playback, episodeId: EpisodeId, target: { index: number; offsetMs: number }) =>
-  playback._tag === "Loaded" &&
-  playback.episodeId === episodeId &&
-  playback.chapter === target.index &&
-  Math.abs(playback.offsetMs - target.offsetMs) < 1
+/** The element says where it is. Only audio that plays moves: a resting element is where the tab put it. */
+const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
+  const playback = model.playback
+  const timed =
+    playback._tag === "Loaded" && playback.isPlaying
+      ? modifyFields(model, { playback: () => Playback.Loaded({ ...playback, offsetMs }) })
+      : model
+  return atMs - model.lastSavedAtMs < SAVE_EVERY_MS
+    ? { model: timed }
+    : { model: modifyFields(timed, { lastSavedAtMs: () => atMs, isSaveDue: () => true }) }
+}
 
-/**
- * A Play of `episode` from `positionMs`: a saved position, or where the loaded player rests. Every Play goes
- * through here. `playStart` of the contract decides where it starts, on the chapters and the job of `episode`,
- * which the caller takes from the list the library holds now:
- *
- * - a finished position starts at 0;
- * - the end of the chapters of a job that still works waits there, and `playOn` goes on when the next chapter is
- *   listed;
- * - every other position plays there. The start of a chapter that was not listed when the player came to rest is
- *   such a position.
- *
- * A paused player that already rests at the start takes a toggle and no new load.
- */
-const playFrom =
-  (episode: Episode, positionMs: number): Step =>
-  (model) => {
-    const start = playStart(positionMs, episode.chapters, episode.job)
-    const target = locate(episode.chapters, start.positionMs)
-    const playback = model.playback
-    const isInPlace = isRestingAt(playback, episode.id, target)
-    if (start.isWaiting) {
-      return isInPlace
-        ? setPlayback({ isPlaying: false, isWaiting: true })(model)
-        : Update.combine(model, [
-            loadChapter(episode, target.index, target.offsetMs, false),
-            setPlayback({ isWaiting: true }),
-          ])
-    }
-    if (!isInPlace) return loadChapter(episode, target.index, target.offsetMs, true)(model)
-    return playback._tag === "Loaded" && playback.isPlaying ? { model } : { model, commands: [ToggleAudio()] }
-  }
+// Intent
 
 /**
  * A playback action of the user. A start still reading storage is no longer the latest intent, and a Play that
@@ -670,83 +623,89 @@ const intend =
   (model) =>
     step(modifyFields(model, { playIntents: (count) => count + 1, maybePendingPlay: () => Option.none() }))
 
-/**
- * A Play of the user. While library requests are in flight, it waits for them and plays when `answerLibrary` says
- * so: the library may hold a newer position from another device, and a Play from the old one would stamp it over
- * that. A second Play of the same episode does not wait again, so a slow request never leaves Play dead.
- */
-const play =
-  (episodeId: EpisodeId, now: Step): Step =>
-  (model) =>
-    model.libraryRequestsInFlight.length > 0 && !isPlayPending(model, episodeId)
-      ? intend((held) => ({
-          model: modifyFields(held, {
-            maybePendingPlay: () => Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
-          }),
-        }))(model)
-      : intend(now)(model)
-
-/** A Pause while a Play waits for the library: the Play is off. */
-const cancelPlay: Step = (model) => (Option.isSome(model.maybePendingPlay) ? intend(unchanged)(model) : { model })
-
-/**
- * Plays the loaded, paused episode from where it rests, on the list the library holds now (`playFrom`). The list
- * the player came to rest on does not count: at the end of chapter 1 of 1, it plays chapter 2 when that is listed.
- */
-const resume: Step = withLoaded(({ playback, episode }) =>
-  playback.isPlaying ? unchanged : playFrom(episode, globalMs(playback, episode)),
-)
-
-const toggle: Step = withLoaded(({ playback, episode }) => {
-  if (playback.isWaiting) return intend(setPlayback({ isWaiting: false }))
-  if (playback.isPlaying) return intend((model) => ({ model, commands: [ToggleAudio()] }))
-  return play(episode.id, resume)
-})
-
-const isLoadedEpisode = (model: Model, episodeId: EpisodeId) =>
-  model.playback._tag === "Loaded" && model.playback.episodeId === episodeId
-
 /** Reads the progress storage holds for an episode, to play it from there. The read carries the latest intent. */
 const readThenPlay =
   (episodeId: EpisodeId): Step =>
   (model) => ({ model, commands: [ReadStoredProgress({ episodeId, intent: model.playIntents })] })
 
 /**
- * Toggles `episode` when it is already loaded. Otherwise reads its progress from storage first,
- * as the React app did, so a pause in another tab is where it resumes.
+ * A Play acts. The episode the listener listens to gets a Play to place. Another episode reads its progress from
+ * storage first, as the React app did, so a pause in another tab is where it resumes.
  */
+const actPlay = (episodeId: EpisodeId): Step => (model) =>
+  isListeningTo(model, episodeId)
+    ? setListening({ wantsPlay: true, isPlayDue: true })(model)
+    : episodes(model).some((item) => item.id === episodeId && item.chapters.length > 0)
+      ? readThenPlay(episodeId)(model)
+      : { model }
+
+/**
+ * The listener asks for playback. While library requests are in flight, the Play waits for them and acts when
+ * `settlePendingPlay` says so: the library may hold a newer position from another device, and a Play from the old
+ * one would stamp it over that. A second Play of the same episode does not wait again, so a slow request never
+ * leaves Play dead.
+ */
+const askPlay = (episodeId: EpisodeId): Step => (model) =>
+  model.libraryRequestsInFlight.length > 0 && !isPlayPending(model, episodeId)
+    ? intend((held) => ({
+        model: modifyFields(held, {
+          maybePendingPlay: () => Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
+        }),
+      }))(model)
+    : intend(actPlay(episodeId))(model)
+
+/** The listener asks for no playback: of audio that plays, and of a Play that waits for the next chapter. */
+const askPause: Step = intend(setListening({ wantsPlay: false, isPlayDue: false }))
+
+/** A Pause while a Play waits for the library: the Play is off. */
+const cancelPlay: Step = (model) => (Option.isSome(model.maybePendingPlay) ? intend(unchanged)(model) : { model })
+
+const wantsPlay = (model: Model) => Option.exists(model.maybeListening, (listening) => listening.wantsPlay)
+
+const toggle: Step = (model) =>
+  Option.match(model.maybeListening, {
+    onNone: () => ({ model }),
+    onSome: ({ episodeId }) => (wantsPlay(model) ? askPause(model) : askPlay(episodeId)(model)),
+  })
+
+/** Toggles `episode` when the listener listens to it. Otherwise asks for its playback. */
 const start =
   (episode: Episode): Step =>
   (model) => {
-    if (isLoadedEpisode(model, episode.id)) return toggle(model)
+    if (isListeningTo(model, episode.id)) return toggle(model)
     if (episode.chapters.length === 0) return { model }
-    return play(episode.id, readThenPlay(episode.id))(model)
+    return askPlay(episode.id)(model)
   }
 
-/** A pending Play whose wait is over starts, from what the device knows now. */
-const playDue = (maybePlay: Option.Option<EpisodeId>): Step =>
-  Option.match(maybePlay, {
-    onNone: () => unchanged,
-    onSome:
-      (episodeId): Step =>
-      (model) => {
-        if (isLoadedEpisode(model, episodeId)) return resume(model)
-        const isPlayable = episodes(model).some((item) => item.id === episodeId && item.chapters.length > 0)
-        return isPlayable ? readThenPlay(episodeId)(model) : { model }
-      },
+/**
+ * Library request `request` answered: `isListed` says it brought a list the tab takes. A Play waits for the
+ * requests that were in flight when it was pressed, by number (`awaitedAfter` of the contract). When none is left,
+ * the Play acts, on what the device knows now. The failure of a request sent later, a poll for example, does not
+ * start it.
+ */
+const settlePendingPlay = (request: number, isListed: boolean): Step => (model) =>
+  Option.match(model.maybePendingPlay, {
+    onNone: () => ({ model }),
+    onSome: ({ episodeId, awaiting }) => {
+      const stillAwaiting = awaitedAfter(awaiting, request, isListed)
+      return stillAwaiting.length > 0
+        ? { model: modifyFields(model, { maybePendingPlay: () => Option.some({ episodeId, awaiting: stillAwaiting }) }) }
+        : actPlay(episodeId)(modifyFields(model, { maybePendingPlay: () => Option.none() }))
+    },
   })
 
 /**
- * Plays an episode from the newer of the progress storage holds and the server's; with neither, from 0. Only
- * when storage cannot be read is the entry this tab knows used. `playFrom` decides where that position starts. A
- * result whose start is no longer the latest playback intent is dropped: a later Pause, Play or seek wins.
+ * The storage read of a start came back. The device's entry is the newer of what storage holds and the server's;
+ * with neither, it has none. Only when storage cannot be read is the entry this tab knows used. Then the listener
+ * listens to this episode, with a Play to place. A result whose start is no longer the latest playback intent is
+ * dropped: a later Pause, Play or seek wins.
  */
-const playFromSaved =
+const startFromStored =
   (episodeId: EpisodeId, intent: number, stored: StoredProgress): Step =>
   (model) => {
     if (intent !== model.playIntents) return { model }
     const episode = episodes(model).find((item) => item.id === episodeId)
-    if (!episode || episode.chapters.length === 0 || isLoadedEpisode(model, episodeId)) return { model }
+    if (!episode || episode.chapters.length === 0 || isListeningTo(model, episodeId)) return { model }
     const local = StoredProgress.match(stored, {
       Saved: ({ progress }) => progress,
       NotSaved: () => null,
@@ -756,107 +715,50 @@ const playFromSaved =
     // Storage is the truth for this device: an entry gone from it (site data cleared) is gone here too.
     const known: Step =
       progress !== null
-        ? adoptProgress(episodeId, progress)
+        ? takeEntry(episodeId, progress)
         : (stepModel) => ({ model: modifyFields(stepModel, { localProgress: Record.remove(episodeId) }) })
-    return Update.combine(model, [savePosition, known, playFrom(episode, progress?.positionMs ?? 0)])
+    return Update.combine(model, [
+      known,
+      (stepModel) => ({
+        model: modifyFields(stepModel, {
+          maybeListening: () =>
+            Option.some({
+              episodeId,
+              wantsPlay: true,
+              isPlayDue: true,
+              maybeSeekMs: Option.none(),
+              maybeFollowedAt: Option.none(),
+            }),
+        }),
+      }),
+    ])
   }
 
-const clampToEpisode = (episode: Episode, ms: number) => Math.min(Math.max(0, ms), totalMs(episode.chapters))
-
-/**
- * Moves the loaded episode to `ms` on the timeline, without saving. A paused move only rests the player there. It
- * decides nothing about the end of the episode: the next Play does (`playFrom`), on the list it has then.
- */
-const moveTo = (ms: number): Step =>
-  withLoaded(({ playback, episode }) => {
-    const target = locate(episode.chapters, clampToEpisode(episode, ms))
-    return target.index === playback.chapter
-      ? (model) => ({
-          model: modifyFields(model, {
-            playback: () => Playback.Loaded({ ...playback, offsetMs: target.offsetMs, isWaiting: false }),
-          }),
-          commands: [SeekAudio({ offsetMs: target.offsetMs })],
-        })
-      : loadChapter(episode, target.index, target.offsetMs, playback.isPlaying || playback.isWaiting)
-  })
-
-/** The listener moves to `ms`: the move, saved. */
-const seek = (ms: number): Step =>
-  withLoaded(({ episode }) =>
-    intend(Update.combine([moveTo(ms), savePositionAt(episode.id, clampToEpisode(episode, ms))])),
-  )
+/** The listener moves to `ms` on the episode timeline. `reconcile` moves the audio there and saves the place. */
+const seek = (ms: number): Step => withLoaded(() => intend(setListening({ maybeSeekMs: Option.some(ms) })))
 
 const skip = (deltaMs: number): Step =>
   withLoaded(({ playback, episode }) => seek(globalMs(playback, episode) + deltaMs))
 
-const playChapter = (index: number): Step => withLoaded(({ episode }) => intend(loadChapter(episode, index, 0, true)))
+/** The listener picks a chapter: a move to its start, and playback from there. */
+const playChapter = (index: number): Step =>
+  withLoaded(({ episode }) =>
+    episode.chapters[index]
+      ? intend(
+          setListening({
+            maybeSeekMs: Option.some(chapterStartMs(episode.chapters, index)),
+            wantsPlay: true,
+            isPlayDue: false,
+          }),
+        )
+      : unchanged,
+  )
 
-/**
- * The episode played to its end: its total length is stored, so every device shows it played. The player rests
- * at that end, so the next Play starts at 0 (`playFrom`).
- */
-const finish = (episode: Episode): Step =>
-  Update.combine([
-    setPlayback({ isPlaying: false, isWaiting: false }),
-    savePositionAt(episode.id, totalMs(episode.chapters)),
-  ])
-
-/**
- * Playback ran out of audio where the player is: a chapter ended, or the player waits there. On the list the
- * library holds now:
- *
- * - audio from there on plays. Also a last chapter shorter than the finished margin;
- * - with none, a job that still works is waited for (`playStart`), and nothing new is saved;
- * - with none after the job ended, that was the end of the episode.
- */
-const playOn: Step = withLoaded(({ playback, episode }) => {
-  const positionMs = globalMs(playback, episode)
-  if (playStart(positionMs, episode.chapters, episode.job).isWaiting) {
-    return setPlayback({ isPlaying: false, isWaiting: true })
-  }
-  if (positionMs >= totalMs(episode.chapters)) return finish(episode)
-  const target = locate(episode.chapters, positionMs)
-  return loadChapter(episode, target.index, target.offsetMs, true)
-})
-
-/**
- * The audio of the current chapter ended. The player is at the listed end of that chapter, which is the start of
- * the next one: the length of the audio file can differ from the listed length by some milliseconds.
- */
-const endChapter: Step = withLoaded(({ playback, episode }) => {
-  const chapter = episode.chapters[playback.chapter]
-  return Update.combine([chapter ? setPlayback({ offsetMs: chapter.durationMs }) : unchanged, playOn])
-})
-
-const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
-  const timed = setPlayback({ offsetMs })(model)
-  if (atMs - model.lastSavedAtMs < SAVE_EVERY_MS) return timed
-  return Update.combine(timed.model, [
-    (stepModel) => ({ model: modifyFields(stepModel, { lastSavedAtMs: () => atMs }) }),
-    savePosition,
-  ])
-}
-
-/**
- * The rules that follow a change of the episode list: a deleted episode stops, and a waiting player goes on by
- * `playOn`. When the job ends with no audio after the place it waits at, the wait was the end of the episode.
- */
-const reconcilePlayback: Step = (model) => {
-  const playback = model.playback
-  if (playback._tag !== "Loaded") return { model }
-  const episode = episodes(model).find((item) => item.id === playback.episodeId)
-  if (!episode) {
-    return {
-      model: modifyFields(model, {
-        playback: () => Playback.Stopped(),
-        maybeScrubMs: () => Option.none(),
-        picker: (picker) => (picker._tag === "Open" && picker.pickerId === "Chapters" ? Picker.Closed() : picker),
-      }),
-      commands: [StopAudio()],
-    }
-  }
-  return playback.isWaiting ? playOn(model) : { model }
-}
+/** The element stopped though the tab did not tell it to: that is a Pause of the listener. */
+const takeOwnPause: Step = (model) =>
+  model.playback._tag === "Loaded" && model.playback.isPlaying
+    ? setListening({ wantsPlay: false, isPlayDue: false })(model)
+    : { model }
 
 const shortcut = (name: PlayerShortcut): Step => {
   switch (name) {
@@ -869,31 +771,203 @@ const shortcut = (name: PlayerShortcut): Step => {
   }
 }
 
-const isPlaying = (model: Model) => model.playback._tag === "Loaded" && model.playback.isPlaying
+// RECONCILE
+
+const isSamePlayback = (a: Playback, b: Playback) =>
+  a._tag === "Stopped" || b._tag === "Stopped"
+    ? a._tag === b._tag
+    : a.episodeId === b.episodeId &&
+      a.chapter === b.chapter &&
+      a.offsetMs === b.offsetMs &&
+      a.isPlaying === b.isPlaying &&
+      a.isWaiting === b.isWaiting
+
+const isSameListening = (a: Listening, b: Listening) =>
+  a.episodeId === b.episodeId &&
+  a.wantsPlay === b.wantsPlay &&
+  a.isPlayDue === b.isPlayDue &&
+  Option.getOrNull(a.maybeSeekMs) === Option.getOrNull(b.maybeSeekMs) &&
+  Option.getOrNull(a.maybeFollowedAt) === Option.getOrNull(b.maybeFollowedAt)
+
+/** Nothing is listened to, or the episode is gone from the library: the audio stops. */
+const stopPlayback: Step = (model) => {
+  if (model.playback._tag === "Stopped" && Option.isNone(model.maybeListening)) {
+    return model.isSaveDue ? { model: modifyFields(model, { isSaveDue: () => false }) } : { model }
+  }
+  return {
+    model: modifyFields(model, {
+      playback: () => Playback.Stopped(),
+      maybeListening: () => Option.none(),
+      isSaveDue: () => false,
+      maybeScrubMs: () => Option.none(),
+      picker: (picker) => (picker._tag === "Open" && picker.pickerId === "Chapters" ? Picker.Closed() : picker),
+    }),
+    commands: model.playback._tag === "Loaded" ? [StopAudio()] : [],
+  }
+}
+
+/**
+ * The one step that decides playback. It runs after every Message, on the Model alone. From the intent and the
+ * facts it works out the target (the episode, the chapter, the offset, and playing, paused or waiting), compares
+ * it with what the audio element has, and returns at most one audio Command and at most one save.
+ *
+ * Where the listener is:
+ *
+ * - a seek puts them where they asked;
+ * - audio that plays what they asked for leads: a newer entry of another device does not move it;
+ * - a player whose audio does not play (paused, held for the library, waiting for a chapter) moves to a device
+ *   entry it does not follow yet. That is each newer entry of the server or of storage. So listening never goes
+ *   on, and nothing is stamped, from a place another device moved on from;
+ * - else they are where the audio rests.
+ *
+ * What the audio does there, by `playStart` of the contract on the chapters and the job the library lists now:
+ *
+ * - a Play that has no place yet (pressed, released by the library, or moved to a newer entry) starts at 0 on a
+ *   finished position, waits at the end of the chapters of a job that still works, and plays every other place;
+ * - a Play that ran out of audio (a chapter ended, or it waits) plays the audio listed from there on, waits while
+ *   the job still works, and is over when the job ended: that was the end of the episode;
+ * - with no Play, the audio rests.
+ *
+ * What is stamped: the place of an episode the listener left, a seek, the end of the episode, a pause, and the
+ * place every 5 s and when the page hides. A place the device already holds is not stamped again. A player that
+ * moved to a newer entry stamps nothing, and neither does one whose Play waits for the library.
+ */
+const reconcile: Step = (model) => {
+  const maybeEpisode = Option.flatMap(model.maybeListening, (listening) =>
+    Option.fromNullishOr(episodes(model).find((item) => item.id === listening.episodeId)),
+  )
+  if (Option.isNone(model.maybeListening) || Option.isNone(maybeEpisode)) return stopPlayback(model)
+  const listening = model.maybeListening.value
+  const episode = maybeEpisode.value
+  const { chapters, job } = episode
+  const lengthMs = totalMs(chapters)
+  const playback = model.playback
+  /** What the element has of this episode, and of the episode the listener left. */
+  const here = playback._tag === "Loaded" && playback.episodeId === episode.id ? playback : undefined
+  const left = playback._tag === "Loaded" && playback.episodeId !== episode.id ? playback : undefined
+  const heardMs = here ? globalMs(here, episode) : undefined
+  const entry = model.localProgress[episode.id]
+  const isStamping = model.stamping[episode.id] !== undefined
+  const maybeSeekMs = Option.map(listening.maybeSeekMs, (ms) => Math.min(Math.max(0, ms), lengthMs))
+  const isSeek = Option.isSome(maybeSeekMs)
+  /** The audio plays what the listener asked for. */
+  const isOn = here !== undefined && here.isPlaying && listening.wantsPlay && !listening.isPlayDue
+
+  // Where the listener is.
+  const hasNews = !isStamping && entry !== undefined && !Option.contains(listening.maybeFollowedAt, entry.updatedAt)
+  const isMovedToEntry = !isSeek && !isOn && heardMs !== undefined && hasNews
+  const positionMs = Option.getOrElse(maybeSeekMs, () =>
+    heardMs === undefined ? (heldMs(model, episode.id) ?? 0) : isMovedToEntry && entry ? entry.positionMs : heardMs,
+  )
+  const maybeFollowedAt = isStamping ? listening.maybeFollowedAt : Option.fromNullishOr(entry?.updatedAt)
+
+  // What the audio does there.
+  const start = playStart(positionMs, chapters, job)
+  const isStart = listening.isPlayDue || (listening.wantsPlay && isMovedToEntry)
+  const isOver = listening.wantsPlay && !(isOn && !isSeek) && !start.isWaiting && !isStart && positionMs >= lengthMs
+  const mode: "Playing" | "Waiting" | "Paused" =
+    !listening.wantsPlay || isOver ? "Paused" : isOn && !isSeek ? "Playing" : start.isWaiting ? "Waiting" : "Playing"
+  const placeMs = mode === "Playing" && isStart ? start.positionMs : positionMs
+
+  // Where the audio must be. Audio that rests, waits or plays on stays in its place: only a reason moves it.
+  const isPlaced = here === undefined || isSeek || isMovedToEntry || (mode === "Playing" && !(isOn && !isSeek))
+  const target = isPlaced || here === undefined ? locate(chapters, placeMs) : { index: here.chapter, offsetMs: here.offsetMs }
+  /** The file to load. Audio that stays in its place has its file already, also when a late list no longer has it. */
+  const file = chapters[target.index]
+  const hasFile = isPlaced ? file !== undefined : true
+  const isPlaying = mode === "Playing" && hasFile
+
+  // At most one audio Command, and it is absolute.
+  const load = (chapter: { readonly url: string }) =>
+    LoadChapter({ src: model.connection.origin + chapter.url, offsetMs: target.offsetMs, rate: model.rate, isAutoplay: isPlaying })
+  const audio =
+    file === undefined || !isPlaced
+      ? here !== undefined && here.isPlaying !== isPlaying && hasFile
+        ? [isPlaying ? PlayAudio() : PauseAudio()]
+        : here?.isPlaying && !hasFile
+          ? [PauseAudio()]
+          : []
+      : here === undefined || here.chapter !== target.index
+        ? [load(file)]
+        : Math.abs(here.offsetMs - target.offsetMs) >= 1
+          ? [isPlaying === here.isPlaying && !isStart ? SeekAudio({ offsetMs: target.offsetMs }) : load(file)]
+          : isPlaying === here.isPlaying
+            ? []
+            : [isPlaying ? PlayAudio() : PauseAudio()]
+
+  // At most one save.
+  const isNew = (episodeId: EpisodeId, ms: number) => heldMs(model, episodeId) !== Math.max(0, Math.round(ms))
+  const leftEpisode = left ? episodes(model).find((item) => item.id === left.episodeId) : undefined
+  const isPaused = here !== undefined && here.isPlaying && !isPlaying
+  const save: { readonly episodeId: EpisodeId; readonly positionMs: number } | undefined =
+    left && leftEpisode
+      ? { episodeId: left.episodeId, positionMs: globalMs(left, leftEpisode) }
+      : isSeek
+        ? { episodeId: episode.id, positionMs }
+        : isOver
+          ? { episodeId: episode.id, positionMs: lengthMs }
+          : heardMs !== undefined && !isMovedToEntry && !isPlayPending(model, episode.id) && (model.isSaveDue || isPaused)
+            ? { episodeId: episode.id, positionMs: heardMs }
+            : undefined
+  const stamp = save && isNew(save.episodeId, save.positionMs) ? save : undefined
+
+  const nextPlayback =
+    !hasFile && here === undefined
+      ? playback
+      : Playback.Loaded({
+          episodeId: episode.id,
+          chapter: target.index,
+          offsetMs: target.offsetMs,
+          isPlaying,
+          isWaiting: mode === "Waiting",
+        })
+  const nextListening: Listening = {
+    episodeId: episode.id,
+    wantsPlay: listening.wantsPlay && !isOver,
+    isPlayDue: false,
+    maybeSeekMs: Option.none(),
+    maybeFollowedAt,
+  }
+  const isUnchanged =
+    isSamePlayback(playback, nextPlayback) && isSameListening(listening, nextListening) && !model.isSaveDue && !stamp
+  return {
+    model: isUnchanged
+      ? model
+      : modifyFields(model, {
+          playback: () => (isSamePlayback(playback, nextPlayback) ? playback : nextPlayback),
+          maybeListening: () => (isSameListening(listening, nextListening) ? model.maybeListening : Option.some(nextListening)),
+          isSaveDue: () => false,
+          stamping: (stamping) =>
+            stamp ? Record.set(stamping, stamp.episodeId, Math.max(0, Math.round(stamp.positionMs))) : stamping,
+        }),
+    commands: [...(stamp ? [SaveProgress(stamp)] : []), ...audio],
+  }
+}
 
 // UPDATE
 
-export const update = (model: Model, message: Message): UpdateReturn =>
+/** Changes intent and facts for `message`. It sends no audio Command and stamps nothing: `reconcile` does. */
+const handle = (model: Model, message: Message): UpdateReturn =>
   Message.match<UpdateReturn>(message, {
     SucceededFetchEpisodes: ({ generation, request, episodes: list }) => {
       const isListed = isCurrent(model, generation)
-      const answered = answerLibrary(model, request, isListed)
+      const answered = answerLibrary(model, request)
       return isListed
-        ? Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.none() }), [
+        ? Update.combine(modifyFields(answered, { maybeLibraryFailure: () => Option.none() }), [
             withEpisodes(() => list),
-            syncProgress(answered.maybePlay),
-            playDue(answered.maybePlay),
+            syncProgress,
+            settlePendingPlay(request, true),
           ])
-        : playDue(answered.maybePlay)(answered.model)
+        : settlePendingPlay(request, false)(answered)
     },
     FailedFetchEpisodes: ({ generation, request, failure }) => {
       // When each request a Play waited for has failed, it starts from what the tab knows.
-      const answered = answerLibrary(model, request, false)
-      if (!isCurrent(model, generation)) return playDue(answered.maybePlay)(answered.model)
+      const answered = answerLibrary(model, request)
+      if (!isCurrent(model, generation)) return settlePendingPlay(request, false)(answered)
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
-      return Update.combine(modifyFields(answered.model, { maybeLibraryFailure: () => Option.some(failure) }), [
+      return Update.combine(modifyFields(answered, { maybeLibraryFailure: () => Option.some(failure) }), [
         failure.status === 401 && !wasUnauthorized ? openSettings : unchanged,
-        playDue(answered.maybePlay),
+        settlePendingPlay(request, false),
       ])
     },
     SucceededFetchVoices: ({ voices }) => ({ model: modifyFields(model, { voices: () => voices }) }),
@@ -901,7 +975,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
     ClickedTryAgain: () => fetchEpisodes(model),
     TickedPoll: () => fetchEpisodes(model),
     BecameVisible: () => fetchEpisodes(model),
-    HidPage: () => savePosition(model),
+    HidPage: () => ({ model: modifyFields(model, { isSaveDue: () => true }) }),
 
     UpdatedAddText: ({ value }) => ({
       model: modifyFields(model, { addText: () => value, maybeAddError: () => Option.none() }),
@@ -1024,8 +1098,8 @@ export const update = (model: Model, message: Message): UpdateReturn =>
         modifyFields(model, { maybeScrubMs: () => Option.none() }),
       ),
     PressedPlayerShortcut: ({ shortcut: name }) => shortcut(name)(model),
-    PressedMediaPlay: () => (isPlaying(model) ? { model } : toggle(model)),
-    PressedMediaPause: () => (isPlaying(model) ? toggle(model) : cancelPlay(model)),
+    PressedMediaPlay: () => (wantsPlay(model) ? { model } : toggle(model)),
+    PressedMediaPause: () => (wantsPlay(model) ? askPause(model) : cancelPlay(model)),
     PressedMediaSkip: ({ deltaMs }) => skip(deltaMs)(model),
     PressedMediaSeekTo: ({ positionMs }) => seek(positionMs)(model),
     PressedMediaPreviousTrack: () =>
@@ -1036,19 +1110,29 @@ export const update = (model: Model, message: Message): UpdateReturn =>
       )(model),
 
     UpdatedAudioTime: ({ offsetMs, atMs }) => updateAudioTime(offsetMs, atMs)(model),
-    StartedAudio: () => setPlayback({ isPlaying: true, isWaiting: false })(model),
-    PausedAudio: () => Update.combine(model, [setPlayback({ isPlaying: false }), savePosition]),
+    StartedAudio: () => setPlayback({ isPlaying: true })(model),
+    PausedAudio: () => takeOwnPause(model),
     EndedChapter: () => endChapter(model),
     CompletedLoadChapter: () => ({ model }),
-    FailedPlayAudio: () => setPlayback({ isPlaying: false })(model),
-    CompletedToggleAudio: () => ({ model }),
+    // The browser refused to play: the Play is off, and the element rests.
+    FailedPlayAudio: () =>
+      Update.combine(model, [setPlayback({ isPlaying: false }), setListening({ wantsPlay: false, isPlayDue: false })]),
+    CompletedPlayAudio: () => ({ model }),
+    CompletedPauseAudio: () => ({ model }),
     CompletedSeekAudio: () => ({ model }),
     CompletedSetAudioRate: () => ({ model }),
     CompletedStopAudio: () => ({ model }),
-    GotStoredProgress: ({ episodeId, intent, stored }) => playFromSaved(episodeId, intent, stored)(model),
+    GotStoredProgress: ({ episodeId, intent, stored }) => startFromStored(episodeId, intent, stored)(model),
 
-    SavedProgress: ({ episodeId, progress }) => sendSaved(episodeId, progress)(model),
+    SavedProgress: ({ episodeId, progress }) => takeStamp(episodeId, progress)(model),
     SucceededPushProgress: ({ episodeId, sent, stored }) => takePushAnswer(episodeId, sent, stored)(model),
     FailedPushProgress: () => ({ model }),
     CompletedStoreProgress: () => ({ model }),
   })
+
+/** Every Message goes two steps: `handle` changes intent and facts, then `reconcile` decides what the audio does. */
+export const update = (model: Model, message: Message): UpdateReturn => {
+  const handled = handle(model, message)
+  const reconciled = reconcile(handled.model)
+  return { model: reconciled.model, commands: [...(handled.commands ?? []), ...(reconciled.commands ?? [])] }
+}

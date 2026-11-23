@@ -1,7 +1,7 @@
 import type { Episode, EpisodeId, EpisodeProgress, VoiceRef } from "@fama/contracts"
 import { Option } from "effect"
 import { apiToken } from "~/api"
-import type { Model } from "~/model"
+import type { LoadedPlayback, Model } from "~/model"
 import { init } from "~/update"
 
 export const connection = { origin: "", token: apiToken("dev-api-token") }
@@ -21,6 +21,22 @@ export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Mo
   ...model,
   libraryRequestsInFlight: [],
   maybeEpisodes: Option.some(episodes),
+})
+
+/**
+ * `model` with `playback` in the audio element, as the listener left it: the intent is Play when the audio plays or
+ * waits for a chapter, and the player follows the entry the device holds.
+ */
+export const withPlayback = (model: Model, playback: LoadedPlayback): Model => ({
+  ...model,
+  playback,
+  maybeListening: Option.some({
+    episodeId: playback.episodeId,
+    wantsPlay: playback.isPlaying || playback.isWaiting,
+    isPlayDue: false,
+    maybeSeekMs: Option.none(),
+    maybeFollowedAt: Option.fromNullishOr(model.localProgress[playback.episodeId]?.updatedAt),
+  }),
 })
 
 const at = "2026-11-20T00:00:00.000Z"

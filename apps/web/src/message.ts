@@ -101,8 +101,10 @@ export const Message = defineMessageUnion({
   PausedAudio: {},
   EndedChapter: {},
   CompletedLoadChapter: {},
+  /** The browser refused to play: no user gesture, or a file it cannot play. */
   FailedPlayAudio: {},
-  CompletedToggleAudio: {},
+  CompletedPlayAudio: {},
+  CompletedPauseAudio: {},
   CompletedSeekAudio: {},
   CompletedSetAudioRate: {},
   CompletedStopAudio: {},

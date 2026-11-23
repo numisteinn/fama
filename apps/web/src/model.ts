@@ -76,8 +76,9 @@ export const Feed = defineTaggedUnion({
 export type Feed = typeof Feed.Type
 
 /**
- * The loaded episode. An episode plays as one timeline of its chapter files in order.
- * `offsetMs` is the position inside the current chapter file.
+ * A fact: what the audio element has. An episode plays as one timeline of its chapter files in order. `chapter` is
+ * the file the element was told to load, and `offsetMs` the position inside it. Only `reconcile` in `update.ts`
+ * tells the element anything, and it writes here what it told. The element's own events correct it.
  *
  * It holds no "ended" state. Whether the position is the end of the episode depends on the chapters and the job
  * the library lists, and those change. `playStart` of the contract decides it when a Play acts.
@@ -88,6 +89,7 @@ export const Playback = defineTaggedUnion({
     episodeId: EpisodeId,
     chapter: Schema.Number,
     offsetMs: Schema.Number,
+    /** The element plays: it was told to, or it said so. */
     isPlaying: Schema.Boolean,
     /** A Play is on at the end of the chapters made so far: it goes on when the next chapter is listed. */
     isWaiting: Schema.Boolean,
@@ -95,6 +97,26 @@ export const Playback = defineTaggedUnion({
 })
 export type Playback = typeof Playback.Type
 export type LoadedPlayback = Extract<Playback, { _tag: "Loaded" }>
+
+/**
+ * Intent: what the listener asked for last, for the episode they listen to. The message handlers of `update.ts`
+ * write it and send no audio Command. `reconcile` reads it, with the facts, and decides what the audio does.
+ */
+export const Listening = Schema.Struct({
+  episodeId: EpisodeId,
+  /** Play or Pause was the last ask that acted. A Play that waits for the library has not acted: `maybePendingPlay`. */
+  wantsPlay: Schema.Boolean,
+  /** The Play has no place yet. `reconcile` places it by `playStart` of the contract, once. */
+  isPlayDue: Schema.Boolean,
+  /** A place on the episode timeline the listener asked for. `reconcile` moves the audio there and saves it, once. */
+  maybeSeekMs: Schema.Option(Schema.Number),
+  /**
+   * The `updatedAt` of the device's entry that the player's place already follows. A device entry with another
+   * stamp is news from another device: a player whose audio does not play moves there.
+   */
+  maybeFollowedAt: Schema.Option(Schema.String),
+})
+export type Listening = typeof Listening.Type
 
 export const Model = Schema.Struct({
   connection: Connection,
@@ -140,21 +162,31 @@ export const Model = Schema.Struct({
   /** Counts the copies that showed Copied. A reset timer clears Copied only for its own copy. */
   feedUrlCopies: Schema.Number,
 
+  /** Fact: what the audio element has. */
   playback: Playback,
+  /** Intent: the episode the listener plays or paused. `None`: nothing is loaded. */
+  maybeListening: Schema.Option(Listening),
   /**
    * Counts the user's playback actions: Play, Pause, skip, seek, chapter. A start reads storage first;
    * its result plays only if no later action came, so it is still the latest intent.
    */
   playIntents: Schema.Number,
-  /** `Some` while a Play waits for the library. The next playback action of the user replaces it. */
+  /** Intent: `Some` while a Play waits for the library. The next playback action of the user replaces it. */
   maybePendingPlay: Schema.Option(PendingPlay),
   rate: Schema.Number,
   /**
-   * The device's progress by episode id, as this tab knows it: read from `fama.progress.<id>` at boot, then
+   * Fact: the device's progress by episode id, as this tab knows it: read from `fama.progress.<id>` at boot, then
    * each save of this tab and each server entry it adopted. Library loads merge it with the server's; a start
    * reads storage itself and falls back to this only when storage cannot be read.
    */
   localProgress: Schema.Record(Schema.String, EpisodeProgress),
+  /**
+   * Fact: positions a `SaveProgress` Command stamps now, by episode id. The stamp will be newer than every entry
+   * the tab knows, so until it lands this is where the device holds the episode, and no server entry replaces it.
+   */
+  stamping: Schema.Record(Schema.String, Schema.Number),
+  /** The page hid, or 5 s of playback passed: `reconcile` saves the listener's place now, once. */
+  isSaveDue: Schema.Boolean,
   lastSavedAtMs: Schema.Number,
   /** Slider value while the user drags it. */
   maybeScrubMs: Schema.Option(Schema.Number),

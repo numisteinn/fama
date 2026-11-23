@@ -16,7 +16,7 @@ import {
 } from "foldkit/scene"
 import { Option, Redacted } from "effect"
 import { describe, test, expect as expectValue } from "vitest"
-import { LoadChapter, ToggleAudio } from "~/audio"
+import { LoadChapter, PauseAudio, PlayAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
   FILE_INPUT_ID,
@@ -33,7 +33,7 @@ import {
   StoreConnection,
   WaitBeforeResetTypeAhead,
 } from "~/command"
-import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes } from "~/fixture"
+import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
 import { Message } from "~/message"
 import { Playback, StoredProgress } from "~/model"
 import { apiToken } from "~/api"
@@ -199,16 +199,10 @@ describe("menu placement", () => {
 
 describe("chapters menu", () => {
   test("typing a chapter number highlights that chapter, as the item shows it", () => {
-    const loaded = {
-      ...withEpisodes(baseModel(), [harbourDays]),
-      playback: Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 0,
-        isPlaying: false,
-        isWaiting: false,
-      }),
-    }
+    const loaded = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 0, isPlaying: false, isWaiting: false }),
+    )
     const chaptersMenu = role("menu")
     scene(
       { update, view },
@@ -254,15 +248,14 @@ describe("play and pause", () => {
         expect(role("link", { name: "Download" })).toExist(),
       ),
       click(role("button", { name: /^Pause$/ })),
-      Command.expectExact(ToggleAudio),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
-      Subscription.emit(Message.PausedAudio()),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 0 })),
+      Command.expectExact(PauseAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 0 })),
+      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
       Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) })),
       Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
+      Subscription.emit(Message.PausedAudio()),
       expect(role("button", { name: "Play Harbour Days" })).toExist(),
       click(role("button", { name: /^Play$/ })),
-      Command.resolve(ToggleAudio, Message.CompletedToggleAudio()),
+      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
     )
   })
 })
