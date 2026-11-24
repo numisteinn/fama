@@ -26,12 +26,16 @@ export const Message = defineMessageUnion({
   PressedEnterInAddText: {},
   SubmittedAddForm: {},
   ChangedFileInput: { files: Schema.Array(File.File) },
-  ClickedRemoveFile: {},
+  ClickedRemoveFile: { key: Schema.Number },
+  ClickedRetryFile: { key: Schema.Number },
   EnteredFileDrag: {},
   LeftFileDrag: {},
-  DroppedFile: { file: File.File },
+  /** The files of a drop, with the files of each dropped folder. */
+  DroppedFiles: { files: Schema.Array(File.File) },
   SucceededCreateEpisode: { episode: Episode },
   FailedCreateEpisode: { failure: ApiFailure },
+  SucceededUploadFile: { key: Schema.Number, episode: Episode },
+  FailedUploadFile: { key: Schema.Number, failure: ApiFailure },
   CompletedMountFilePickerKeys: {},
   CompletedFocusAddText: {},
 

@@ -84,5 +84,5 @@ export const runningHarbourDays: Episode = {
   durationMs: null,
   bookUrl: null,
   chapters: [harbourDays.chapters[0]!],
-  job: { _tag: "Running", workerId: "w" as never, stage: "synthesizing", done: 3, total: 6, heartbeatAt: at },
+  job: { _tag: "Running", workerId: "w" as never, stage: "synthesizing", done: 3, total: 6, heartbeatAt: at, remainingMs: null },
 }

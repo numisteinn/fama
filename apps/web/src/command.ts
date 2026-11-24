@@ -63,9 +63,15 @@ export const CreateEpisodeFromSource = Command.define("CreateEpisodeFromSource",
 })
 
 export const UploadEpisode = Command.define("UploadEpisode", {
-  args: { connection: Connection, file: File.File, voice: Schema.NullOr(VoiceRef), speed: Schema.Number },
-  messages: [Message.SucceededCreateEpisode, Message.FailedCreateEpisode],
-  execute: ({ connection, file, voice, speed }) => {
+  args: {
+    connection: Connection,
+    key: Schema.Number,
+    file: File.File,
+    voice: Schema.NullOr(VoiceRef),
+    speed: Schema.Number,
+  },
+  messages: [Message.SucceededUploadFile, Message.FailedUploadFile],
+  execute: ({ connection, key, file, voice, speed }) => {
     const form = new FormData()
     form.set("file", file)
     if (voice) form.set("voice", voice)
@@ -73,8 +79,8 @@ export const UploadEpisode = Command.define("UploadEpisode", {
     return sendJson(Episode, connection, "POST", "/api/episodes/upload", (request) =>
       HttpClientRequest.bodyFormData(request, form),
     ).pipe(
-      Effect.map((episode) => Message.SucceededCreateEpisode({ episode })),
-      Effect.catch((failure) => Effect.succeed(Message.FailedCreateEpisode({ failure }))),
+      Effect.map((episode) => Message.SucceededUploadFile({ key, episode })),
+      Effect.catch((failure) => Effect.succeed(Message.FailedUploadFile({ key, failure }))),
     )
   },
 })

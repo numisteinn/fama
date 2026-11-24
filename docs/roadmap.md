@@ -4,7 +4,7 @@ Features we plan to add, and how to build many of them at the same time. Most co
 
 ## The shape of the work
 
-Today the worker extracts and narrates in one step, and the Document lives only inside the worker. Three of the four main features need the Document outside the worker, and a stop between extraction and narration. That is one foundation, not three features that each build it.
+The worker stores the Document with the API after extraction (unit `F`, done). Three of the four main features need that stored Document, and a stop between extraction and narration. That is one foundation, not three features that each build it.
 
 | Feature | Needs the stored Document | Needs the stop before narration |
 |---|---|---|
@@ -23,12 +23,10 @@ now ──┬─ F   Stored Document ──┬─ V1 Review core ──┬─ V2
       ├─ R2  Reader web
       ├─ R3  Reader iPhone
       ├─ R4  Feed transcript
-      ├─ E   Time left
-      ├─ M   Add many files
       └─ X   Extraction (OCR, PDF library)
 ```
 
-Seven units can start now: `F`, `R2`, `R3`, `R4`, `E`, `M`, `X`. After `F` lands, two more can run: `V1`, `S1`.
+Six units can start now: `V1`, `S1`, `R2`, `R3`, `R4`, `X`.
 
 ## Rules for parallel work
 
@@ -38,21 +36,6 @@ Seven units can start now: `F`, `R2`, `R3`, `R4`, `E`, `M`, `X`. After `F` lands
 4. **The shapes in this file are the seams.** A unit that must change a shape another unit uses changes this file in the same PR, and says so in the PR title.
 5. **Each unit owns one migration file.** Numbers are reserved in "Files". Do not edit another unit's migration.
 6. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR also removes the unit from this file and updates `CONTEXT.md` and `docs/api.md` for its own terms and routes.
-
-## Foundation
-
-### F. Stored Document
-
-The worker uploads the Document after extraction. The API stores it. From then on the worker narrates from the stored Document and does not extract again.
-
-- Why: Review edits it, Voice sample reads from it, Narrate again compares against it. A retry also gets cheaper, because it does not download and extract again.
-- Shape: `Document { title, author, language, chapters: [{ title, text }] }`. Stored at `users/<userId>/episodes/<episodeId>/document.json`.
-- Rule: audio chapter `i` narrates Document chapter `i`. No unit may break this.
-- Worker routes: `PUT /api/worker/jobs/:id/document`. `ClaimedJob` gains `documentPath`, set when a Document exists. The worker then reads it and skips extraction.
-- Client route: `GET /api/episodes/:id/document`.
-- In the worker, `process` splits into two functions: extract (source to stored Document) and narrate (stored Document to audio).
-- `CONTEXT.md` changes: the Document no longer "lives only inside the worker".
-- Proof: fail a job after extraction, retry it, and the worker log shows no second extraction. The episode audio is the same as before.
 
 ## Lanes
 
@@ -112,19 +95,6 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 
 Units: **N1** core after `V1` (it extends the same route and the claim), then **N2** web and **N3** iPhone.
 
-### E. Time left
-
-The episode row shows the time left while the job runs, not only `Narrating n/m`.
-
-- The worker knows the characters left and its speed. `ProgressRequest` and `JobState.Running` gain `remainingMs: number | null`.
-- One unit: worker, API, contract, the row on the web and on the iPhone.
-
-### M. Add many files
-
-Pick many files, or a folder, and get one episode for each.
-
-- Clients only. The queue already handles many jobs.
-- One unit for the web add bar and the iPhone Add screen. It lands before `V2` and `V3`, which add the Review switch to the same screens.
 
 ### X. Extraction
 
@@ -140,7 +110,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 | Unit | Its own files | Migration |
 |---|---|---|
-| F | `contracts/src/document.ts`, `apps/api/src/routes/document.ts`, `worker/.../work.py` (the split of `process`) | `0002_document.sql` |
 | R2 | `apps/web/src/reader/` | |
 | R3 | `apps/mobile/src/reader/` | |
 | R4 | `apps/api/src/feed.ts`, `apps/api/src/transcript.ts` | |
@@ -150,15 +119,11 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
-| E | `worker/.../work.py` (`Progress`), `apps/web/src/view/library.ts`, `apps/mobile/src/components/EpisodeRow.tsx` | `0007_remaining.sql` |
-| M | `apps/web/src/view/addBar.ts`, `apps/mobile/src/app/(tabs)/add/index.tsx` | |
 | X | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 Known shared points, and who goes first:
 
-- `worker/.../work.py`: `F` and `E`. `E` touches only `Progress` and the heartbeat. `F` touches only `process`.
 - `claim` in `job.ts` and `episode-repo.ts`: `F`, then `V1` and `S1`, then `N1`. `V1` and `S1` each add their own branch to the claim. The second one to merge rebases.
-- `JobState.Running`: `E` adds a field, `V1` adds a state next to it. Either order works.
 
 ## Open choices
 
@@ -177,10 +142,12 @@ Each has a default. A unit follows the default unless the owner says no.
 ## Already in Fama
 
 - M4B book file with chapters, title, author and cover.
+- The stored Document (unit `F`). The worker uploads the Document after extraction, and each later attempt narrates from the stored one. The shape and the routes are in `docs/api.md` ("Document"). The rule that no unit may break: audio chapter `i` narrates Document chapter `i`. A new route file builds on `apps/api/src/routes/kit.ts`, and its tests on `apps/api/src/test-app.ts`.
 - Chapter 1 plays while the worker narrates the other chapters.
 - After a stop, a job continues and keeps its finished chapters.
 - Each job keeps its own voice and narration speed.
 - Chapters come from Markdown headings in text.
+- Many files, or a dropped folder on the web, make one episode each.
 - Cover, copyright and contents pages are skipped.
 - Repeated PDF page headers, footers and page numbers are removed (`extract/pdf.py`, tested in `test_extract.py`). The old roadmap listed this as missing. If a real PDF still reads its header, add that file as a test case in lane `X`.
 - Project Gutenberg license text is removed from pasted text and from EPUB files (`extract/plain.py`, `extract/epub.py`, tested). The old roadmap listed this as missing too.

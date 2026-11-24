@@ -33,6 +33,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 | `DELETE /api/episodes/:id` | | `204`, also deletes its media |
 | `POST /api/episodes/:id/retry` | | `Episode`, job back to `Queued` |
 | `PUT /api/episodes/:id/progress` | `EpisodeProgress` `{ positionMs, updatedAt }` | `200 EpisodeProgress`, the stored value after the write |
+| `GET /api/episodes/:id/document` | | `Document`, or `404` (`NotStored`) until the worker has stored it |
 | `GET /api/voices` | | `{ voices: Voice[] }` from workers seen in the last 30 days |
 | `GET /api/feed` | | `{ url }`, the full feed URL for "Add to Podcasts" |
 | `POST /api/feed/rotate` | | `{ url }`, the feed URL with a new feed token |
@@ -48,13 +49,21 @@ The client routes see only the token user's episodes.
 `job` is one of:
 
 - `{_tag:"Queued"}`
-- `{_tag:"Running", workerId, stage, done, total, heartbeatAt}` with `stage` in `extracting | synthesizing | encoding | uploading`
+- `{_tag:"Running", workerId, stage, done, total, heartbeatAt, remainingMs}` with `stage` in `extracting | synthesizing | encoding | uploading`. `remainingMs` is the worker's estimate of the wall time until `Ready`, as of `heartbeatAt`, or `null` when it has none
 - `{_tag:"Ready", finishedAt}`
 - `{_tag:"Failed", reason, failedAt}`
 
 A new episode gets a provisional `title`: the URL host and path, the file name, or the first words of the text. The worker replaces it with the real title.
 
 `chapters` grows while the job runs. A client can play chapter 0 while the job is still `Running`.
+
+## Document
+
+`Document` is `{ title, author, language, chapters: [{ title, text }] }`: the clean text the worker extracted from the source. `author` can be `null`. `chapters` has at least one entry. The shape is `packages/contracts/src/document.ts`.
+
+- The worker stores the Document once, after the first extraction. The API keeps it with the episode and deletes it with the episode.
+- Audio chapter `i` narrates Document chapter `i`. `Episode.chapters[i]` is the audio of `Document.chapters[i]`.
+- The Document has no cover. The cover is a file of its own (`coverUrl`).
 
 ## Timing file
 
@@ -101,11 +110,14 @@ A worker loops: claim, process, report. All calls are idempotent. A crash at any
 |---|---|---|
 | `POST /api/worker/claim` | `{ workerId, voices: Voice[] }` | `200 { job: ClaimedJob }` or `204` when no work |
 | `GET /api/worker/jobs/:id/source?leaseToken=<urlenc>` | | the uploaded file bytes (File sources only) |
-| `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice }` | `204`. Also the heartbeat |
+| `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice, remainingMs }` | `204`. Also the heartbeat |
 | `PUT /api/worker/jobs/:id/chapters/:index?workerId=<urlenc>&leaseToken=<urlenc>&title=<urlenc>&durationMs=<int>` | `audio/mp4` bytes (`.m4a`) | `204`. Overwrites the same index |
 | `PUT /api/worker/jobs/:id/chapters/:index/timing?workerId=<urlenc>&leaseToken=<urlenc>` | `Timing` as JSON | `204`. Overwrites the same index. `400` when the body is not a `Timing` |
 | `PUT /api/worker/jobs/:id/book?workerId=<urlenc>&leaseToken=<urlenc>` | `audio/mp4` bytes (`.m4b`) | `204` |
 | `PUT /api/worker/jobs/:id/cover?workerId=<urlenc>&leaseToken=<urlenc>` | `image/jpeg` or `image/png` | `204` |
+| `GET /api/worker/jobs/:id/cover?leaseToken=<urlenc>` | | the cover bytes with their `Content-Type`, or `404` (`NotStored`) |
+| `PUT /api/worker/jobs/:id/document?workerId=<urlenc>&leaseToken=<urlenc>` | `Document` (JSON) | `204`. Overwrites the stored Document. A body that is not a `Document` gets `400` |
+| `GET /api/worker/jobs/:id/document?leaseToken=<urlenc>` | | `Document`, or `404` (`NotStored`) |
 | `POST /api/worker/jobs/:id/complete` | `{ workerId, leaseToken, durationMs }` | `204`, job `Ready` |
 | `POST /api/worker/jobs/:id/fail` | `{ workerId, leaseToken, reason }` | `204`, job `Failed` |
 
@@ -113,12 +125,15 @@ Rules:
 
 - `claim` takes jobs of all users. It also registers the worker's voices for `GET /api/voices`.
 - `claim` returns the oldest `Queued` job, or a `Running` job whose `heartbeatAt` is older than `LEASE_MS` (10 minutes).
-- `ClaimedJob` is `{ episodeId, leaseToken, source, sourcePath, voice, speed, completedChapters }`. The worker skips chapter indexes in `completedChapters`.
-- `leaseToken` is a random secret for this one claim. Every job route needs it: the source read in the query, byte uploads in the query, JSON writes in the body. The server stores only its SHA-256. `workerId` is for diagnostics only.
+- `ClaimedJob` is `{ episodeId, leaseToken, source, sourcePath, documentPath, coverPath, voice, speed, completedChapters }`. The worker skips chapter indexes in `completedChapters`.
+- `documentPath` is the path of `GET .../document`, or `null` when the episode has no stored Document. With `null`, the worker extracts the source, uploads the cover (if the source has one), and then uploads the Document. With a path, the worker reads the stored Document and does not extract. `coverPath` is the path of `GET .../cover`, or `null` when the episode has no cover. The worker reads the cover back to put it in the book file.
+- The worker uploads the cover before the Document. So a stored Document means the first extraction is complete.
+- `leaseToken` is a random secret for this one claim. Every job route needs it: reads (source, Document, cover) in the query, uploads in the query, JSON `POST` writes in the body. The server stores only its SHA-256. `workerId` is for diagnostics only.
 - A call whose `leaseToken` is not the current claim's (another worker claimed the job since, or the job went back to `Queued`), or whose job is no longer `Running`, gets `409`. The worker then drops the job. A repeated `complete` or `fail` with the same lease after it took effect gets `204`.
 - The worker uploads the timing file of a chapter before the chapter audio. The API lists a chapter when its audio arrives, so a listed chapter already has its `timingUrl`, and a stop between the two uploads leaves no chapter: the next attempt sends both again.
 - Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
+- `remainingMs` is a whole number of milliseconds, 0 or more, or `null`. The worker measures its own speed in this job: only chunks the engine made count, not chunks from its cache. It moves the estimate slower than the clock, so the time left goes down from one heartbeat to the next. It sends `null` before it has measured enough chunks and after narration. A worker that leaves the field out sends `null`.
 
 ## Connect link
 
@@ -151,5 +166,6 @@ Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves 
 - `users/<userId>/episodes/<episodeId>/chapters/<index:000>.json` (the timing file)
 - `users/<userId>/episodes/<episodeId>/book.m4b`
 - `users/<userId>/episodes/<episodeId>/cover.<ext>`
+- `users/<userId>/episodes/<episodeId>/document.json`
 
 `DELETE /api/episodes/:id` checks the owner in D1 before it removes any of these.

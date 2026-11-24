@@ -19,6 +19,7 @@ export const keys = {
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+  document: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/document.json`,
 }
 
 /**

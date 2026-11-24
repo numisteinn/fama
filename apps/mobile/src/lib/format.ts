@@ -36,6 +36,7 @@ export function jobLabel(job: JobState): string {
     case "Queued":
       return "Queued"
     case "Running":
+      if (job.remainingMs !== null) return `${STAGE[job.stage]} · ${duration(job.remainingMs / 1000)} left`
       return job.total > 0 ? `${STAGE[job.stage]} ${job.done}/${job.total}` : STAGE[job.stage]
     case "Ready":
       return "Ready"

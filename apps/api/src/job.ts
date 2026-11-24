@@ -28,6 +28,7 @@ export const claim = (
           done: 0,
           total: 0,
           heartbeatAt: iso(event.now),
+          remainingMs: null,
         }),
       )
     : Result.fail(new NotClaimable())
@@ -48,6 +49,7 @@ export const progress = (
     readonly stage: Stage
     readonly done: number
     readonly total: number
+    readonly remainingMs: number | null
     readonly now: number
   },
 ): Result.Result<JobState, LeaseLost> =>
@@ -58,6 +60,7 @@ export const progress = (
       done: event.done,
       total: event.total,
       heartbeatAt: iso(event.now),
+      remainingMs: event.remainingMs,
     }),
   )
 

@@ -4,14 +4,13 @@ import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { getPlatformProxy } from "wrangler"
-import migration from "../migrations/0001_init.sql?raw"
-import timingMigration from "../migrations/0003_timing.sql?raw"
 import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import { sha256Hex } from "./secrets.ts"
+import { migrations } from "./test-app.ts"
 import * as Wake from "./wake.ts"
 
 const WORKER_TOKEN = "test-worker-token"
@@ -91,7 +90,7 @@ beforeEach(async () => {
   waitUntilThrows = false
   const tables = ["timings", "progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
-  await env.DB.batch(statements(migration + timingMigration).map((statement) => env.DB.prepare(statement)))
+  await env.DB.batch(statements(migrations).map((statement) => env.DB.prepare(statement)))
   for (const user of Object.values(users)) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO users (id, feed_token, created_at) VALUES (?, ?, ?)").bind(
@@ -335,6 +334,26 @@ describe("leases", () => {
     expect(second.leaseToken).not.toBe(first.leaseToken)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${first.leaseToken}`)).status).toBe(409)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${second.leaseToken}`)).status).toBe(200)
+  })
+})
+
+describe("time left", () => {
+  it("shows the worker's estimate on the running job, and takes a worker that sends none", async () => {
+    const createBody = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
+    const created = (await (await alice("POST", "/api/episodes", { json: createBody })).json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const report = (extra: Record<string, unknown>) =>
+      asWorker("POST", `/api/worker/jobs/${created.id}/progress`, {
+        json: { workerId: "w1", leaseToken: job.leaseToken, stage: "synthesizing", done: 4, total: 9, title: null, author: null, language: null, voice: null, ...extra },
+      })
+    const jobOf = async () => ((await (await alice("GET", `/api/episodes/${created.id}`)).json()) as { job: unknown }).job
+
+    expect((await report({ remainingMs: 95_000 })).status).toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", stage: "synthesizing", done: 4, total: 9, remainingMs: 95_000 })
+    expect((await report({})).status, "an older worker").toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", remainingMs: null })
+    expect((await report({ remainingMs: -1 })).status).toBe(400)
   })
 })
 

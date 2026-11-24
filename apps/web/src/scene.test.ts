@@ -31,9 +31,19 @@ import {
   ScrollPickerItem,
   StoreSetting,
   StoreConnection,
+  UploadEpisode,
   WaitBeforeResetTypeAhead,
 } from "~/command"
-import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
+import {
+  baseModel,
+  connection,
+  harbourDays,
+  progressAt,
+  queuedArticle,
+  runningHarbourDays,
+  withEpisodes,
+  withPlayback,
+} from "~/fixture"
 import { Message } from "~/message"
 import { Playback, StoredProgress } from "~/model"
 import { apiToken } from "~/api"
@@ -83,8 +93,31 @@ describe("attach a file", () => {
       Mount.expectExact(OpenFilePickerOnKey),
       resolveAttachKeys,
       changeFiles(`#${FILE_INPUT_ID}`, [new File(["book"], "harbour-days.epub", { type: "application/epub+zip" })]),
-      expect(role("button", { name: "Remove file" })).toExist(),
+      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
       expect(role("button", { name: "Add" })).toBeEnabled(),
+    )
+  })
+
+  test("each file of a batch has its row; a refused or failed file says why, and a failed one has Retry", () => {
+    const epub = new File(["book"], "harbour-days.epub")
+    const png = new File(["png"], "cover.png")
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [])),
+      resolveAttachKeys,
+      changeFiles(`#${FILE_INPUT_ID}`, [epub, png]),
+      expect(linkOrText).toBeAbsent(),
+      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
+      expect(role("button", { name: "Remove cover.png" })).toExist(),
+      expect(role("alert")).toHaveText("Unsupported type"),
+      click(role("button", { name: "Add" })),
+      Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: { status: 413, message: "The file is too large" } })),
+      expect(role("button", { name: "Retry harbour-days.epub" })).toExist(),
+      expect(role("button", { name: "Add" })).toBeDisabled(),
+      click(role("button", { name: "Remove harbour-days.epub" })),
+      click(role("button", { name: "Remove cover.png" })),
+      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      expect(linkOrText).toExist(),
     )
   })
 })
@@ -256,6 +289,31 @@ describe("play and pause", () => {
       expect(role("button", { name: "Play Harbour Days" })).toExist(),
       click(role("button", { name: /^Play$/ })),
       Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+    )
+  })
+})
+
+describe("time left", () => {
+  const running = (remainingMs: number | null) => ({
+    ...runningHarbourDays,
+    job: { ...runningHarbourDays.job, remainingMs },
+  })
+
+  test("a running row shows the time left next to the stage once the worker has an estimate", () => {
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [running(130_000)])),
+      resolveAttachKeys,
+      expect(role("listitem")).toContainText("Narrating · 2 min left"),
+    )
+  })
+
+  test("without an estimate the row shows the count", () => {
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [running(null)])),
+      resolveAttachKeys,
+      expect(role("listitem")).toContainText("Narrating 3/6"),
     )
   })
 })

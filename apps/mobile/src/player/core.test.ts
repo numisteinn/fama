@@ -17,7 +17,7 @@ const running = {
   id: "e1",
   title: "Harbour Days",
   chapters: [chapters[0]!],
-  job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
+  job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x", remainingMs: null },
   progress: older,
 } as unknown as Episode
 const grown = { ...running, chapters } as Episode

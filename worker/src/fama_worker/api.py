@@ -8,7 +8,7 @@ from pathlib import Path
 
 import httpx
 
-from fama_worker.model import TextSource, UrlSource, VoiceRef
+from fama_worker.model import Cover, Document, TextSource, UrlSource, VoiceRef
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 RETRIES = 5
@@ -34,6 +34,8 @@ class ClaimedJob:
     lease_token: str  # every job route needs it
     source: UrlSource | TextSource | FileRef
     source_path: str | None
+    document_path: str | None  # set when the API has a stored Document: narrate from it, do not extract
+    cover_path: str | None
     voice: VoiceRef | None
     speed: float
     completed_chapters: frozenset[int]
@@ -55,6 +57,8 @@ class ClaimedJob:
             lease_token=data["leaseToken"],
             source=source,
             source_path=data["sourcePath"],
+            document_path=data["documentPath"],
+            cover_path=data["coverPath"],
             voice=VoiceRef.parse(data["voice"]) if data["voice"] else None,
             speed=float(data["speed"]),
             completed_chapters=frozenset(int(i) for i in data["completedChapters"]),
@@ -95,11 +99,27 @@ class Api:
             raise ApiError("File job has no sourcePath")
         return self._send("GET", job.source_path, params={"leaseToken": job.lease_token}).content
 
+    def document(self, job: ClaimedJob) -> Document:
+        """The stored Document, with the stored cover when the episode has one."""
+        if not job.document_path:
+            raise ApiError("Job has no documentPath")
+        lease = {"leaseToken": job.lease_token}
+        cover = None
+        if job.cover_path:
+            response = self._send("GET", job.cover_path, params=lease)
+            is_png = response.headers.get("content-type", "").startswith("image/png")
+            cover = Cover(response.content, "png" if is_png else "jpg")
+        return Document.from_json(self._send("GET", job.document_path, params=lease).json(), cover)
+
+    def put_document(self, job: ClaimedJob, document: Document) -> None:
+        self._send("PUT", f"/api/worker/jobs/{job.episode_id}/document", json=document.to_json(),
+                   params={"workerId": self.worker_id, "leaseToken": job.lease_token})
+
     def progress(self, job: ClaimedJob, stage: str, done: int, total: int, *, title: str | None,
-                 author: str | None, language: str | None, voice: str | None) -> None:
+                 author: str | None, language: str | None, voice: str | None, remaining_ms: int | None) -> None:
         self._send("POST", f"/api/worker/jobs/{job.episode_id}/progress", json={
             "workerId": self.worker_id, "leaseToken": job.lease_token, "stage": stage, "done": done, "total": total,
-            "title": title, "author": author, "language": language, "voice": voice,
+            "title": title, "author": author, "language": language, "voice": voice, "remainingMs": remaining_ms,
         })
 
     def _put(self, job: ClaimedJob, path: str, file: Path, content_type: str, params: dict) -> None:
