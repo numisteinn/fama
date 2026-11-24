@@ -298,7 +298,7 @@ const submitAdd: Step = (model) => {
     draft._tag === "Url" ? { _tag: "Url", url: draft.url } : { _tag: "Text", title: null, text: draft.text }
   return {
     model: modifyFields(model, { isAdding: () => true, maybeAddError: () => Option.none() }),
-    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed } })],
+    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed, review: false } })],
   }
 }
 

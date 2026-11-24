@@ -190,6 +190,8 @@ const jobStatus = (episode: Episode, h: HtmlBuilder<Message>): Html => {
       )
     case "Queued":
       return h.span([h.Class("shrink-0 animate-pulse text-[13px] text-muted-foreground")], ["Queued"])
+    case "Review":
+      return h.span([h.Class("shrink-0 text-[13px] text-muted-foreground")], ["Review"])
     case "Running": {
       const fraction = job.total > 0 ? Math.min(1, job.done / job.total) : 0
       const detail =

@@ -18,6 +18,7 @@ const statusOf: Record<string, number> = {
   NotStored: 404,
   TooLarge: 413,
   LeaseLost: 409,
+  NotInReview: 409,
   NotRetryable: 409,
 }
 
