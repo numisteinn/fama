@@ -55,7 +55,7 @@ Stable handles (accessible names):
 |---|---|
 | Header | button `Settings` |
 | Add bar | textbox `Link or text`, button `Attach file`, hidden `input[type=file]` (selector), button `Voice: <name>`, button `Voice speed: <rate>`, button `Add` (Enter in the textbox also submits), `role=alert` for errors, button `Remove file`. In an open menu, type-ahead highlights an item (`aria-activedescendant` on `role=menu`): keys within 750 ms make a prefix (`Ste` goes to `Steinn`), the same letter again goes to the next item that starts with it, a key with no match clears the prefix, and Space inside a prefix extends it (`The E` goes to `The End`) instead of selecting |
-| Library row | button `Play <title>` / `Pause <title>` (disabled until chapter 0 exists; on failure the reason is text inside this disabled button, not an alert and not in its name), status text `Queued`, `Reading`, `Narrating n/m`, `Encoding`, `Uploading`, duration when ready rounded to minutes (`1 min`), button `Retry` on failure (no title in its name: with two failed rows, scope the locator to the row), button `Delete <title>` (two clicks: it arms, then a `Delete` button confirms; it disarms after about 3 s) |
+| Library row | button `Play <title>` / `Pause <title>` (disabled until chapter 0 exists; on failure the reason is text inside this disabled button, not an alert and not in its name), status text `Queued`, `Reading`, `Narrating n/m` (or `Narrating · <time> left` once the worker has an estimate), `Encoding`, `Uploading`, duration when ready rounded to minutes (`1 min`), button `Retry` on failure (no title in its name: with two failed rows, scope the locator to the row), button `Delete <title>` (two clicks: it arms, then a `Delete` button confirms; it disarms after about 3 s) |
 | Player bar | landmark `contentinfo`; buttons `Back 15 seconds`, `Play`/`Pause`, `Forward 30 seconds`; group `Position` holding an unnamed `input[type=range]` (step 1000; `aria-valuenow` is the exact position in ms; the max is the duration rounded up to a whole second, and that last stop is the very end); the text right of the slider is the total length, not the time left; button `Playback speed: <rate>` (0.75× to 3×); button `Chapters` with items named `<n> <title>` (`1 Morning`, `2 Evening`; picking one also starts playback); link `Download` (href is the book file) |
 | Settings dialog | textbox `API token`, textbox `Server`, button `Save`, button `Copy feed URL` (its name is `Copied` for about 1.5 s), button `Close` |
 
@@ -116,13 +116,14 @@ fama-verify feed               # print the feed URL
 fama-verify down               # stop what this run started, keep evidence
 ```
 
-`scripts/make-fixtures.py` rewrites `fixtures/` (run `uv run --project worker python .claude/skills/verify-fama/scripts/make-fixtures.py`). The fixtures are short on purpose: each narrates in seconds.
+`scripts/make-fixtures.py` rewrites `fixtures/` (run `uv run --project worker python .claude/skills/verify-fama/scripts/make-fixtures.py`). The fixtures are short on purpose: each narrates in seconds, except `harbour-year.epub`.
 
 | Fixture | Expect |
 |---|---|
 | `article.html` | English, title `The Quiet Harbour`, voice `kokoro:af_heart`, 1 chapter, about 34 s |
 | `grein.html` | Icelandic, title `Höfnin hljóða`, voice `piper:is_IS-steinn-medium`, 1 chapter, about 30 s |
 | `harbour-days.epub` | title `Harbour Days`, author `Fama Fixtures`, chapters `Morning`, `Evening` |
+| `harbour-year.epub` | title `Harbour Year`, chapters `Spring`, `Summer`, `Autumn`, `Winter`, 62 chunks, about 80 s of work and 11 min of audio. Long on purpose: it shows the time left |
 | `harbour-notes.pdf` | title `Harbour Notes`, chapters `Part One`, `Part Two` |
 | `harbour.md` | title `Harbour Note`, 1 chapter |
 
