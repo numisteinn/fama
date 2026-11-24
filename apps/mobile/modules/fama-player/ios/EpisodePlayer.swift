@@ -239,10 +239,24 @@ final class EpisodePlayer: NSObject {
 
   // MARK: Observation
 
-  private func observePlayer() {
-    timeObserver = player.addPeriodicTimeObserver(forInterval: cmTime(0.5), queue: .main) { [weak self] _ in
+  /// How often the position reaches JS while time moves. The reader asks for more while it shows the text.
+  private var statusInterval = 0.5
+
+  func setStatusInterval(_ seconds: Double) {
+    guard seconds > 0, seconds != statusInterval else { return }
+    statusInterval = seconds
+    observeTime()
+  }
+
+  private func observeTime() {
+    if let timeObserver { player.removeTimeObserver(timeObserver) }
+    timeObserver = player.addPeriodicTimeObserver(forInterval: cmTime(statusInterval), queue: .main) { [weak self] _ in
       self?.emitStatus()
     }
+  }
+
+  private func observePlayer() {
+    observeTime()
     observations = [
       player.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
         DispatchQueue.main.async { self?.publish() }

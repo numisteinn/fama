@@ -9,6 +9,8 @@ type Downloads = {
   state(episode: Episode): DownloadState
   /** The local file of a chapter, or null when it is not on the device. */
   localUri(episodeId: string, index: number): string | null
+  /** The local timing file of a chapter, or null when it is not on the device. */
+  localTimingUri(episodeId: string, index: number): string | null
   download(episode: Episode): Promise<void>
   remove(episodeId: string): void
 }
@@ -19,6 +21,17 @@ const DownloadsContext = createContext<Downloads | null>(null)
 const episodeDir = (accountKey: string, id: string) => new Directory(Paths.document, "accounts", accountKey, "episodes", id)
 const chapterFile = (accountKey: string, id: string, index: number) =>
   new File(episodeDir(accountKey, id), `${String(index).padStart(3, "0")}.m4a`)
+const timingFile = (accountKey: string, id: string, index: number) =>
+  new File(episodeDir(accountKey, id), `${String(index).padStart(3, "0")}.json`)
+
+/** Downloads beside the target, then moves, so a cut download never looks complete. */
+async function fetchFile(url: string, dir: Directory, target: File) {
+  if (target.exists) return
+  const partial = new File(dir, `${target.name}.part`)
+  if (partial.exists) partial.delete()
+  await File.downloadFileAsync(url, partial)
+  partial.move(target)
+}
 
 export function DownloadsProvider({ children }: { children: ReactNode }) {
   const { api, account } = useSettings()
@@ -32,7 +45,9 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
       accountKey !== undefined &&
       episode.job._tag === "Ready" &&
       episode.chapters.length > 0 &&
-      episode.chapters.every((c) => chapterFile(accountKey, episode.id, c.index).exists)
+      episode.chapters.every(
+        (c) => chapterFile(accountKey, episode.id, c.index).exists && (c.timingUrl === null || timingFile(accountKey, episode.id, c.index).exists),
+      )
     const setProgress = (id: string, progress: { done: number; total: number } | null) =>
       setActive((map) => {
         const next = new Map(map)
@@ -51,6 +66,11 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         const file = chapterFile(accountKey, episodeId, index)
         return file.exists ? file.uri : null
       },
+      localTimingUri(episodeId, index) {
+        if (accountKey === undefined) return null
+        const file = timingFile(accountKey, episodeId, index)
+        return file.exists ? file.uri : null
+      },
       async download(episode) {
         if (!api || accountKey === undefined || active.has(episode.id)) return
         const dir = episodeDir(accountKey, episode.id)
@@ -59,14 +79,9 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         setProgress(episode.id, { done: 0, total })
         try {
           for (const [done, chapter] of episode.chapters.entries()) {
-            const file = chapterFile(accountKey, episode.id, chapter.index)
-            if (!file.exists) {
-              // Download beside the target, then move, so a cut download never looks complete.
-              const partial = new File(dir, `${chapter.index}.part`)
-              if (partial.exists) partial.delete()
-              await File.downloadFileAsync(api.mediaUrl(chapter.url), partial)
-              partial.move(file)
-            }
+            // The text too, so the reader works offline.
+            if (chapter.timingUrl !== null) await fetchFile(api.mediaUrl(chapter.timingUrl), dir, timingFile(accountKey, episode.id, chapter.index))
+            await fetchFile(api.mediaUrl(chapter.url), dir, chapterFile(accountKey, episode.id, chapter.index))
             setProgress(episode.id, { done: done + 1, total })
           }
         } finally {
