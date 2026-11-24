@@ -1,7 +1,7 @@
 import type { Document } from "@fama/contracts"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, StyleSheet, Text, TextInput, View } from "react-native"
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, ScrollView, StyleSheet, Text, TextInput, View } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Button, Icon, Tap } from "../components/ui"
 import type { Api } from "../lib/api"
@@ -34,10 +34,10 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
     return () => { current = false }
   }, [api, id, attempt])
   const header = useMemo(() => review && repeatedHeader(review.edited), [review?.edited])
-  if (!review) return <View style={styles.content}>{error ? <>
+  if (!review) return <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>{error ? <>
     <Text accessibilityRole="alert" style={styles.text}>{error}</Text>
     <Button title="Try again" onPress={() => setAttempt(attempt + 1)} />
-  </> : <ActivityIndicator />}</View>
+  </> : <ActivityIndicator />}</ScrollView>
 
   const busy = review.operation !== "idle"
   const count = review.edited.chapters.length - review.excluded.size
@@ -73,6 +73,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
   const chapter = editor === null ? null : review.edited.chapters[editor]
   return <>
     <FlatList
+      contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={styles.content}
       data={review.edited.chapters}
       keyExtractor={(_, i) => String(i)}

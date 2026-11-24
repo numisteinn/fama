@@ -13,7 +13,7 @@ export default function LibraryStack() {
         contentStyle: { backgroundColor: colors.background },
       }}
     >
-      <Stack.Screen name="review" options={{ title: "Review", headerTransparent: false, headerLargeTitle: false }} />
+      <Stack.Screen name="review" options={{ title: "Review" }} />
       <Stack.Screen name="index" options={{ title: "Library" }} />
     </Stack>
   )
