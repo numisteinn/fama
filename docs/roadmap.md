@@ -4,7 +4,7 @@ Features we plan to add, and how to build many of them at the same time. Most co
 
 ## The shape of the work
 
-Today the worker extracts and narrates in one step, and the Document lives only inside the worker. Three of the four main features need the Document outside the worker, and a stop between extraction and narration. That is one foundation, not three features that each build it.
+The worker stores the Document with the API after extraction (unit `F`, done). Three of the four main features need that stored Document, and a stop between extraction and narration. That is one foundation, not three features that each build it.
 
 | Feature | Needs the stored Document | Needs the stop before narration |
 |---|---|---|
@@ -38,21 +38,6 @@ Five units can start now: `F`, `R1`, `E`, `M`, `X`. After `F` and `R1` land, fiv
 4. **The shapes in this file are the seams.** A unit that must change a shape another unit uses changes this file in the same PR, and says so in the PR title.
 5. **Each unit owns one migration file.** Numbers are reserved in "Files". Do not edit another unit's migration.
 6. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR also removes the unit from this file and updates `CONTEXT.md` and `docs/api.md` for its own terms and routes.
-
-## Foundation
-
-### F. Stored Document
-
-The worker uploads the Document after extraction. The API stores it. From then on the worker narrates from the stored Document and does not extract again.
-
-- Why: Review edits it, Voice sample reads from it, Narrate again compares against it. A retry also gets cheaper, because it does not download and extract again.
-- Shape: `Document { title, author, language, chapters: [{ title, text }] }`. Stored at `users/<userId>/episodes/<episodeId>/document.json`.
-- Rule: audio chapter `i` narrates Document chapter `i`. No unit may break this.
-- Worker routes: `PUT /api/worker/jobs/:id/document`. `ClaimedJob` gains `documentPath`, set when a Document exists. The worker then reads it and skips extraction.
-- Client route: `GET /api/episodes/:id/document`.
-- In the worker, `process` splits into two functions: extract (source to stored Document) and narrate (stored Document to audio).
-- `CONTEXT.md` changes: the Document no longer "lives only inside the worker".
-- Proof: fail a job after extraction, retry it, and the worker log shows no second extraction. The episode audio is the same as before.
 
 ## Lanes
 
@@ -141,7 +126,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 | Unit | Its own files | Migration |
 |---|---|---|
-| F | `contracts/src/document.ts`, `apps/api/src/routes/document.ts`, `worker/.../work.py` (the split of `process`) | `0002_document.sql` |
 | R1 | `contracts/src/timing.ts`, `apps/api/src/routes/timing.ts`, `worker/.../pipeline.py`, `worker/.../chunk.py` | `0003_timing.sql` |
 | R2 | `apps/web/src/reader/` | |
 | R3 | `apps/mobile/src/reader/` | |
@@ -176,6 +160,7 @@ Each has a default. A unit follows the default unless the owner says no.
 ## Already in Fama
 
 - M4B book file with chapters, title, author and cover.
+- The stored Document (unit `F`). The worker uploads the Document after extraction, and each later attempt narrates from the stored one. The shape and the routes are in `docs/api.md` ("Document"). The rule that no unit may break: audio chapter `i` narrates Document chapter `i`. A new route file builds on `apps/api/src/routes/kit.ts`, and its tests on `apps/api/src/test-app.ts`.
 - Chapter 1 plays while the worker narrates the other chapters.
 - After a stop, a job continues and keeps its finished chapters.
 - Each job keeps its own voice and narration speed.
