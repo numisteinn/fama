@@ -12,6 +12,7 @@ import {
 } from "@fama/contracts"
 import { Schema } from "effect"
 import { File } from "expo-file-system"
+import { submitLink } from "./fetchPage"
 
 export type Connection = { readonly serverUrl: string; readonly token: string }
 
@@ -84,20 +85,32 @@ export function createApi(connection: Connection) {
     body: JSON.stringify(body),
   })
 
+  const upload = (form: FormData, voice: VoiceRef | null, speed: number): Promise<Episode> => {
+    if (voice !== null) form.append("voice", voice)
+    form.append("speed", String(speed))
+    return json(Episode, "/api/episodes/upload", { method: "POST", body: form })
+  }
+
   return {
     mediaUrl: (path: string) => `${base}${path}`,
     me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
-    createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> =>
-      json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review: false }))),
+    createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> => {
+      const create = () => json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review: false })))
+      if (source._tag !== "Url") return create()
+      return submitLink(source.url, create, ({ url, part }) => {
+        const form = new FormData()
+        form.append("url", url)
+        form.append("file", part as never)
+        return upload(form, voice, speed)
+      })
+    },
     uploadEpisode: (file: PickedFile, voice: VoiceRef | null, speed: number): Promise<Episode> => {
       const form = new FormData()
       // Expo's fetch sends a file part that has `bytes()`. It refuses React Native's `{ uri }` part.
       const part = { name: file.name, type: file.mimeType ?? "application/octet-stream", bytes: () => new File(file.uri).bytes() }
       form.append("file", part as never)
-      if (voice !== null) form.append("voice", voice)
-      form.append("speed", String(speed))
-      return json(Episode, "/api/episodes/upload", { method: "POST", body: form })
+      return upload(form, voice, speed)
     },
     deleteEpisode: async (id: string): Promise<void> => {
       await send(`/api/episodes/${encodeURIComponent(id)}`, { method: "DELETE" })
