@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect"
 import { HttpRouter, HttpServerResponse } from "effect/http"
 import { feedUser } from "../auth.ts"
 import { EpisodeRepo } from "../episode-repo.ts"
-import { keys, MediaStore } from "../media-store.ts"
+import { keys, mediaKey, MediaStore } from "../media-store.ts"
 import { mediaResponse } from "../media.ts"
 import { hasTranscript, renderTranscript } from "../transcript.ts"
 import { handle, NotStored, webRequest } from "./kit.ts"
@@ -15,15 +15,9 @@ const TranscriptParams = Schema.Struct({ id: EpisodeId })
 
 const decodeTiming = Schema.decodeUnknownEffect(Schema.fromJsonString(Timing))
 
-/**
- * The stored transcript of the Ready that finished at `finishedAt`. A later Ready (the chapters were narrated again)
- * has a new key, so a stored transcript is never stale.
- */
-const storedKey = (userId: UserId, episodeId: string, finishedAt: string) =>
-  `${keys.transcript(userId, episodeId).replace(/\.vtt$/, "")}/${Date.parse(finishedAt)}.vtt`
-
-const readTiming = Effect.fn("transcript.readTiming")(function* (userId: UserId, episodeId: string, index: number) {
-  const object = yield* (yield* MediaStore).get(keys.timing(userId, episodeId, index), null)
+const readTiming = Effect.fn("transcript.readTiming")(function* (userId: UserId, url: string | null, index: number) {
+  const key = url === null ? null : mediaKey(userId, url.split("/").slice(3).join("/"))
+  const object = key === null ? null : yield* (yield* MediaStore).get(key, null)
   if (object === null) return yield* new NotStored({ message: `The timing file of chapter ${index} is missing` })
   const text = yield* Effect.promise(() => object.text())
   // The API checked the file when the worker uploaded it, so a file that does not decode is a bug.
@@ -34,18 +28,20 @@ const transcript = handle(
   Effect.gen(function* () {
     const { userId } = yield* feedUser
     const { id } = yield* HttpRouter.schemaPathParams(TranscriptParams)
-    const episode = yield* (yield* EpisodeRepo).get(userId, id)
+    const repo = yield* EpisodeRepo
+    const episode = yield* repo.get(userId, id)
     const timed = episode.chapters.map((chapter) => ({ hasTiming: chapter.timingUrl !== null }))
     if (episode.job._tag !== "Ready" || !hasTranscript(timed)) {
       return yield* new NotStored({ message: "The episode has no transcript" })
     }
-    const key = storedKey(userId, id, episode.job.finishedAt)
+    const { finishedAt } = episode.job
+    const key = keys.transcriptRevision(userId, id, finishedAt)
     const store = yield* MediaStore
     if ((yield* store.head(key)) === null) {
       const chapters = yield* Effect.forEach(
         episode.chapters,
         (chapter) =>
-          Effect.map(readTiming(userId, id, chapter.index), (timing) => ({
+          Effect.map(readTiming(userId, chapter.timingUrl, chapter.index), (timing) => ({
             durationMs: chapter.durationMs,
             segments: timing.segments,
           })),
@@ -53,8 +49,16 @@ const transcript = handle(
         { concurrency: 6 },
       )
       yield* store.put(key, new Blob([renderTranscript(chapters)]), "text/vtt; charset=utf-8")
+      // An edit can queue this episode while the transcript is being built.
+      const current = yield* repo.get(userId, id).pipe(Effect.catchTag("EpisodeNotFound", () => Effect.succeed(null)))
+      if (current?.job._tag !== "Ready" || current.job.finishedAt !== finishedAt) {
+        yield* store.deleteTranscript(userId, id, finishedAt)
+        return yield* new NotStored({ message: "The episode has no transcript" })
+      }
     }
-    return HttpServerResponse.raw(yield* mediaResponse(yield* webRequest, key))
+    const response = yield* mediaResponse(yield* webRequest, key)
+    response.headers.set("cache-control", "private, no-cache")
+    return HttpServerResponse.raw(response)
   }),
 )
 

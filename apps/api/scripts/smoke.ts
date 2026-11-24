@@ -60,6 +60,7 @@ const tone = (name: string, frequency: number, format: string) => {
 }
 const chapter0 = tone("0.m4a", 440, "mp4")
 const chapter1 = tone("1.m4a", 660, "mp4")
+const inputHash = "a".repeat(64)
 const book = tone("book.m4b", 550, "ipod")
 const created: Array<string> = []
 
@@ -70,7 +71,7 @@ try {
 
   check((await call("GET", "/api/episodes", { headers: { authorization: "Bearer wrong" } })).status === 401, "wrong API token -> 401")
   const me = await expectStatus(await call("GET", "/api/me"), 200, "GET /api/me")
-  check(me.userId === "dev-user" && me.apiVersion === 1, "me is the dev user", me)
+  check(me.userId === "dev-user" && me.apiVersion === 2, "me is the dev user", me)
   check((await send(feedToken, "GET", "/api/episodes")).status === 401, "feed token on /api/* -> 401")
   check((await call("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [] } })).status === 401, "client token on /api/worker/* -> 401")
   check((await work("GET", "/api/episodes")).status === 401, "worker token on client routes -> 401")
@@ -100,7 +101,7 @@ try {
 
   // Worker A claims both jobs, oldest first.
   const claim1 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #1")
-  check(claim1.work.episodeId === text.id && claim1.work.sourcePath === null && claim1.work.completedChapters.length === 0 && claim1.work.leaseToken, "claim #1 returns the Text job with a lease", claim1)
+  check(claim1.work.episodeId === text.id && claim1.work.sourcePath === null && claim1.work.chapters.length === 0 && claim1.work.leaseToken, "claim #1 returns the Text job with a lease", claim1)
   const claim2 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #2")
   check(claim2.work.episodeId === file.id && claim2.work.sourcePath === `/api/worker/jobs/${file.id}/source`, "claim #2 returns the File job with sourcePath", claim2)
   const leaseText = encodeURIComponent(claim1.work.leaseToken)
@@ -120,7 +121,7 @@ try {
   })
   await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerB, "wrong", 1) }), 409, "progress with a wrong lease")
   await expectStatus(
-    await work("PUT", `/api/worker/jobs/${text.id}/chapters/0?workerId=${workerB}&leaseToken=${encodeURIComponent(leaseFile)}&title=x&durationMs=1`, { body: chapter0, headers: { "content-type": "audio/mp4" } }),
+    await work("PUT", `/api/worker/jobs/${text.id}/chapters/0?workerId=${workerB}&leaseToken=${encodeURIComponent(leaseFile)}&title=x&durationMs=1&inputHash=${inputHash}`, { body: chapter0, headers: { "content-type": "audio/mp4" } }),
     409,
     "chapter upload with another job's lease",
   )
@@ -130,7 +131,7 @@ try {
   const chapters = [chapter0, chapter1]
   for (const [index, bytes] of chapters.entries()) {
     await expectStatus(
-      await work("PUT", `/api/worker/jobs/${text.id}/chapters/${index}?workerId=${workerA}&leaseToken=${leaseText}&title=${encodeURIComponent(`Part ${index + 1} & more`)}&durationMs=1000`, {
+      await work("PUT", `/api/worker/jobs/${text.id}/chapters/${index}?workerId=${workerA}&leaseToken=${leaseText}&title=${encodeURIComponent(`Part ${index + 1} & more`)}&durationMs=1000&inputHash=${inputHash}`, {
         body: bytes,
         headers: { "content-type": "audio/mp4" },
       }),
@@ -161,8 +162,8 @@ try {
   const ready = list.episodes.find((e: any) => e.id === text.id)
   check(
     ready.job._tag === "Ready" && ready.durationMs === 2000 && ready.chapters.length === 2 &&
-      ready.chapters[1].title === "Part 2 & more" && ready.chapters[1].url === `/media/${feedToken}/episodes/${text.id}/chapters/001.m4a` &&
-      ready.bookUrl === `/media/${feedToken}/episodes/${text.id}/book.m4b`,
+      ready.chapters[1].title === "Part 2 & more" && ready.chapters[1].url.startsWith(`/media/${feedToken}/episodes/${text.id}/chapters/`) && ready.chapters[1].url.endsWith("/001.m4a") &&
+      ready.bookUrl.startsWith(`/media/${feedToken}/episodes/${text.id}/books/`) && ready.bookUrl.endsWith("/book.m4b"),
     "Ready episode has chapters and bookUrl",
     ready,
   )
@@ -179,7 +180,7 @@ try {
   const items = xml.match(/<item>/g)?.length ?? 0
   check(items === readyCount, `feed has one item per ready episode (${items})`, { items, readyCount })
   check(
-    xml.includes(`<enclosure url="${base}/media/${feedToken}/episodes/${text.id}/book.m4b" length="${book.length}" type="audio/x-m4a"/>`) &&
+    xml.includes(`<enclosure url="${base}${ready.bookUrl}" length="${book.length}" type="audio/x-m4a"/>`) &&
       xml.includes("<itunes:duration>2</itunes:duration>") &&
       xml.includes(`<guid isPermaLink="false">${text.id}</guid>`),
     "feed item has absolute enclosure, length, duration and guid",

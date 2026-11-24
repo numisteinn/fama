@@ -9,18 +9,24 @@ export class StorageError extends Schema.TaggedError<StorageError>()("StorageErr
 /** Every object of a user lives under this prefix. */
 const userPrefix = (userId: string) => `users/${userId}/`
 
+const chaptersPrefix = (userId: string, episodeId: string, revision: string | null) =>
+  `${userPrefix(userId)}episodes/${episodeId}/chapters/${revision === null ? "" : revision + "/"}`
+
 export const keys = {
   upload: (userId: string, episodeId: string, fileName: string) =>
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
-  chapter: (userId: string, episodeId: string, index: number) =>
-    `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
+  chapter: (userId: string, episodeId: string, index: number, revision: string | null = null) =>
+    `${chaptersPrefix(userId, episodeId, revision)}${String(index).padStart(3, "0")}.m4a`,
   sample: (userId: string, episodeId: string, voice: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/samples/${voice}.m4a`,
-  timing: (userId: string, episodeId: string, index: number) =>
-    `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.json`,
+  timing: (userId: string, episodeId: string, index: number, revision: string | null = null) =>
+    `${chaptersPrefix(userId, episodeId, revision)}${String(index).padStart(3, "0")}.json`,
   /** The media path of the transcript. The object the API stores for one Ready is under `transcript/`. */
   transcript: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/transcript.vtt`,
-  book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
+  transcriptRevision: (userId: string, episodeId: string, finishedAt: string) =>
+    `${userPrefix(userId)}episodes/${episodeId}/transcript/${Date.parse(finishedAt)}.vtt`,
+  book: (userId: string, episodeId: string, revision: string | null = null) =>
+    `${userPrefix(userId)}episodes/${episodeId}/${revision === null ? "" : "books/" + revision + "/"}book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
   documentRevision: (userId: string, episodeId: string, digest: string) =>
@@ -59,10 +65,12 @@ export interface Interface {
     body: ReadableStream | Blob,
     contentType: string,
   ) => Effect.Effect<{ readonly size: number }, StorageError>
+  readonly putTiming: (key: string, body: Blob) => Effect.Effect<void, StorageError>
   readonly putSample: (key: string, body: ReadableStream) => Effect.Effect<void, StorageError>
   readonly deleteSample: (key: string) => Effect.Effect<void, StorageError>
   readonly deleteSamples: (userId: string, episodeId: string) => Effect.Effect<void, StorageError>
   readonly get: (key: string, range: ByteRange | null) => Effect.Effect<R2ObjectBody | null, StorageError>
+  readonly deleteTranscript: (userId: string, episodeId: string, finishedAt: string) => Effect.Effect<void, StorageError>
   readonly head: (key: string) => Effect.Effect<R2Object | null, StorageError>
   /** Removes every object of one episode of one user: its media and its upload. */
   readonly deleteEpisode: (userId: string, episodeId: string) => Effect.Effect<void, StorageError>
@@ -111,6 +119,12 @@ export const layer = Layer.effect(
       yield* deletePrefix(`${userPrefix(userId)}uploads/${episodeId}/`)
     })
 
+    const putTiming = (key: string, body: Blob) =>
+      tryR2("putTiming", () => bucket.put(key, body, {
+        onlyIf: { etagDoesNotMatch: "*" },
+        httpMetadata: { contentType: "application/json" },
+      })).pipe(Effect.asVoid)
+
     const putSample = (key: string, body: ReadableStream) =>
       tryR2("putSample", () => bucket.put(key, body, {
         onlyIf: { etagDoesNotMatch: "*" },
@@ -121,6 +135,9 @@ export const layer = Layer.effect(
     const deleteSamples = (userId: string, episodeId: string) =>
       deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/samples/`)
 
-    return MediaStore.of({ put, putSample, get, head, deleteEpisode, deleteSample, deleteSamples })
+    const deleteTranscript = (userId: string, episodeId: string, finishedAt: string) =>
+      tryR2("deleteTranscript", () => bucket.delete(keys.transcriptRevision(userId, episodeId, finishedAt)))
+
+    return MediaStore.of({ put, putTiming, putSample, get, head, deleteEpisode, deleteSample, deleteSamples, deleteTranscript })
   }),
 )

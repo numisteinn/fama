@@ -19,6 +19,7 @@ const users = {
   alice: { id: "user-alice", client: "alice-client-token", feed: "alice-feed-token" },
   bob: { id: "user-bob", client: "bob-client-token", feed: "bob-feed-token" },
 }
+const inputHash = "a".repeat(64)
 const voice = { id: "kokoro:af_heart", engine: "kokoro", name: "Heart", language: "en-US", gender: "female" }
 
 let proxy: Awaited<ReturnType<typeof getPlatformProxy<Env>>>
@@ -156,7 +157,7 @@ const readyEpisode = async () => {
   const lease = job.leaseToken
   const put = (path: string, body: string) =>
     asWorker("PUT", path, { body: bytes(body), headers: { "content-type": "audio/mp4", "content-length": String(body.length) } })
-  expect((await put(`/api/worker/jobs/${episode.id}/chapters/0?workerId=w1&leaseToken=${lease}&title=One&durationMs=1000`, "chapter")).status).toBe(204)
+  expect((await put(`/api/worker/jobs/${episode.id}/chapters/0?workerId=w1&leaseToken=${lease}&title=One&durationMs=1000&inputHash=${inputHash}`, "chapter")).status).toBe(204)
   expect((await put(`/api/worker/jobs/${episode.id}/book?workerId=w1&leaseToken=${lease}`, "book")).status).toBe(204)
   const complete = await asWorker("POST", `/api/worker/jobs/${episode.id}/complete`, {
     json: { workerId: "w1", leaseToken: lease, durationMs: 1000 },
@@ -174,10 +175,10 @@ describe("ownership", () => {
   it("stores media under the owner's prefix and serves it by the owner's feed token", async () => {
     const episode = await readyEpisode()
     expect(await allKeys()).toEqual([
-      `users/${users.alice.id}/episodes/${episode.id}/book.m4b`,
-      `users/${users.alice.id}/episodes/${episode.id}/chapters/000.m4a`,
+      episode.bookUrl.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`),
+      episode.chapters[0]!.url.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`),
     ])
-    expect(episode.bookUrl).toBe(`/media/${users.alice.feed}/episodes/${episode.id}/book.m4b`)
+    expect(episode.bookUrl).toMatch(new RegExp(`^/media/${users.alice.feed}/episodes/${episode.id}/books/[a-f0-9]{64}/book\\.m4b$`))
     const media = await call(null, "GET", episode.bookUrl)
     expect(media.status).toBe(200)
     expect(await media.text()).toBe("book")
@@ -211,7 +212,7 @@ describe("ownership", () => {
     const bobFeed = await (await call(null, "GET", `/feed/${users.bob.feed}/rss.xml`)).text()
     expect(bobFeed).not.toContain("<item>")
     const aliceFeed = await (await call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).text()
-    expect(aliceFeed).toContain(`/media/${users.alice.feed}/episodes/${episode.id}/book.m4b`)
+    expect(aliceFeed).toContain(episode.bookUrl)
   })
 
   it("media paths outside episodes/ are refused", async () => {
@@ -234,7 +235,7 @@ describe("ownership", () => {
 
 describe("auth boundaries", () => {
   it("GET /api/me names the token's user", async () => {
-    expect(await (await bob("GET", "/api/me")).json()).toEqual({ userId: users.bob.id, apiVersion: 1 })
+    expect(await (await bob("GET", "/api/me")).json()).toEqual({ userId: users.bob.id, apiVersion: 2 })
   })
 
   it("a feed token cannot call /api/*", async () => {
@@ -279,7 +280,7 @@ describe("auth boundaries", () => {
     expect((await call(null, "GET", episode.bookUrl)).status).toBe(401)
     expect((await call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).status).toBe(401)
     const fresh = (await (await alice("GET", `/api/episodes/${episode.id}`)).json()) as { bookUrl: string }
-    expect(fresh.bookUrl).toBe(`/media/${token}/episodes/${episode.id}/book.m4b`)
+    expect(fresh.bookUrl).toBe(episode.bookUrl.replace(users.alice.feed, token))
     expect((await call(null, "GET", fresh.bookUrl)).status).toBe(200)
   })
 })
@@ -306,7 +307,7 @@ describe("leases", () => {
       progress: await asWorker("POST", `/api/worker/jobs/${id}/progress`, {
         json: { workerId: "w1", leaseToken: wrong, stage: "synthesizing", done: 0, total: 1, title: null, author: null, language: null, voice: null },
       }),
-      chapter: await put(`/api/worker/jobs/${id}/chapters/0?workerId=w1&leaseToken=${wrong}&title=x&durationMs=1`),
+      chapter: await put(`/api/worker/jobs/${id}/chapters/0?workerId=w1&leaseToken=${wrong}&title=x&durationMs=1&inputHash=${inputHash}`),
       book: await put(`/api/worker/jobs/${id}/book?workerId=w1&leaseToken=${wrong}`),
       complete: await asWorker("POST", `/api/worker/jobs/${id}/complete`, {
         json: { workerId: "w1", leaseToken: wrong, durationMs: 1 },
@@ -627,9 +628,9 @@ describe("timing files", () => {
     return { id, lease: job.leaseToken }
   }
   const putTiming = (id: string, lease: string, json: unknown, token: string | null = WORKER_TOKEN) =>
-    call(token, "PUT", `/api/worker/jobs/${id}/chapters/0/timing?workerId=w1&leaseToken=${lease}`, { json })
+    call(token, "PUT", `/api/worker/jobs/${id}/chapters/0/timing?workerId=w1&leaseToken=${lease}&inputHash=${inputHash}`, { json })
   const putChapter = (id: string, lease: string) =>
-    asWorker("PUT", `/api/worker/jobs/${id}/chapters/0?workerId=w1&leaseToken=${lease}&title=One&durationMs=3200`, {
+    asWorker("PUT", `/api/worker/jobs/${id}/chapters/0?workerId=w1&leaseToken=${lease}&title=One&durationMs=3200&inputHash=${inputHash}`, {
       body: bytes("chapter"),
       headers: { "content-type": "audio/mp4", "content-length": "7" },
     })
@@ -642,7 +643,7 @@ describe("timing files", () => {
     expect(await chaptersOf(id), "no chapter before its audio").toEqual([])
     expect((await putChapter(id, lease)).status).toBe(204)
     const [chapter] = await chaptersOf(id)
-    expect(chapter!.timingUrl).toBe(`/media/${users.alice.feed}/episodes/${id}/chapters/000.json`)
+    expect(chapter!.timingUrl).toMatch(new RegExp(`^/media/${users.alice.feed}/episodes/${id}/chapters/[a-f0-9]{64}-${inputHash}/000\\.json$`))
     const listed = (await (await alice("GET", "/api/episodes")).json()) as {
       episodes: Array<{ chapters: Array<{ timingUrl: string | null }> }>
     }
@@ -651,7 +652,7 @@ describe("timing files", () => {
     expect(served.status).toBe(200)
     expect(served.headers.get("content-type")).toBe("application/json")
     expect(await served.json()).toEqual(timing)
-    expect(await allKeys()).toContain(`users/${users.alice.id}/episodes/${id}/chapters/000.json`)
+    expect(await allKeys()).toContain(chapter!.timingUrl!.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`))
   })
 
   it("a chapter without a timing file has timingUrl null", async () => {
@@ -659,14 +660,14 @@ describe("timing files", () => {
     expect(await chaptersOf(episode.id)).toMatchObject([{ timingUrl: null }])
   })
 
-  it("an upload again replaces the file", async () => {
+  it("a repeated timing upload leaves the published file in place", async () => {
     const { id, lease } = await claimed()
     await putTiming(id, lease, timing)
     await putChapter(id, lease)
     const shorter = { segments: [timing.segments[0]] }
     expect((await putTiming(id, lease, shorter)).status).toBe(204)
     const [chapter] = await chaptersOf(id)
-    expect(await (await call(null, "GET", chapter!.timingUrl!)).json()).toEqual(shorter)
+    expect(await (await call(null, "GET", chapter!.timingUrl!)).json()).toEqual(timing)
   })
 
   it("refuses a wrong lease, a client token, and a body that is not a timing file", async () => {
@@ -680,7 +681,7 @@ describe("timing files", () => {
     }
     await putChapter(id, lease)
     expect(await chaptersOf(id)).toMatchObject([{ timingUrl: null }])
-    expect(await allKeys()).toEqual([`users/${users.alice.id}/episodes/${id}/chapters/000.m4a`])
+    expect(await allKeys()).toEqual([`users/${users.alice.id}/episodes/${id}/chapters/${await sha256Hex(lease)}-${inputHash}/000.m4a`])
   })
 
   it("deleting the episode deletes its timing files", async () => {

@@ -1,11 +1,13 @@
 import { Effect, Schema } from "effect"
 import { EpisodeId, LeaseToken, UserId, VoiceRef, WorkerId } from "./ids.ts"
 import { ClaimedSample } from "./sample.ts"
+import { InputHash, NarratedChapter } from "./stale.ts"
 
 export * from "./connect.ts"
 export * from "./ids.ts"
 export * from "./review.ts"
 export * from "./sample.ts"
+export * from "./stale.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
 
@@ -184,7 +186,7 @@ export const VoiceList = Schema.Struct({ voices: Schema.Array(Voice) })
 export const FeedInfo = Schema.Struct({ url: Schema.String })
 
 /** Bumped on a breaking change to this contract. */
-export const API_VERSION = 1
+export const API_VERSION = 2
 
 /** `GET /api/me`: who the client token belongs to. Clients key caches and downloads by server and `userId`. */
 export const Me = Schema.Struct({ userId: UserId, apiVersion: Schema.Number })
@@ -210,8 +212,8 @@ export const ClaimedJob = Schema.Struct({
   coverPath: Schema.NullOr(Schema.String),
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
-  /** Chapter indexes already uploaded by an earlier attempt. The worker skips them. */
-  completedChapters: Schema.Array(Schema.Number),
+  /** Chapters with known inputs. The worker reads their audio when its inputs match. */
+  chapters: Schema.Array(NarratedChapter),
 })
 export interface ClaimedJob extends Schema.Schema.Type<typeof ClaimedJob> {}
 
@@ -241,6 +243,7 @@ export const ChapterUploadQuery = Schema.Struct({
   workerId: WorkerId,
   leaseToken: LeaseToken,
   title: Schema.String,
+  inputHash: InputHash,
   durationMs: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
 
