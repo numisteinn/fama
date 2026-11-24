@@ -13,17 +13,18 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 | Voice sample | yes | yes (the worker must be free) |
 | Narrate again | yes | no |
 
-The foundation, Read-along, and the API parts of Review and Voice sample are built. What is left is the screens for Review and Voice sample, and Narrate again.
+The foundation, Read-along, and the API parts of Review and Voice sample are built. What is left is the screens for Review and Voice sample, Narrate again, and links that the phone fetches.
 
 ```
 now ──┬─ V2 Review web ─────── S2 Sample web
       ├─ V3 Review iPhone ──── S3 Sample iPhone
       ├─ N1 Narrate again core ──┬─ N2 web
       │                          └─ N3 iPhone
+      ├─ L1 Phone fetches the link
       └─ X  Extraction (OCR, LLM text fix)
 ```
 
-Four units can start now: `V2`, `V3`, `N1`, `X`.
+Five units can start now: `V2`, `V3`, `N1`, `L1`, `X`.
 
 ## Rules for parallel work
 
@@ -91,6 +92,15 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 Units: **N1** core (it extends the Review route and the claim), then **N2** web and **N3** iPhone.
 
 
+### L. Links the phone fetches
+
+Some sites block the cloud worker. mbl.is answers Modal's data-center address with a Cloudflare challenge (`403`, `cf-mitigated: challenge`) for any user agent, and the same page loads from a home address (measured 2026-11-24).
+
+First principles: the device that has the link is on a network the site accepts, and it may be logged in. So the device fetches the page, and the worker reads what it got.
+
+- **L1.** The iPhone app (the Add screen and the share sheet) downloads the page of a link and sends it with the link. `POST /api/episodes/upload` takes an optional `url` form field. With it, the episode's source stays `{_tag: "Url", url}`, the stored bytes are the page, and `ClaimedJob.sourcePath` is set for that `Url` job. The worker then reads the bytes and runs the web extractor with the link as its base URL, and does not fetch. When the phone cannot fetch, it sends the link alone, as today.
+- The web app cannot do this: a browser may not read a page from another site. Links added on the web still go through the worker.
+
 ### X. Extraction
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
@@ -108,9 +118,14 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
+| L1 | `apps/mobile/src/lib/fetchPage.ts`, `apps/api/src/routes/upload.ts` if the upload route moves out of `http.ts` | |
 | X | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 Known shared points, and who goes first:
+
+- `ClaimedJob` in the contract and `worker/.../api.py`: `N1` changes `completedChapters`, `L1` sets `sourcePath` for a `Url` job. Different fields. The second one to merge rebases.
+- `worker/.../work.py`: `N1` changes the skip of finished chapters, `L1` changes how the source is read (`_source`).
+- The iPhone Add screen: `V3` adds the Review switch, `L1` adds the page fetch. Each puts its logic in its own file and adds only connecting lines there.
 
 
 ## Open choices
