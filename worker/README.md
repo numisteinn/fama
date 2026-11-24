@@ -48,7 +48,7 @@ Settings:
 
 `extract` (Source to Document) → `chunk` (one Segment for each sentence, never across a paragraph) → `normalize` each Segment (numbers, abbreviations, URLs, footnotes) → `synthesize` (one call for each Segment, through the chunk cache) → `encode` (one `.m4a` and one timing file per chapter) → `assemble` (one `.m4b`, no re-encode).
 
-- A Segment has two texts: the Document text, which goes to the timing file, and the normalized text, which the engine reads. A sentence under 40 characters joins the next one. `BAKEOFF.md` has the cost of one call for each sentence.
+- A Segment has two texts: the Document text, which goes to the timing file, and the normalized text, which the engine reads. A sentence under 20 characters joins the next one. `BAKEOFF.md` has the cost of one call for each sentence.
 - The chunk cache key is `sha256(text, engine, voice, model version, speed)`, with the text the engine reads. A re-run or a retried job only synthesizes Segments it has not made before.
 - `engines/__init__.py` holds the two tables: `ENGINES` (name to engine) and `DEFAULT_VOICE` (language to voice). To add an engine, write a class with `name`, `model_version`, `max_chars`, `voices()` and `synthesize(text, voice_id, speed)`, and add one line to `ENGINES`.
 - Defaults come from the bakeoff in `BAKEOFF.md`: `kokoro:af_heart` for English, `piper:is_IS-steinn-medium` for Icelandic.

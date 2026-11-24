@@ -4,9 +4,9 @@ A Segment is one sentence, so the timing file can say when each sentence starts.
 two texts: `text` as the Document has it, for the reader, and `spoken`, which the engine
 reads. So the split runs on the Document text, and each piece is normalized after.
 
-A Segment never crosses a paragraph. A sentence shorter than MIN_CHARS joins the next one:
-each call has a fixed cost, and a very short call sounds clipped. A sentence longer than
-the engine's limit splits at clause marks, then words.
+A Segment never crosses a paragraph. A sentence shorter than MIN_CHARS ("Oh dear!") joins
+the next one: each call has a fixed cost, and a very short call sounds clipped. A sentence
+longer than the engine's limit splits at clause marks, then words.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
-MIN_CHARS = 40
+MIN_CHARS = 20
 
 # The space after a sentence end. A closing quote or bracket stays with the sentence it closes.
 _SENTENCE_END = re.compile(r"[.!?…][\"')\]]*(\s+)(?=[\"'(\[]?[A-ZÁÉÍÓÚÝÞÆÖÄÜÅØ0-9])")
