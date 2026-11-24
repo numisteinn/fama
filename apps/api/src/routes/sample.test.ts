@@ -39,7 +39,7 @@ const stored = async (id: string) => {
   const work = await claimed(await claim("mac"))
   expect(work).toMatchObject({ _tag: "Narrate", episodeId: id })
   const query = new URLSearchParams({ workerId: "mac", leaseToken: work.leaseToken })
-  expect((await app.asWorker("PUT", `/api/worker/jobs/${id}/document?${query}`, { json: document })).status).toBe(204)
+  expect((await app.asWorker("PUT", `/api/worker/jobs/${id}/document?${query}`, { json: document })).status).toBe(200)
 }
 
 const clip = (id: string, voiceId: string, leaseToken: string, body = "sample audio") => {

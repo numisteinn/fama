@@ -4,6 +4,7 @@ import { ClaimedSample } from "./sample.ts"
 
 export * from "./connect.ts"
 export * from "./ids.ts"
+export * from "./review.ts"
 export * from "./sample.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
@@ -47,6 +48,8 @@ export const JobState = Schema.TaggedUnion({
     /** The worker's estimate of the wall time until Ready, as of `heartbeatAt`. `null` when it has none. */
     remainingMs: Schema.NullOr(Millis),
   },
+  /** The Document is stored and the job waits for its user to start narration. No worker holds it. */
+  Review: {},
   Ready: { finishedAt: Schema.String },
   Failed: { reason: Schema.String, failedAt: Schema.String },
 })
@@ -93,8 +96,8 @@ export const isFinished = (positionMs: number, totalMs: number): boolean =>
  *
  * - The job ended (Ready or Failed), so no more audio comes, and the position is finished (`isFinished`): the Play
  *   starts at 0.
- * - The job still works (Queued or Running) and the position is the end of the chapters made so far: the Play
- *   waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
+ * - The job still works (Queued, Running or Review) and the position is the end of the chapters made so far: the
+ *   Play waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
  *   start, and the Play goes on there. It never starts at 0.
  * - Otherwise the Play starts at the position.
  */
@@ -104,7 +107,7 @@ export const playStart = (
   job: { readonly _tag: JobState["_tag"] },
 ): { readonly positionMs: number; readonly isWaiting: boolean } => {
   const totalMs = chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
-  if (job._tag === "Queued" || job._tag === "Running") {
+  if (job._tag === "Queued" || job._tag === "Running" || job._tag === "Review") {
     return positionMs >= totalMs ? { positionMs: totalMs, isWaiting: true } : { positionMs, isWaiting: false }
   }
   return { positionMs: isFinished(positionMs, totalMs) ? 0 : positionMs, isWaiting: false }
@@ -171,6 +174,8 @@ export const CreateEpisode = Schema.Struct({
   source: SourceInput,
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
+  /** Stop the job in `Review` after extraction. A client that leaves it out sends `false`. */
+  review: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export interface CreateEpisode extends Schema.Schema.Type<typeof CreateEpisode> {}
 

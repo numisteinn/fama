@@ -136,15 +136,15 @@ def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     api.put_book(job, book)
 
 
-def extract_document(api: Api, job: ClaimedJob, workdir: Path) -> Document:
+def extract_document(api: Api, job: ClaimedJob, workdir: Path) -> Document | None:
     """Source to stored Document. The cover goes up first, so a stored Document means extraction is complete."""
     with tempfile.TemporaryDirectory() as tmp:
         document = extract(_source(api, job, Path(tmp)))
     if document.cover:
         api.put_cover(job, audio.write_cover(document.cover, workdir))
-    api.put_document(job, document)
+    review = api.put_document(job, document, job.voice or default_voice(document.language))
     log(f"{job.episode_id}: extracted the source, stored the Document ({len(document.chapters)} chapters)")
-    return document
+    return None if review else document
 
 
 def stored_document(api: Api, job: ClaimedJob) -> Document:
@@ -177,7 +177,12 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     try:
         with Heartbeat(api, job) as heartbeat:
             document = stored_document(api, job) if job.document_path else extract_document(api, job, workdir)
-            book = narrate_document(api, job, document, heartbeat, workdir)
+            if document is not None:
+                book = narrate_document(api, job, document, heartbeat, workdir)
+        if document is None:
+            log(f"{episode}: stopped for Review")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return None
         log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
             f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)

@@ -12,7 +12,9 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Sample** | One Voice reading the start of an Episode’s stored Document at the Episode’s speed. Each Episode and Voice pair has one Sample. Its state is `Requested`, `Ready` with a clip URL, or `Failed` with a reason. Like the Episode, the Sample belongs to the User. |
 | **Timing file** | The Segments of one chapter, in reading order. The worker uploads it next to the chapter audio. Read-along marks text from it. |
 | **Book file** | One `.m4b` of the whole episode with chapter marks, for download and the feed. |
-| **Job** | The state of the work that makes an episode: `Queued`, `Running`, `Ready`, `Failed`. Stored on the episode. |
+| **Transcript** | One WebVTT file of an episode for podcast apps: a cue for each Segment, on the timeline of the book file. Only an episode whose chapters all have a timing file has one. |
+| **Job** | The state of the work that makes an episode: `Queued`, `Running`, `Review`, `Ready`, `Failed`. Stored on the episode. |
+| **Review** | An optional stop after extraction. The owner can change the Document and choose the chapters to keep before starting narration. |
 | **Worker** | A process that pulls jobs from the API and makes the audio. Runs on the Mac (local) or Modal (cloud). Same Python package. |
 | **Engine** | A TTS model family a worker can run: `kokoro`, `piper`, ... |
 | **Voice** | One speaker of an engine, with a language. Written `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. |

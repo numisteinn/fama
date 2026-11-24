@@ -1,12 +1,14 @@
 // The stored result of extraction: the Document, and the cover next to it. The worker writes both once and reads
 // them back on every later attempt, so it never extracts a source twice.
-import { Document, EpisodeId, SourceQuery } from "@fama/contracts"
+import { Document, type DocumentStored, EpisodeId, SourceQuery, type UserId, VoiceRef } from "@fama/contracts"
 import { Effect, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { EpisodeRepo } from "../episode-repo.ts"
 import { keys, MediaStore } from "../media-store.ts"
-import { api, BlobParams, IdParams, NotStored, noContent, worker } from "./kit.ts"
+import { sha256Hex } from "../secrets.ts"
+import { api, BlobParams, IdParams, json, NotStored, worker } from "./kit.ts"
 
+const WriteParams = Schema.Struct({ ...BlobParams.fields, voice: Schema.optionalKey(VoiceRef) })
 const ReadParams = Schema.Struct({ ...SourceQuery.fields, id: EpisodeId })
 
 /** Serves one stored object, or `404` when the key holds nothing. */
@@ -23,6 +25,14 @@ export const stored = Effect.fn("document.stored")(function* (key: string | null
   )
 })
 
+/** Stage immutable bytes before the database selects them. A losing writer cannot overwrite the selected Document. */
+export const stageDocument = Effect.fn("document.stage")(function* (userId: UserId, id: EpisodeId, document: Document) {
+  const body = JSON.stringify(document)
+  const key = keys.documentRevision(userId, id, yield* Effect.promise(() => sha256Hex(body)))
+  const { size } = yield* (yield* MediaStore).put(key, new Blob([body]), "application/json")
+  return { key, size }
+})
+
 export const documentRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "GET",
@@ -31,8 +41,8 @@ export const documentRoutes = HttpRouter.addAll([
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         // Ownership first: another user's id is 404 and reads no object.
-        yield* (yield* EpisodeRepo).get(userId, id)
-        return yield* stored(keys.document(userId, id), "Document")
+        const key = yield* (yield* EpisodeRepo).documentKey(userId, id)
+        return yield* stored(key, "Document")
       }),
     ),
   ),
@@ -41,17 +51,16 @@ export const documentRoutes = HttpRouter.addAll([
     "/api/worker/jobs/:id/document",
     worker(
       Effect.gen(function* () {
-        const params = yield* HttpRouter.schemaParams(BlobParams)
+        const params = yield* HttpRouter.schemaParams(WriteParams)
         const repo = yield* EpisodeRepo
         const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
         const document = yield* HttpServerRequest.schemaBodyJson(Document)
-        const { size } = yield* (yield* MediaStore).put(
-          keys.document(userId, params.id),
-          new Blob([JSON.stringify(document)]),
-          "application/json",
-        )
-        yield* repo.setDocument(params.id, size)
-        return noContent
+        const revision = yield* stageDocument(userId, params.id, document)
+        const job = yield* repo.storeDocument(params.id, params.leaseToken, revision, {
+          title: document.title, author: document.author, language: document.language, voice: params.voice ?? null,
+        })
+        const stored: DocumentStored = { next: job._tag === "Review" ? "Review" : "Narrate" }
+        return json(stored)
       }),
     ),
   ),
@@ -61,8 +70,8 @@ export const documentRoutes = HttpRouter.addAll([
     worker(
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(ReadParams)
-        const { userId } = yield* (yield* EpisodeRepo).holdLease(params.id, params.leaseToken)
-        return yield* stored(keys.document(userId, params.id), "Document")
+        const { documentKey } = yield* (yield* EpisodeRepo).holdLease(params.id, params.leaseToken)
+        return yield* stored(documentKey, "Document")
       }),
     ),
   ),

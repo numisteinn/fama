@@ -27,7 +27,8 @@ export const sampleRoutes = HttpRouter.addAll([
     yield* episodes.get(userId, id)
     const request = yield* webRequest
     const body = request.body === null ? { voices: null } : yield* HttpServerRequest.schemaBodyJson(SamplesRequest)
-    const object = yield* (yield* MediaStore).get(keys.document(userId, id), null)
+    const key = yield* episodes.documentKey(userId, id)
+    const object = key === null ? null : yield* (yield* MediaStore).get(key, null)
     if (object === null) return yield* new NotStored({ message: "This episode has no Document." })
     const raw = yield* Effect.tryPromise(() => object.json())
     const document = yield* Schema.decodeUnknownEffect(Document)(raw)
@@ -46,7 +47,7 @@ export const sampleRoutes = HttpRouter.addAll([
   HttpRouter.route("GET", `${work}/document`, worker(Effect.gen(function* () {
     const { id, voice, leaseToken } = yield* HttpRouter.schemaParams(Params)
     const { userId } = yield* (yield* SampleRepo).holdLease(id, voice, leaseToken)
-    return yield* stored(keys.document(userId, id), "Document")
+    return yield* stored(yield* (yield* EpisodeRepo).documentKey(userId, id), "Document")
   }))),
   HttpRouter.route("PUT", `${work}/clip`, worker(Effect.gen(function* () {
     const { id, voice, leaseToken } = yield* HttpRouter.schemaParams(Params)

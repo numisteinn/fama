@@ -23,8 +23,10 @@ import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
 import { documentRoutes } from "./routes/document.ts"
 import { api, BadRequest, BlobParams, handle, IdParams, json, MAX_UPLOAD_BYTES, noContent, TooLarge, uploadRequest, webRequest, worker } from "./routes/kit.ts"
+import { reviewRoutes } from "./routes/review.ts"
 import { sampleRoutes } from "./routes/sample.ts"
 import { timingRoutes } from "./routes/timing.ts"
+import { transcriptRoutes } from "./routes/transcript.ts"
 import { SampleRepo } from "./sample-repo.ts"
 import { Wake } from "./wake.ts"
 
@@ -97,6 +99,7 @@ const clientRoutes = HttpRouter.addAll([
           title: provisionalTitle(body.source),
           voice: body.voice,
           speed: body.speed,
+          review: body.review,
         })
         yield* wakeWorker
         return json(episode, 201)
@@ -123,6 +126,8 @@ const clientRoutes = HttpRouter.addAll([
         const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
         const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
         if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
+        const reviewField = form.get("review") ?? "false"
+        if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
         const id = EpisodeId.make(crypto.randomUUID())
         const fileName = safeFileName(file.name)
         const contentType = file.type || "application/octet-stream"
@@ -130,7 +135,14 @@ const clientRoutes = HttpRouter.addAll([
         yield* store.put(keys.upload(userId, id, fileName), file, contentType)
         const repo = yield* EpisodeRepo
         const source: Source = { _tag: "File", fileName, contentType }
-        const episode = yield* repo.create(userId, { id, source, title: provisionalTitle(source), voice, speed })
+        const episode = yield* repo.create(userId, {
+          id,
+          source,
+          title: provisionalTitle(source),
+          voice,
+          speed,
+          review: reviewField === "true",
+        })
         yield* wakeWorker
         return json(episode, 201)
       }),
@@ -400,8 +412,10 @@ export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
   documentRoutes,
+  reviewRoutes,
   sampleRoutes,
   timingRoutes,
+  transcriptRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

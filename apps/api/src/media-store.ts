@@ -18,9 +18,13 @@ export const keys = {
     `${userPrefix(userId)}episodes/${episodeId}/samples/${voice}.m4a`,
   timing: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.json`,
+  /** The media path of the transcript. The object the API stores for one Ready is under `transcript/`. */
+  transcript: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/transcript.vtt`,
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+  documentRevision: (userId: string, episodeId: string, digest: string) =>
+    `${userPrefix(userId)}documents/${episodeId}/${digest}.json`,
   document: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/document.json`,
 }
 
@@ -103,6 +107,7 @@ export const layer = Layer.effect(
 
     const deleteEpisode = Effect.fn("MediaStore.deleteEpisode")(function* (userId: string, episodeId: string) {
       yield* deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/`)
+      yield* deletePrefix(`${userPrefix(userId)}documents/${episodeId}/`)
       yield* deletePrefix(`${userPrefix(userId)}uploads/${episodeId}/`)
     })
 

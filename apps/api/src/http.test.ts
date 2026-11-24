@@ -495,6 +495,26 @@ describe("worker wake", () => {
     expectOneWake(["Queued"])
   })
 
+  it("start wakes the worker after queuing the reviewed Document, once", async () => {
+    const created = await alice("POST", "/api/episodes", { json: { ...textEpisode, review: true } })
+    const { id } = (await created.json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const document = {
+      title: "Harbour", author: null, language: "en",
+      chapters: [{ title: "Morning", text: "The harbour is quiet." }],
+    }
+    const stored = await asWorker("PUT", `/api/worker/jobs/${id}/document?workerId=w1&leaseToken=${job.leaseToken}`, {
+      json: document,
+    })
+    expect(await stored.json()).toEqual({ next: "Review" })
+    setWake(WAKE_URL, WAKE_SECRET)
+    expect((await alice("POST", `/api/episodes/${id}/start`, { json: { document } })).status).toBe(200)
+    expect((await alice("POST", `/api/episodes/${id}/start`, { json: { document } })).status).toBe(409)
+    await settled()
+    expectOneWake(["Queued"])
+  })
+
   it("a refused retry sends no wake", async () => {
     setWake(WAKE_URL, WAKE_SECRET)
     const { id } = (await (await createText()).json()) as { id: string }

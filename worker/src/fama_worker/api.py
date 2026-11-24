@@ -138,9 +138,17 @@ class Api:
             cover = Cover(response.content, "png" if is_png else "jpg")
         return Document.from_json(self._send("GET", job.document_path, params=lease).json(), cover)
 
-    def put_document(self, job: ClaimedJob, document: Document) -> None:
-        self._send("PUT", f"/api/worker/jobs/{job.episode_id}/document", json=document.to_json(),
-                   params={"workerId": self.worker_id, "leaseToken": job.lease_token})
+    def put_document(self, job: ClaimedJob, document: Document, voice: VoiceRef) -> bool:
+        """Store the Document and return whether the job has stopped in Review."""
+        response = self._send("PUT", f"/api/worker/jobs/{job.episode_id}/document", json=document.to_json(),
+                              params={"workerId": self.worker_id, "leaseToken": job.lease_token,
+                                      "voice": str(voice)})
+        if response.status_code == 204:  # Servers before Review always continue.
+            return False
+        next_step = response.json().get("next")
+        if next_step not in ("Review", "Narrate"):
+            raise ApiError(f"Invalid Document upload response: {next_step!r}")
+        return next_step == "Review"
 
     def progress(self, job: ClaimedJob, stage: str, done: int, total: int, *, title: str | None,
                  author: str | None, language: str | None, voice: str | None, remaining_ms: int | None) -> None:
