@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 
 export * from "./connect.ts"
+export * from "./timing.ts"
 
 export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
 export type EpisodeId = typeof EpisodeId.Type
@@ -63,6 +64,8 @@ export const Chapter = Schema.Struct({
   title: Schema.String,
   durationMs: Schema.Number,
   url: Schema.String,
+  /** The media path of the chapter's timing file (`Timing`). `null` for a chapter made before timing files. */
+  timingUrl: Schema.NullOr(Schema.String),
 })
 export interface Chapter extends Schema.Schema.Type<typeof Chapter> {}
 

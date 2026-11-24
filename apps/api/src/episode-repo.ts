@@ -64,6 +64,8 @@ const ChapterRow = Schema.Struct({
   idx: Schema.Number,
   title: Schema.String,
   duration_ms: Schema.Number,
+  /** 1 when the chapter has a row in `timings`. */
+  has_timing: Schema.Number,
 })
 interface ChapterRow extends Schema.Schema.Type<typeof ChapterRow> {}
 
@@ -164,6 +166,8 @@ export interface Interface {
     id: string,
     chapter: { readonly index: number; readonly title: string; readonly durationMs: number; readonly size: number },
   ) => Effect.Effect<void, DatabaseError>
+  /** Records that the timing file of a chapter is stored. The chapter itself can come later. */
+  readonly putTiming: (id: string, index: number) => Effect.Effect<void, DatabaseError>
   readonly setBook: (id: string, size: number) => Effect.Effect<void, DatabaseError>
   readonly setCover: (id: string, key: string) => Effect.Effect<void, DatabaseError>
   readonly feedItems: (userId: UserId, origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, Failure>
@@ -220,6 +224,7 @@ export const layer = Layer.effect(
           title: chapter.title,
           durationMs: chapter.duration_ms,
           url: media(row, keys.chapter(row.user_id, row.id, chapter.idx)),
+          timingUrl: chapter.has_timing === 1 ? media(row, keys.timing(row.user_id, row.id, chapter.idx)) : null,
         })),
         bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id)),
         coverUrl: row.cover_key === null ? null : media(row, row.cover_key),
@@ -245,8 +250,11 @@ export const layer = Layer.effect(
       return row
     })
 
+    const selectChapters = `SELECT c.*, t.idx IS NOT NULL AS has_timing FROM chapters c
+      LEFT JOIN timings t ON t.episode_id = c.episode_id AND t.idx = c.idx`
+
     const chaptersOf = (id: string) =>
-      all("chapters.list", "SELECT * FROM chapters WHERE episode_id = ? ORDER BY idx", id).pipe(
+      all("chapters.list", `${selectChapters} WHERE c.episode_id = ? ORDER BY c.idx`, id).pipe(
         Effect.flatMap(decodeRows(ChapterRow)),
       )
 
@@ -320,7 +328,7 @@ export const layer = Layer.effect(
       ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
       const chapters = yield* all(
         "chapters.ofUser",
-        `SELECT c.* FROM chapters c JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ?
+        `${selectChapters} JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ?
          ORDER BY c.episode_id, c.idx`,
         userId,
       ).pipe(Effect.flatMap(decodeRows(ChapterRow)))
@@ -337,6 +345,9 @@ export const layer = Layer.effect(
         db.batch([
           db
             .prepare("DELETE FROM chapters WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
+            .bind(id, userId),
+          db
+            .prepare("DELETE FROM timings WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
             .bind(id, userId),
           db
             .prepare("DELETE FROM progress WHERE episode_id = (SELECT id FROM episodes WHERE id = ? AND user_id = ?)")
@@ -454,6 +465,9 @@ export const layer = Layer.effect(
       )
     })
 
+    const putTiming = (id: string, index: number) =>
+      run("timings.put", "INSERT INTO timings (episode_id, idx) VALUES (?, ?) ON CONFLICT DO NOTHING", id, index)
+
     const setBook = (id: string, size: number) =>
       run("episode.setBook", "UPDATE episodes SET book_size = ? WHERE id = ?", size, id)
 
@@ -542,6 +556,7 @@ export const layer = Layer.effect(
       fail,
       holdLease,
       putChapter,
+      putTiming,
       setBook,
       setCover,
       feedItems,

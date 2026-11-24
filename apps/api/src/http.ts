@@ -22,6 +22,7 @@ import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
+import { timingRoutes } from "./routes/timing.ts"
 import { Wake } from "./wake.ts"
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -442,6 +443,7 @@ const notFound = HttpRouter.route(
 export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
+  timingRoutes(worker),
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({
