@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 
 export * from "./connect.ts"
+export * from "./document.ts"
 
 export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
 export type EpisodeId = typeof EpisodeId.Type
@@ -206,6 +207,10 @@ export const ClaimedJob = Schema.Struct({
   source: Source,
   /** API path to GET the uploaded bytes. Set only for `File` sources. */
   sourcePath: Schema.NullOr(Schema.String),
+  /** API path to GET the stored Document. Set when one exists: the worker narrates from it and does not extract. */
+  documentPath: Schema.NullOr(Schema.String),
+  /** API path to GET the cover the first extraction uploaded. Set when the episode has one. */
+  coverPath: Schema.NullOr(Schema.String),
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
   /** Chapter indexes already uploaded by an earlier attempt. The worker skips them. */
