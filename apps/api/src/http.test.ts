@@ -280,7 +280,7 @@ describe("auth boundaries", () => {
     expect((await call(null, "GET", episode.bookUrl)).status).toBe(401)
     expect((await call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).status).toBe(401)
     const fresh = (await (await alice("GET", `/api/episodes/${episode.id}`)).json()) as { bookUrl: string }
-    expect(fresh.bookUrl).toBe(episode.bookUrl.replace(users.alice.feed, token))
+    expect(fresh.bookUrl).toBe(episode.bookUrl.replace(`/media/${users.alice.feed}/`, `/media/${token}/`))
     expect((await call(null, "GET", fresh.bookUrl)).status).toBe(200)
   })
 })
