@@ -5,8 +5,14 @@ from fama_worker import engines
 from fama_worker.model import Audio, Voice, VoiceRef
 
 
+LEAD_S = 0.3
+TRAIL_S = 0.5
+
+
 class ToneEngine:
-    """A stand-in engine: a short tone per word, and a log of what it was asked to say."""
+    """A stand-in engine: a short tone per word, and a log of what it was asked to say.
+
+    Like a real engine, it opens and closes each call with silence."""
 
     name = "tone"
     model_version = "tone-1"
@@ -23,7 +29,8 @@ class ToneEngine:
         rate = 16000
         seconds = 0.05 * len(text.split()) / speed
         t = np.arange(int(seconds * rate)) / rate
-        return Audio((0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), rate)
+        tone = (0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+        return Audio(np.concatenate([np.zeros(int(LEAD_S * rate), np.float32), tone, np.zeros(int(TRAIL_S * rate), np.float32)]), rate)
 
 
 @pytest.fixture

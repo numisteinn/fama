@@ -26,9 +26,11 @@ from fama_worker.engines import Engine, get_engine
 from fama_worker.model import Audio, Document, VoiceRef
 from fama_worker.normalize import normalize
 
-SEGMENT_GAP_S = 0.12
+# Silence after a Segment, on top of the silence the engine ends each call with.
+SEGMENT_GAP_S = 0.2
 PARAGRAPH_GAP_S = 0.45
 TITLE_GAP_S = 0.9
+SILENCE_RMS = 0.001  # -60 dB
 
 Stage = Literal["extracting", "synthesizing", "encoding", "uploading"]
 
@@ -55,7 +57,7 @@ class Plan:
 
 @dataclass(frozen=True)
 class Timed:
-    """A Segment on the timeline of its chapter. The silence after it belongs to no Segment."""
+    """A Segment on the timeline of its chapter: where its voice starts, and where its audio ends."""
 
     segment: Segment
     start_ms: int
@@ -144,13 +146,25 @@ def _synthesize(segment: Segment, plan: Plan, engine: Engine, cache: ChunkCache)
     return result
 
 
+def _lead(samples: np.ndarray, rate: int) -> int:
+    """The number of samples before the voice starts. An engine opens each call with silence: Kokoro with 0.3 s."""
+    window = rate // 200
+    frames = samples[: len(samples) // window * window].reshape(-1, window)
+    voiced = np.flatnonzero(np.sqrt(np.mean(np.square(frames), axis=1)) > SILENCE_RMS)
+    return int(voiced[0]) * window if voiced.size else 0
+
+
 def render_chapter(chapter: ChapterPlan, plan: Plan, engine: Engine, cache: ChunkCache,
                    on_segment=lambda: None) -> tuple[Audio, tuple[Timed, ...]]:
-    """The chapter audio, and where each Segment is in it."""
+    """The chapter audio, and where each Segment is in it.
+
+    A Segment that continues a paragraph loses the silence its call opens with. So the pause between two sentences
+    is the same as when one call read both: the closing silence of the first, and SEGMENT_GAP_S."""
     parts: list[np.ndarray] = []
     spans: list[tuple[Segment, int, int]] = []  # in samples
     rate: int | None = None
     position = 0
+    starts_paragraph = True
     pieces = [(s, TITLE_GAP_S if i == len(chapter.intro) - 1 else PARAGRAPH_GAP_S) for i, s in enumerate(chapter.intro)]
     pieces += [(s, PARAGRAPH_GAP_S if s.ends_paragraph else SEGMENT_GAP_S) for s in chapter.body]
     for segment, gap in pieces:
@@ -158,10 +172,13 @@ def render_chapter(chapter: ChapterPlan, plan: Plan, engine: Engine, cache: Chun
         if rate is not None and result.sample_rate != rate:
             raise RuntimeError("Engine changed its sample rate inside one chapter.")
         rate = result.sample_rate
+        lead = _lead(result.samples, rate)
+        samples = result.samples if starts_paragraph else result.samples[lead:]
         silence = np.zeros(int(gap * rate), dtype=np.float32)
-        spans.append((segment, position, position + len(result.samples)))
-        position += len(result.samples) + len(silence)
-        parts += [result.samples, silence]
+        spans.append((segment, position + (lead if starts_paragraph else 0), position + len(samples)))
+        position += len(samples) + len(silence)
+        parts += [samples, silence]
+        starts_paragraph = segment.ends_paragraph
         on_segment()
     if rate is None:
         raise ValueError(f"Chapter {chapter.index} has no text.")

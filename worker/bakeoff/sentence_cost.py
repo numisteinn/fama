@@ -2,17 +2,18 @@
 
     uv run python bakeoff/sentence_cost.py --text article.txt --language en --voice kokoro:af_heart --out samples/
 
-`sentence` is the worker's plan: one Segment for each sentence. `packed` joins the
-sentences of a paragraph up to the engine's limit, as the worker did before read-along.
-Both shapes read the same text on the same device, with no chunk cache. Each run is a new
+`sentence` is the worker's plan and render: one Segment for each sentence. `packed` joins
+the sentences of a paragraph up to the engine's limit and puts 0.12 s between two calls,
+as the worker did before read-along. Both shapes read the same text on the same device,
+with no chunk cache. Each run is a new
 process: it loads the model, reads a warm-up text, then reads the article
 once in one shape. A new process matters for Kokoro on MPS, where the first call with a
 new input length is slower than a repeat, and a real episode is all new text. The runs
 alternate (packed, sentence, packed, ...) so that other load on the machine hits both
 shapes. Speed is audio seconds per wall second inside `engine.synthesize`.
 
-The script also writes the first `--listen` paragraphs of each shape as WAV files, and
-reports the pause the listener hears between two sentences in each shape.
+The script also writes the first `--listen` paragraphs of each shape as WAV files. With
+the same rhythm, the two files have the same length (`listen_s`).
 """
 
 from __future__ import annotations
@@ -32,8 +33,9 @@ from fama_worker.chunk import MIN_CHARS, Segment, segments
 from fama_worker.engines import get_engine
 from fama_worker.model import VoiceRef
 from fama_worker.normalize import normalize
-from fama_worker.pipeline import PARAGRAPH_GAP_S, SEGMENT_GAP_S
+from fama_worker.pipeline import PARAGRAPH_GAP_S, ChapterPlan, Plan, render_chapter
 
+OLD_CHUNK_GAP_S = 0.12
 WARM_UP = {
     "en": "This text warms the model before the timed run. It has two sentences of plain words.",
     "is": "Þessi texti hitar líkanið fyrir mælinguna. Hann er tvær setningar af venjulegum orðum.",
@@ -44,38 +46,46 @@ SHAPES = {"packed": lambda limit: limit, "sentence": lambda limit: MIN_CHARS}
 """Shape name to `min_chars`: a piece shorter than this joins the next one."""
 
 
-def render(engine, voice: VoiceRef, plan: list[Segment]) -> tuple[np.ndarray, int, float, float]:
-    """Returns (samples with gaps, rate, wall seconds inside synthesize, speech seconds without gaps)."""
+class Clocked:
+    """An engine that adds up the wall time of its calls and the audio they return."""
+
+    def __init__(self, engine) -> None:
+        self.engine, self.model_version = engine, engine.model_version
+        self.wall = self.speech = 0.0
+
+    def synthesize(self, text: str, voice_id: str, speed: float):
+        started = time.perf_counter()
+        result = self.engine.synthesize(text, voice_id, speed)
+        self.wall += time.perf_counter() - started
+        if result.samples.size == 0:
+            raise RuntimeError(f"no audio for {text!r}")
+        self.speech += result.duration_s
+        return result
+
+
+class NoCache:
+    def get(self, key: str) -> None:
+        return None
+
+    def put(self, key: str, audio) -> None:
+        pass
+
+
+def render(engine, voice: VoiceRef, plan: list[Segment], shape: str) -> tuple[np.ndarray, int, float, float]:
+    """Returns (chapter samples, rate, wall seconds inside synthesize, seconds of audio the engine returned)."""
+    clocked = Clocked(engine)
+    if shape == "sentence":
+        chapter = ChapterPlan(0, "", (), tuple(plan))
+        audio, _ = render_chapter(chapter, Plan(None, voice, 1.0, (chapter,)), clocked, NoCache())
+        return audio.samples, audio.sample_rate, clocked.wall, clocked.speech
     parts: list[np.ndarray] = []
-    wall = speech = 0.0
     rate = 0
     for segment in plan:
-        started = time.perf_counter()
-        result = engine.synthesize(segment.spoken, voice.voice_id, 1.0)
-        wall += time.perf_counter() - started
-        if result.samples.size == 0:
-            raise RuntimeError(f"no audio for {segment.spoken!r}")
+        result = clocked.synthesize(segment.spoken, voice.voice_id, 1.0)
         rate = result.sample_rate
-        speech += result.duration_s
-        gap = PARAGRAPH_GAP_S if segment.ends_paragraph else SEGMENT_GAP_S
+        gap = PARAGRAPH_GAP_S if segment.ends_paragraph else OLD_CHUNK_GAP_S
         parts += [result.samples, np.zeros(int(gap * rate), np.float32)]
-    return np.concatenate(parts[:-1]), rate, wall, speech
-
-
-def pauses(samples: np.ndarray, rate: int, floor_db: float = -45.0, min_s: float = 0.15) -> list[float]:
-    """Lengths of the quiet stretches inside the audio, in seconds."""
-    window = int(0.01 * rate)
-    frames = samples[: len(samples) // window * window].reshape(-1, window)
-    quiet = 20 * np.log10(np.sqrt((frames**2).mean(axis=1)) + 1e-9) < floor_db
-    runs, length = [], 0
-    for is_quiet in quiet:
-        if is_quiet:
-            length += 1
-        else:
-            if length * 0.01 >= min_s:
-                runs.append(length * 0.01)
-            length = 0
-    return runs
+    return np.concatenate(parts[:-1]), rate, clocked.wall, clocked.speech
 
 
 def one_run(args: argparse.Namespace) -> dict:
@@ -86,8 +96,8 @@ def one_run(args: argparse.Namespace) -> dict:
     plan = segments(text, engine.max_chars, lambda piece: normalize(piece, args.language),
                     min_chars=SHAPES[args.shape](engine.max_chars))
     engine.synthesize(WARM_UP[args.language], voice.voice_id, 1.0)
-    samples, rate, wall, speech = render(engine, voice, plan)
-    _, _, again, _ = render(engine, voice, plan)
+    samples, rate, wall, speech = render(engine, voice, plan, args.shape)
+    _, _, again, _ = render(engine, voice, plan, args.shape)
     result = {
         "shape": args.shape, "device": getattr(engine, "device", "cpu"), "words": len(text.split()),
         "read": sum(len(s.spoken.split()) for s in plan),
@@ -97,10 +107,9 @@ def one_run(args: argparse.Namespace) -> dict:
     if args.write:
         ends = np.cumsum([s.ends_paragraph for s in plan])
         end = next((i + 1 for i, n in enumerate(ends) if n == args.listen), len(plan))
-        part, rate, _, _ = render(engine, voice, plan[:end])
+        part, rate, _, _ = render(engine, voice, plan[:end], args.shape)
         sf.write(args.out / f"{voice.voice_id}-{args.shape}.wav", part, rate, subtype="PCM_16")
-        quiet = pauses(part, rate)
-        result |= {"pause_s_median": round(statistics.median(quiet), 2) if quiet else None, "pauses": len(quiet)}
+        result["listen_s"] = round(len(part) / rate, 1)
     return result
 
 
@@ -147,7 +156,7 @@ def main() -> None:
             "x_real_time": round(first["audio_s"] / statistics.median(walls), 1),
             "x_real_time_best": round(first["audio_s"] / min(walls), 1),
             "repeat_wall_s_median": round(statistics.median(repeats), 2),
-            "pause_s_median": first.get("pause_s_median"), "pauses": first.get("pauses"),
+            "listen_s": first.get("listen_s"),
         }
     a, b = report["shapes"]["packed"], report["shapes"]["sentence"]
     report["sentence_speed_vs_packed"] = round(b["x_real_time"] / a["x_real_time"], 3)

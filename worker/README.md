@@ -29,6 +29,7 @@ uv run fama work --api http://localhost:8787 --token dev-worker-token --drain  #
 
 ```
 out/<slug>/chapters/000.m4a ...
+out/<slug>/chapters/000.json ... (timing file: when the voice reads each Segment)
 out/<slug>/book.m4b
 out/<slug>/cover.jpg        (when the source has one)
 out/<slug>/episode.json     (title, language, voice, chapter durations)
@@ -45,9 +46,10 @@ Settings:
 
 ## How it works
 
-`extract` (Source to Document) → `normalize` (numbers, abbreviations, URLs, footnotes) → `chunk` (sentences packed to the engine's limit, never across a paragraph) → `synthesize` (through the chunk cache) → `encode` (one `.m4a` per chapter) → `assemble` (one `.m4b`, no re-encode).
+`extract` (Source to Document) → `chunk` (one Segment for each sentence, never across a paragraph) → `normalize` each Segment (numbers, abbreviations, URLs, footnotes) → `synthesize` (one call for each Segment, through the chunk cache) → `encode` (one `.m4a` and one timing file per chapter) → `assemble` (one `.m4b`, no re-encode).
 
-- The chunk cache key is `sha256(text, engine, voice, model version, speed)`. A re-run or a retried job only synthesizes chunks it has not made before.
+- A Segment has two texts: the Document text, which goes to the timing file, and the normalized text, which the engine reads. A sentence under 40 characters joins the next one. `BAKEOFF.md` has the cost of one call for each sentence.
+- The chunk cache key is `sha256(text, engine, voice, model version, speed)`, with the text the engine reads. A re-run or a retried job only synthesizes Segments it has not made before.
 - `engines/__init__.py` holds the two tables: `ENGINES` (name to engine) and `DEFAULT_VOICE` (language to voice). To add an engine, write a class with `name`, `model_version`, `max_chars`, `voices()` and `synthesize(text, voice_id, speed)`, and add one line to `ENGINES`.
 - Defaults come from the bakeoff in `BAKEOFF.md`: `kokoro:af_heart` for English, `piper:is_IS-steinn-medium` for Icelandic.
 
@@ -140,7 +142,7 @@ The `wall` figures show the cost of a warm container alone. The gap between them
 uv run pytest
 ```
 
-The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, chunking, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a resume with `completedChapters`, a failed job, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
+The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, Segments, timing files, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a resume with `completedChapters`, a failed job, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
 
 ## Bakeoff
 
