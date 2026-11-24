@@ -13,13 +13,14 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 | Voice sample | yes | yes (the worker must be free) |
 | Narrate again | yes | no |
 
-So the work is one foundation unit (`F`), then lanes that fan out from it. Read-along and the small lanes do not need `F` and start now. The timing file, the base of Read-along, is built.
+The foundation and the timing file are built. The lanes fan out from them.
 
 ```
-now ──┬─ F   Stored Document ──┬─ V1 Review core ──┬─ V2 Review web ─────┬─ S2 Sample web
-      │                        │                   ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
-      │                        │                   └─ N1 Narrate again core ──┬─ N2 web
-      │                        └─ S1 Sample core                              └─ N3 iPhone
+now ──┬─ V1 Review core ──┬─ V2 Review web ─────┬─ S2 Sample web
+      │                   ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
+      │                   └─ N1 Narrate again core ──┬─ N2 web
+      │                                              └─ N3 iPhone
+      ├─ S1  Sample core
       ├─ R2  Reader web
       ├─ R3  Reader iPhone
       ├─ R4  Feed transcript
@@ -32,10 +33,11 @@ Six units can start now: `V1`, `S1`, `R2`, `R3`, `R4`, `X`.
 
 1. **One unit is one branch and one PR.** The branch name is `roadmap/<id>`, for example `roadmap/r1`. An open PR or branch with that name means the unit is taken. Look with `gh pr list` and `git branch -r` before you start. There is no status table to edit.
 2. **A unit starts only when the units before it are on `main`.** The graph above gives the order.
-3. **New code goes in new files.** The table in "Files" gives each unit its own files. In a shared file, a unit adds only the lines that connect its new file (one export, one route layer, one message case).
+3. **New code goes in new files.** The table in "Files" gives each unit its own files. In a shared file, a unit adds only the lines that connect its new file (one export, one route layer, one message case). Put such a line in alphabetical order with its neighbors, not at the end of the list. Two units that both add a line at the end get a merge conflict.
 4. **The shapes in this file are the seams.** A unit that must change a shape another unit uses changes this file in the same PR, and says so in the PR title.
 5. **Each unit owns one migration file.** Numbers are reserved in "Files". Do not edit another unit's migration.
-6. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR also removes the unit from this file and updates `CONTEXT.md` and `docs/api.md` for its own terms and routes.
+6. **API routes and their tests go in their own files.** A route file imports its guards from `apps/api/src/routes/kit.ts`. Its test uses `apps/api/src/test-app.ts`, which applies each migration file. A unit that adds a table adds its name to `TABLES` there.
+7. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR also removes the unit from this file and updates `CONTEXT.md` and `docs/api.md` for its own terms and routes.
 
 ## Lanes
 
