@@ -1,7 +1,8 @@
 import { UserId } from "@fama/contracts"
 import * as SecureStore from "expo-secure-store"
 import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react"
-import { createApi, normalizeServerUrl, type Api, type Connection } from "./api"
+import { AppState } from "react-native"
+import { ApiError, createApi, normalizeServerUrl, type Api, type Connection } from "./api"
 
 const SERVER_KEY = "fama.serverUrl"
 const TOKEN_KEY = "fama.apiToken"
@@ -19,6 +20,8 @@ type Settings = {
   readonly api: Api | null
   /** Null until the server named the token's user once. Kept offline after that. */
   readonly account: Account | null
+  /** Why the server could not name the token's user. Null while the app asks, and when the account is known. */
+  readonly accountError: string | null
   /** Saves a new connection. With `userId` (already checked with `GET /api/me`) the account is known at once. */
   save(connection: Connection, userId?: UserId): Promise<void>
 }
@@ -32,6 +35,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   const [connection, setConnection] = useState<Connection | null>(null)
   const [userId, setUserId] = useState<UserId | null>(null)
+  const [accountError, setAccountError] = useState<string | null>(null)
 
   useEffect(() => {
     void Promise.all([
@@ -49,18 +53,29 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   // Ask the server who the token belongs to, at start and after every change. Offline, the stored user stays.
   useEffect(() => {
+    setAccountError(null)
     if (!api) return
     let live = true
-    api.me().then(
-      (me) => {
-        if (!live) return
-        setUserId(me.userId)
-        void SecureStore.setItemAsync(USER_KEY, me.userId)
-      },
-      () => {},
-    )
+    const ask = () =>
+      api.me().then(
+        (me) => {
+          if (!live) return
+          setUserId(me.userId)
+          setAccountError(null)
+          void SecureStore.setItemAsync(USER_KEY, me.userId)
+        },
+        (error: unknown) => {
+          if (live) setAccountError(error instanceof ApiError ? error.message : "Could not connect.")
+        },
+      )
+    void ask()
+    // A server that was out of reach at start can be back when the app comes to the front.
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void ask()
+    })
     return () => {
       live = false
+      subscription.remove()
     }
   }, [api])
 
@@ -75,6 +90,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       connection,
       api,
       account,
+      // With a stored user the app works offline, so a failed check is not an error to show.
+      accountError: account ? null : accountError,
       async save(next, checkedUser) {
         const normalized = { serverUrl: normalizeServerUrl(next.serverUrl), token: next.token.trim() }
         await SecureStore.setItemAsync(SERVER_KEY, normalized.serverUrl)
@@ -85,7 +102,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         setConnection(normalized.serverUrl && normalized.token ? normalized : null)
       },
     }),
-    [ready, api, connection, account],
+    [ready, api, connection, account, accountError],
   )
 
   return <SettingsContext value={value}>{children}</SettingsContext>
