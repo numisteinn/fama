@@ -8,6 +8,7 @@ export * from "./review.ts"
 export * from "./sample.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
+export * from "./upload.ts"
 
 export const Voice = Schema.Struct({
   id: VoiceRef,
@@ -202,7 +203,7 @@ export const ClaimedJob = Schema.Struct({
   episodeId: EpisodeId,
   leaseToken: LeaseToken,
   source: Source,
-  /** API path to GET the uploaded bytes. Set only for `File` sources. */
+  /** API path to GET the uploaded bytes. Set for `File` sources and `Url` sources with an upload. */
   sourcePath: Schema.NullOr(Schema.String),
   /** API path to GET the stored Document. Set when one exists: the worker narrates from it and does not extract. */
   documentPath: Schema.NullOr(Schema.String),

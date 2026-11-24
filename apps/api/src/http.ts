@@ -8,9 +8,6 @@ import {
   EpisodeProgress,
   FailRequest,
   ProgressRequest,
-  type Source,
-  SourceQuery,
-  VoiceRef,
 } from "@fama/contracts"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
@@ -22,11 +19,12 @@ import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
 import { documentRoutes } from "./routes/document.ts"
-import { api, BadRequest, BlobParams, handle, IdParams, json, MAX_UPLOAD_BYTES, noContent, TooLarge, uploadRequest, webRequest, worker } from "./routes/kit.ts"
+import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, uploadRequest, webRequest, worker } from "./routes/kit.ts"
 import { reviewRoutes } from "./routes/review.ts"
 import { sampleRoutes } from "./routes/sample.ts"
 import { timingRoutes } from "./routes/timing.ts"
 import { transcriptRoutes } from "./routes/transcript.ts"
+import { provisionalTitle, uploadRoutes } from "./routes/upload.ts"
 import { SampleRepo } from "./sample-repo.ts"
 import { Wake } from "./wake.ts"
 
@@ -46,33 +44,11 @@ const ChapterParams = Schema.Struct({
   id: EpisodeId,
   index: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
-const SourceParams = Schema.Struct({ ...SourceQuery.fields, id: EpisodeId })
-
-const firstWords = (text: string, count: number) => {
-  const words = text.trim().split(/\s+/)
-  return words.slice(0, count).join(" ") + (words.length > count ? "…" : "")
-}
-
-/** The provisional title a new episode shows until the worker reports the real one. */
-const provisionalTitle = (source: Source) => {
-  switch (source._tag) {
-    case "Url": {
-      const url = URL.parse(source.url)
-      return url === null ? source.url : `${url.host}${url.pathname === "/" ? "" : url.pathname}`
-    }
-    case "Text":
-      return source.title?.trim() || firstWords(source.text, 8) || "Untitled"
-    case "File":
-      return source.fileName
-  }
-}
 
 /** Wakes the cloud worker. Call it only after the write that made the job `Queued` has committed. */
 const wakeWorker = Effect.gen(function* () {
   yield* (yield* Wake).wake
 })
-
-const safeFileName = (name: string) => name.replace(/[/\\]/g, "_").replace(/^\.+/, "") || "upload"
 
 /** Reads a raw upload body into R2. Needs `Content-Length`, because R2 stores only bodies of known length. */
 const putBody = Effect.fn("http.putBody")(function* (key: string, fallbackType: string) {
@@ -100,48 +76,6 @@ const clientRoutes = HttpRouter.addAll([
           voice: body.voice,
           speed: body.speed,
           review: body.review,
-        })
-        yield* wakeWorker
-        return json(episode, 201)
-      }),
-    ),
-  ),
-  HttpRouter.route(
-    "POST",
-    "/api/episodes/upload",
-    api(({ userId }) =>
-      Effect.gen(function* () {
-        const request = yield* webRequest
-        const length = Number(request.headers.get("content-length") ?? 0)
-        if (length > MAX_UPLOAD_BYTES + 64 * 1024) return yield* new TooLarge()
-        const form = yield* Effect.tryPromise({
-          try: () => request.formData(),
-          catch: () => new BadRequest({ message: "Expected multipart form data" }),
-        })
-        const file = form.get("file")
-        if (file === null || typeof file === "string") return yield* new BadRequest({ message: "Missing file" })
-        if (file.size > MAX_UPLOAD_BYTES) return yield* new TooLarge()
-        const voiceField = form.get("voice")
-        const speedField = form.get("speed")
-        const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
-        const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
-        if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
-        const reviewField = form.get("review") ?? "false"
-        if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
-        const id = EpisodeId.make(crypto.randomUUID())
-        const fileName = safeFileName(file.name)
-        const contentType = file.type || "application/octet-stream"
-        const store = yield* MediaStore
-        yield* store.put(keys.upload(userId, id, fileName), file, contentType)
-        const repo = yield* EpisodeRepo
-        const source: Source = { _tag: "File", fileName, contentType }
-        const episode = yield* repo.create(userId, {
-          id,
-          source,
-          title: provisionalTitle(source),
-          voice,
-          speed,
-          review: reviewField === "true",
         })
         yield* wakeWorker
         return json(episode, 201)
@@ -249,24 +183,6 @@ const workerRoutes = HttpRouter.addAll([
         const samples = yield* SampleRepo
         const work = yield* (yield* EpisodeRepo).claim(body.workerId, body.voices, samples.claim)
         return work === null ? noContent : json({ work })
-      }),
-    ),
-  ),
-  HttpRouter.route(
-    "GET",
-    "/api/worker/jobs/:id/source",
-    worker(
-      Effect.gen(function* () {
-        const params = yield* HttpRouter.schemaParams(SourceParams)
-        const { source, userId } = yield* (yield* EpisodeRepo).holdLease(params.id, params.leaseToken)
-        if (source._tag !== "File") return yield* new BadRequest({ message: "Source is not a file" })
-        const object = yield* (yield* MediaStore).get(keys.upload(userId, params.id, source.fileName), null)
-        if (object === null) return yield* new BadRequest({ message: "Uploaded file is missing" })
-        return HttpServerResponse.raw(
-          new Response(object.body, {
-            headers: { "content-type": source.contentType, "content-length": String(object.size) },
-          }),
-        )
       }),
     ),
   ),
@@ -416,6 +332,7 @@ export const routes = Layer.mergeAll(
   sampleRoutes,
   timingRoutes,
   transcriptRoutes,
+  uploadRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

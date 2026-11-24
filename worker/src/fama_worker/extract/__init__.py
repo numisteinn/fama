@@ -12,14 +12,16 @@ from fama_worker.model import Document, FileSource, Source, TextSource, UrlSourc
 _SUFFIX_BY_TYPE = {
     "application/pdf": ".pdf",
     "application/epub+zip": ".epub",
+    "application/xhtml+xml": ".xhtml",
     "text/html": ".html",
     "text/markdown": ".md",
     "text/plain": ".txt",
 }
 
 
-def _file(path: Path, content_type: str | None) -> Document:
-    suffix = path.suffix.lower() or _SUFFIX_BY_TYPE.get((content_type or "").split(";")[0], "")
+def _file(path: Path, content_type: str | None, base_url: str | None = None) -> Document:
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    suffix = path.suffix.lower() or _SUFFIX_BY_TYPE.get(media_type, "")
     if suffix == ".pdf":
         from fama_worker.extract.pdf import extract_pdf
 
@@ -28,6 +30,11 @@ def _file(path: Path, content_type: str | None) -> Document:
         from fama_worker.extract.epub import extract_epub
 
         return extract_epub(path)
+    if base_url is not None and suffix in (".html", ".htm", ".xhtml"):
+        from fama_worker.extract.web import from_uploaded_html
+
+        document, declared = from_uploaded_html(path.read_bytes(), content_type or "", base_url)
+        return dataclasses.replace(document, language=declared)
     text = path.read_text(encoding="utf-8", errors="replace")
     if suffix in (".html", ".htm", ".xhtml"):
         from fama_worker.extract.web import from_html
@@ -61,8 +68,8 @@ def extract(source: Source, language: str | None = None) -> Document:
             from fama_worker.extract.plain import from_text
 
             document = from_text(text, title)
-        case FileSource(path, content_type):
-            document = _file(path, content_type)
+        case FileSource(path, content_type, base_url):
+            document = _file(path, content_type, base_url)
     declared = document.language or None
     chapters = split_long(list(document.chapters))
     if not chapters:

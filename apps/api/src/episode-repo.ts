@@ -20,7 +20,7 @@ import { Bindings } from "./bindings.ts"
 import { DatabaseError, query } from "./db.ts"
 import type { FeedItem } from "./feed.ts"
 import * as Job from "./job.ts"
-import { keys, mediaPath } from "./media-store.ts"
+import { keys, mediaPath, MediaStore, type StorageError } from "./media-store.ts"
 import { randomToken, sha256Hex } from "./secrets.ts"
 import { hasTranscript } from "./transcript.ts"
 
@@ -193,7 +193,7 @@ export interface Interface {
     workerId: WorkerId,
     voices: ReadonlyArray<Voice>,
     claimSample: Effect.Effect<ClaimedSample | null, Failure>,
-  ) => Effect.Effect<Work | null, Failure>
+  ) => Effect.Effect<Work | null, Failure | StorageError, MediaStore>
   readonly progress: (id: string, request: ProgressRequest) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly complete: (
     id: string,
@@ -471,12 +471,19 @@ export const layer = Layer.effect(
       const staleBefore = new Date(at - LEASE_MS).toISOString()
       const candidates = yield* all(
         "episode.candidates",
-        `SELECT id FROM episodes
+        `SELECT id, user_id, source FROM episodes
          WHERE (job_state = 'Queued' AND review IS NOT 'Open') OR (job_state = 'Running' AND heartbeat_at <= ?)
          ORDER BY queued_at, id LIMIT 10`,
         staleBefore,
-      ).pipe(Effect.flatMap(decodeRows(Schema.Struct({ id: Schema.String }))))
-      for (const { id } of candidates) {
+      ).pipe(Effect.flatMap(decodeRows(Schema.Struct({
+        id: Schema.String,
+        user_id: UserId,
+        source: Schema.fromJsonString(Source),
+      }))))
+      const mediaStore = yield* MediaStore
+      for (const { id, user_id, source } of candidates) {
+        const hasUpload = source._tag === "File" ||
+          (source._tag === "Url" && (yield* mediaStore.head(keys.linkedUpload(user_id, id))) !== null)
         const leaseToken = randomToken()
         const leaseHash = yield* leaseOf(leaseToken)
         const claimed = yield* transition(id, (job, at) => Job.claim(job, { workerId, now: at }), {
@@ -491,7 +498,7 @@ export const layer = Layer.effect(
           episodeId: claimed.id,
           leaseToken,
           source: Schema.encodeSync(Source)(claimed.source),
-          sourcePath: claimed.source._tag === "File" ? `/api/worker/jobs/${claimed.id}/source` : null,
+          sourcePath: hasUpload ? `/api/worker/jobs/${claimed.id}/source` : null,
           documentPath: claimed.document_size === null ? null : `/api/worker/jobs/${claimed.id}/document`,
           coverPath: claimed.cover_key === null ? null : `/api/worker/jobs/${claimed.id}/cover`,
           voice: claimed.voice,

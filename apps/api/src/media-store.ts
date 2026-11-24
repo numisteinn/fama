@@ -12,6 +12,7 @@ const userPrefix = (userId: string) => `users/${userId}/`
 export const keys = {
   upload: (userId: string, episodeId: string, fileName: string) =>
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
+  linkedUpload: (userId: string, episodeId: string) => keys.upload(userId, episodeId, "page"),
   chapter: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
   sample: (userId: string, episodeId: string, voice: string) =>
