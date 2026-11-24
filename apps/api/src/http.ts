@@ -24,6 +24,7 @@ import { mediaResponse } from "./media.ts"
 import { timingRoutes } from "./routes/timing.ts"
 import { documentRoutes } from "./routes/document.ts"
 import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, TooLarge, webRequest, worker } from "./routes/kit.ts"
+import { reviewRoutes } from "./routes/review.ts"
 import { Wake } from "./wake.ts"
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
@@ -102,6 +103,7 @@ const clientRoutes = HttpRouter.addAll([
           title: provisionalTitle(body.source),
           voice: body.voice,
           speed: body.speed,
+          review: body.review,
         })
         yield* wakeWorker
         return json(episode, 201)
@@ -128,6 +130,8 @@ const clientRoutes = HttpRouter.addAll([
         const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
         const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
         if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
+        const reviewField = form.get("review") ?? "false"
+        if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
         const id = EpisodeId.make(crypto.randomUUID())
         const fileName = safeFileName(file.name)
         const contentType = file.type || "application/octet-stream"
@@ -135,7 +139,14 @@ const clientRoutes = HttpRouter.addAll([
         yield* store.put(keys.upload(userId, id, fileName), file, contentType)
         const repo = yield* EpisodeRepo
         const source: Source = { _tag: "File", fileName, contentType }
-        const episode = yield* repo.create(userId, { id, source, title: provisionalTitle(source), voice, speed })
+        const episode = yield* repo.create(userId, {
+          id,
+          source,
+          title: provisionalTitle(source),
+          voice,
+          speed,
+          review: reviewField === "true",
+        })
         yield* wakeWorker
         return json(episode, 201)
       }),
@@ -401,6 +412,7 @@ export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
   documentRoutes,
+  reviewRoutes,
   timingRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),

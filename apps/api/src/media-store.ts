@@ -19,6 +19,8 @@ export const keys = {
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+  documentRevision: (userId: string, episodeId: string, digest: string) =>
+    `${userPrefix(userId)}documents/${episodeId}/${digest}.json`,
   document: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/document.json`,
 }
 
@@ -98,6 +100,7 @@ export const layer = Layer.effect(
 
     const deleteEpisode = Effect.fn("MediaStore.deleteEpisode")(function* (userId: string, episodeId: string) {
       yield* deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/`)
+      yield* deletePrefix(`${userPrefix(userId)}documents/${episodeId}/`)
       yield* deletePrefix(`${userPrefix(userId)}uploads/${episodeId}/`)
     })
 
