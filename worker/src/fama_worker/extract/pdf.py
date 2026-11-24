@@ -67,7 +67,34 @@ def _prose(text: str) -> bool:
 
 
 def _edge_key(text: str) -> str:
-    return re.sub(r"\d+", "#", text.lower())
+    """One key for a running line on all pages: its number changes, and its parts change sides on facing pages."""
+    return " ".join(sorted(re.sub(r"\d+", "#", text.lower()).split()))
+
+
+def _edge_keys(blocks: list[_Block], texts: list[str]) -> dict[int, set[str]]:
+    """The blocks nearest to the top and the bottom of the page, each with the keys a running line can have there.
+
+    The place on the page decides, not the reading order: columns of small blocks can put a header anywhere in it.
+    A header can also come in more than one block, so the text of its full row gives a second key.
+    """
+    by_top = sorted(range(len(blocks)), key=lambda i: blocks[i].y0)
+    by_bottom = sorted(range(len(blocks)), key=lambda i: blocks[i].y1)
+
+    def row_text(block: _Block) -> str:
+        def same_row(other: _Block) -> bool:
+            overlap = min(block.y1, other.y1) - max(block.y0, other.y0)
+            return overlap > 0.5 * min(block.y1 - block.y0, other.y1 - other.y0)
+
+        return " ".join(text for other, text in zip(blocks, texts) if same_row(other))
+
+    return {
+        index: {
+            _edge_key(text)
+            for text in (texts[index], row_text(blocks[index]))
+            if len(text.split()) <= RUNNING_MAX_WORDS
+        }
+        for index in {*by_top[:EDGE_BLOCKS], *by_bottom[-EDGE_BLOCKS:]}
+    }
 
 
 _Box = tuple[float, float, float, float]  # left, bottom, right, top in PDF page space
@@ -254,7 +281,8 @@ def _extract_lines(page) -> tuple[float, list[_Line]]:
             mid_y = (rect.top + rect.bottom) / 2
             clip = clips.get(ctypes.cast(pdfium_c.FPDFText_GetTextObject(tp, char_idx), ctypes.c_void_p).value) if clips else None
             if not _inside(page_box, mid_x, mid_y) or (clip is not None and not _inside(clip, mid_x, mid_y)):
-                flush()  # a hidden glyph also ends the visible line before it
+                if chars and chars[-1] != " ":
+                    chars.append(" ")  # the visible text on each side of a hidden glyph stays two words
                 continue
             cx0 = float(rect.left)
             cy0 = page_h - float(rect.top)
@@ -414,6 +442,7 @@ def _order_blocks(blocks: list[_Block], page_w: float) -> list[_Block]:
 
 def _pages(doc) -> tuple[list[list[str]], list[_Line]]:
     pages: list[list[str]] = []
+    page_edges: list[dict[int, set[str]]] = []
     first_page_lines: list[_Line] = []
     for idx in range(len(doc)):
         page = doc[idx]
@@ -423,24 +452,24 @@ def _pages(doc) -> tuple[list[list[str]], list[_Line]]:
             page.close()
         if idx == 0:
             first_page_lines = lines
-        blocks = _order_blocks(_group_blocks(lines), page_w)
-        texts = [_block_text(block.lines) for block in blocks]
-        pages.append([t for t in texts if t])
+        blocks = [(block, text) for block in _order_blocks(_group_blocks(lines), page_w) if (text := _block_text(block.lines))]
+        texts = [text for _, text in blocks]
+        pages.append(texts)
+        page_edges.append(_edge_keys([block for block, _ in blocks], texts))
 
     edges: Counter[str] = Counter()
-    for blocks in pages:
-        for text in {*blocks[:EDGE_BLOCKS], *blocks[-EDGE_BLOCKS:]}:
-            edges[_edge_key(text)] += 1
+    for edge in page_edges:
+        edges.update(set().union(*edge.values()))
     threshold = max(3, REPEAT_SHARE * len(pages))
     running = {key for key, count in edges.items() if count >= threshold}
 
-    def keep(index: int, blocks: list[str]) -> bool:
-        text = blocks[index]
-        at_edge = index < EDGE_BLOCKS or index >= len(blocks) - EDGE_BLOCKS
-        is_running = len(text.split()) <= RUNNING_MAX_WORDS and _edge_key(text) in running
-        return not (at_edge and (_PAGE_NUMBER.match(text) or is_running))
+    def keep(text: str, keys: set[str] | None) -> bool:
+        return keys is None or not (_PAGE_NUMBER.match(text) or keys & running)
 
-    cleaned = [[b for i, b in enumerate(blocks) if keep(i, blocks) and _prose(b)] for blocks in pages]
+    cleaned = [
+        [text for i, text in enumerate(texts) if keep(text, edge.get(i)) and _prose(text)]
+        for texts, edge in zip(pages, page_edges)
+    ]
     return cleaned, first_page_lines
 
 
