@@ -2,8 +2,8 @@ import type { SourceInput, VoiceRef } from "@fama/contracts"
 import * as Clipboard from "expo-clipboard"
 import * as DocumentPicker from "expo-document-picker"
 import * as Haptics from "expo-haptics"
-import { useFocusEffect, useRouter } from "expo-router"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter } from "expo-router"
+import { useEffect, useRef, useState } from "react"
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native"
 import { EpisodeOptions } from "../../../components/Options"
 import { Button, Icon, Tap } from "../../../components/ui"
@@ -19,22 +19,9 @@ const FILE_TYPES = ["application/pdf", "application/epub+zip", "text/plain", "te
 
 const isUrl = (value: string) => /^https?:\/\/\S+\.\S+$/i.test(value.trim())
 
-/** A link on the clipboard, copied as a URL or as plain text. Checks first, so no paste prompt without a candidate. */
-async function clipboardLink(): Promise<string | null> {
-  if (await Clipboard.hasUrlAsync()) {
-    const url = await Clipboard.getUrlAsync()
-    if (url && isUrl(url)) return url
-  }
-  if (await Clipboard.hasStringAsync()) {
-    const text = (await Clipboard.getStringAsync()).trim()
-    if (isUrl(text)) return text
-  }
-  return null
-}
-
 export default function AddScreen() {
   const router = useRouter()
-  const { api, connection } = useSettings()
+  const { api } = useSettings()
   const library = useLibrary()
   const [mode, setMode] = useState<Mode>("Link")
   const [link, setLink] = useState("")
@@ -45,24 +32,6 @@ export default function AddScreen() {
   const [voice, setVoice] = useState<VoiceRef | null>(null)
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
-
-  // A link on the clipboard fills an empty field, once each time the screen comes into view. Not after each edit,
-  // so the listener can clear the field. A link it already offered, or one on the Fama server itself (the feed URL
-  // from Settings), it never offers.
-  const linkRef = useRef(link)
-  linkRef.current = link
-  const offered = useRef<string | null>(null)
-  const serverUrl = connection?.serverUrl ?? null
-  useFocusEffect(
-    useCallback(() => {
-      if (linkRef.current !== "") return
-      void clipboardLink().then((url) => {
-        if (!url || url === offered.current || (serverUrl !== null && url.startsWith(serverUrl))) return
-        offered.current = url
-        setLink((current) => (current === "" ? url : current))
-      })
-    }, [serverUrl]),
-  )
 
   const sending = Batch.isSending(files)
   const ready = mode === "Link" ? isUrl(link) : mode === "Text" ? text.trim().length > 0 : Batch.hasAttached(files)
@@ -145,21 +114,37 @@ export default function AddScreen() {
       </View>
 
       {mode === "Link" ? (
-        <TextInput
-          style={styles.input}
-          value={link}
-          onChangeText={setLink}
-          placeholder="https://"
-          placeholderTextColor={colors.textTertiary}
-          keyboardType="url"
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-          returnKeyType="go"
-          onSubmitEditing={() => ready && void create()}
-          selectionColor={colors.accent}
-          accessibilityLabel="Link"
-        />
+        <View style={styles.linkRow}>
+          <TextInput
+            style={[styles.input, styles.linkInput]}
+            value={link}
+            onChangeText={setLink}
+            placeholder="https://"
+            placeholderTextColor={colors.textTertiary}
+            keyboardType="url"
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+            returnKeyType="go"
+            onSubmitEditing={() => ready && void create()}
+            selectionColor={colors.accent}
+            accessibilityLabel="Link"
+          />
+          {/* The system Paste button reads the clipboard without the iOS paste prompt: the tap is the permission. */}
+          {link === "" && Clipboard.isPasteButtonAvailable ? (
+            <Clipboard.ClipboardPasteButton
+              style={styles.paste}
+              acceptedContentTypes={["plain-text"]}
+              displayMode="labelOnly"
+              cornerStyle="capsule"
+              backgroundColor={colors.surfaceRaised}
+              foregroundColor={colors.text}
+              onPress={(data) => {
+                if (data.type === "text") setLink(data.text.trim())
+              }}
+            />
+          ) : null}
+        </View>
       ) : null}
 
       {mode === "Text" ? (
@@ -274,6 +259,9 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: colors.text,
   },
+  linkRow: { flexDirection: "row", alignItems: "center", borderRadius: radius.md, backgroundColor: colors.surface, paddingRight: space.sm },
+  linkInput: { flex: 1, backgroundColor: "transparent" },
+  paste: { width: 84, height: 36 },
   textGroup: { gap: space.sm },
   body: { minHeight: 220, paddingTop: space.lg, paddingBottom: space.lg, lineHeight: 24 },
   file: { minHeight: 120, borderRadius: radius.md, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: space.sm, padding: space.lg },
