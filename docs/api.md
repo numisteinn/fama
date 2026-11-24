@@ -48,7 +48,7 @@ The client routes see only the token user's episodes.
 `job` is one of:
 
 - `{_tag:"Queued"}`
-- `{_tag:"Running", workerId, stage, done, total, heartbeatAt}` with `stage` in `extracting | synthesizing | encoding | uploading`
+- `{_tag:"Running", workerId, stage, done, total, heartbeatAt, remainingMs}` with `stage` in `extracting | synthesizing | encoding | uploading`. `remainingMs` is the worker's estimate of the wall time until `Ready`, as of `heartbeatAt`, or `null` when it has none
 - `{_tag:"Ready", finishedAt}`
 - `{_tag:"Failed", reason, failedAt}`
 
@@ -86,7 +86,7 @@ A worker loops: claim, process, report. All calls are idempotent. A crash at any
 |---|---|---|
 | `POST /api/worker/claim` | `{ workerId, voices: Voice[] }` | `200 { job: ClaimedJob }` or `204` when no work |
 | `GET /api/worker/jobs/:id/source?leaseToken=<urlenc>` | | the uploaded file bytes (File sources only) |
-| `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice }` | `204`. Also the heartbeat |
+| `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice, remainingMs }` | `204`. Also the heartbeat |
 | `PUT /api/worker/jobs/:id/chapters/:index?workerId=<urlenc>&leaseToken=<urlenc>&title=<urlenc>&durationMs=<int>` | `audio/mp4` bytes (`.m4a`) | `204`. Overwrites the same index |
 | `PUT /api/worker/jobs/:id/book?workerId=<urlenc>&leaseToken=<urlenc>` | `audio/mp4` bytes (`.m4b`) | `204` |
 | `PUT /api/worker/jobs/:id/cover?workerId=<urlenc>&leaseToken=<urlenc>` | `image/jpeg` or `image/png` | `204` |
@@ -102,6 +102,7 @@ Rules:
 - A call whose `leaseToken` is not the current claim's (another worker claimed the job since, or the job went back to `Queued`), or whose job is no longer `Running`, gets `409`. The worker then drops the job. A repeated `complete` or `fail` with the same lease after it took effect gets `204`.
 - Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
+- `remainingMs` is a whole number of milliseconds, 0 or more, or `null`. The worker measures its own speed in this job: only chunks the engine made count, not chunks from its cache. It moves the estimate slower than the clock, so the time left goes down from one heartbeat to the next. It sends `null` before it has measured enough chunks and after narration. A worker that leaves the field out sends `null`.
 
 ## Connect link
 

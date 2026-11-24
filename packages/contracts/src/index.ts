@@ -1,4 +1,4 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 
 export * from "./connect.ts"
 
@@ -41,6 +41,9 @@ export const Source = Schema.TaggedUnion({
 })
 export type Source = typeof Source.Type
 
+/** A whole number of milliseconds, 0 or more. */
+const Millis = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
+
 export const Stage = Schema.Literals(["extracting", "synthesizing", "encoding", "uploading"])
 export type Stage = typeof Stage.Type
 
@@ -52,6 +55,8 @@ export const JobState = Schema.TaggedUnion({
     done: Schema.Number,
     total: Schema.Number,
     heartbeatAt: Schema.String,
+    /** The worker's estimate of the wall time until Ready, as of `heartbeatAt`. `null` when it has none. */
+    remainingMs: Schema.NullOr(Millis),
   },
   Ready: { finishedAt: Schema.String },
   Failed: { reason: Schema.String, failedAt: Schema.String },
@@ -65,9 +70,6 @@ export const Chapter = Schema.Struct({
   url: Schema.String,
 })
 export interface Chapter extends Schema.Schema.Type<typeof Chapter> {}
-
-/** A whole number of milliseconds, 0 or more. */
-const Millis = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
 
 /** An ISO 8601 time that `Date.parse` reads. */
 const Instant = Schema.String.pipe(
@@ -225,6 +227,8 @@ export const ProgressRequest = Schema.Struct({
   author: Schema.NullOr(Schema.String),
   language: Schema.NullOr(Schema.String),
   voice: Schema.NullOr(VoiceRef),
+  /** Wall time until Ready, or `null` when the worker has no estimate. A worker that leaves it out sends `null`. */
+  remainingMs: Schema.NullOr(Millis).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 })
 export interface ProgressRequest extends Schema.Schema.Type<typeof ProgressRequest> {}
 
