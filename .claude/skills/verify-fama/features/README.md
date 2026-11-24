@@ -32,7 +32,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 ## Features
 
 - [Add a link](./add-link.md): paste a web article link on the web or the iPhone, and get a narrated episode with the real title, the detected language and the default voice.
-- [Add a file](./add-file.md): attach a PDF, EPUB, Markdown or text file, and get one chapter for each table-of-contents entry.
+- [Add a file](./add-file.md): attach one or many PDF, EPUB, Markdown or text files, or drop a folder, and get one episode for each, with one chapter for each table-of-contents entry.
 - [Empty Library](./empty-library.md): see folded Pan when the Library has no Episodes.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.

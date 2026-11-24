@@ -24,11 +24,10 @@ now ──┬─ F   Stored Document ──┬─ V1 Review core ──┬─ V2
       │                    ├─ R3 Reader iPhone
       │                    └─ R4 Feed transcript
       ├─ E   Time left
-      ├─ M   Add many files
       └─ X   Extraction (OCR, PDF library)
 ```
 
-Five units can start now: `F`, `R1`, `E`, `M`, `X`. After `F` and `R1` land, five more can run: `V1`, `S1`, `R2`, `R3`, `R4`.
+Four units can start now: `F`, `R1`, `E`, `X`. After `F` and `R1` land, five more can run: `V1`, `S1`, `R2`, `R3`, `R4`.
 
 ## Rules for parallel work
 
@@ -120,13 +119,6 @@ The episode row shows the time left while the job runs, not only `Narrating n/m`
 - The worker knows the characters left and its speed. `ProgressRequest` and `JobState.Running` gain `remainingMs: number | null`.
 - One unit: worker, API, contract, the row on the web and on the iPhone.
 
-### M. Add many files
-
-Pick many files, or a folder, and get one episode for each.
-
-- Clients only. The queue already handles many jobs.
-- One unit for the web add bar and the iPhone Add screen. It lands before `V2` and `V3`, which add the Review switch to the same screens.
-
 ### X. Extraction
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
@@ -153,7 +145,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
 | E | `worker/.../work.py` (`Progress`), `apps/web/src/view/library.ts`, `apps/mobile/src/components/EpisodeRow.tsx` | `0007_remaining.sql` |
-| M | `apps/web/src/view/addBar.ts`, `apps/mobile/src/app/(tabs)/add/index.tsx` | |
 | X | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 Known shared points, and who goes first:
@@ -180,6 +171,7 @@ Each has a default. A unit follows the default unless the owner says no.
 - After a stop, a job continues and keeps its finished chapters.
 - Each job keeps its own voice and narration speed.
 - Chapters come from Markdown headings in text.
+- Many files, or a dropped folder on the web, make one episode each.
 - Cover, copyright and contents pages are skipped.
 - Repeated PDF page headers, footers and page numbers are removed (`extract/pdf.py`, tested in `test_extract.py`). The old roadmap listed this as missing. If a real PDF still reads its header, add that file as a test case in lane `X`.
 - Project Gutenberg license text is removed from pasted text and from EPUB files (`extract/plain.py`, `extract/epub.py`, tested). The old roadmap listed this as missing too.
