@@ -3,11 +3,11 @@ import * as Clipboard from "expo-clipboard"
 import * as DocumentPicker from "expo-document-picker"
 import * as Haptics from "expo-haptics"
 import { useFocusEffect, useRouter } from "expo-router"
-import { useCallback, useState } from "react"
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native"
 import { EpisodeOptions } from "../../../components/Options"
 import { Button, Icon, Tap } from "../../../components/ui"
-import type { PickedFile } from "../../../lib/api"
+import * as Batch from "../../../lib/batch"
 import { useLibrary } from "../../../lib/library"
 import { useSettings } from "../../../lib/settings"
 import { colors, fonts, radius, space } from "../../../theme"
@@ -40,7 +40,8 @@ export default function AddScreen() {
   const [link, setLink] = useState("")
   const [title, setTitle] = useState("")
   const [text, setText] = useState("")
-  const [file, setFile] = useState<PickedFile | null>(null)
+  const [files, setFiles] = useState<Batch.Batch>([])
+  const nextKey = useRef(0)
   const [voice, setVoice] = useState<VoiceRef | null>(null)
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -55,23 +56,45 @@ export default function AddScreen() {
     }, [link]),
   )
 
-  const ready = mode === "Link" ? isUrl(link) : mode === "Text" ? text.trim().length > 0 : file !== null
+  const sending = Batch.isSending(files)
+  const ready = mode === "Link" ? isUrl(link) : mode === "Text" ? text.trim().length > 0 : Batch.hasAttached(files)
+
+  // One upload at a time. Each answer moves the batch on, and the next pending file starts.
+  useEffect(() => {
+    const { batch, started } = Batch.startNext(files)
+    if (!started) return
+    setFiles(batch)
+    library.upload(started.file, started.state.voice, started.state.speed).then(
+      () => setFiles((current) => Batch.succeed(current, started.key)),
+      (error: unknown) =>
+        setFiles((current) => Batch.fail(current, started.key, error instanceof Error ? error.message : "Could not add")),
+    )
+  }, [files, library])
+
+  // A batch that ends with every file sent goes to the Library. A failed or refused file keeps the user here.
+  const wasSending = useRef(false)
+  useEffect(() => {
+    if (wasSending.current && !sending && files.length === 0) {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+      router.navigate("/library")
+    }
+    wasSending.current = sending
+  }, [sending, files.length, router])
 
   const create = async () => {
+    if (mode === "File") {
+      setFiles((current) => Batch.send(current, voice, speed))
+      return
+    }
     setBusy(true)
     try {
-      if (mode === "File" && file) {
-        await library.upload(file, voice, speed)
-        setFile(null)
-      } else {
-        const source: SourceInput =
-          mode === "Link" ? { _tag: "Url", url: link.trim() } : { _tag: "Text", title: title.trim() || null, text: text.trim() }
-        await library.create(source, voice, speed)
-        if (mode === "Link") setLink("")
-        else {
-          setTitle("")
-          setText("")
-        }
+      const source: SourceInput =
+        mode === "Link" ? { _tag: "Url", url: link.trim() } : { _tag: "Text", title: title.trim() || null, text: text.trim() }
+      await library.create(source, voice, speed)
+      if (mode === "Link") setLink("")
+      else {
+        setTitle("")
+        setText("")
       }
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
       router.navigate("/library")
@@ -82,10 +105,13 @@ export default function AddScreen() {
     }
   }
 
-  const chooseFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ type: FILE_TYPES, copyToCacheDirectory: true })
-    const asset = result.canceled ? null : result.assets[0]
-    if (asset) setFile({ uri: asset.uri, name: asset.name, mimeType: asset.mimeType ?? null })
+  const chooseFiles = async () => {
+    const result = await DocumentPicker.getDocumentAsync({ type: FILE_TYPES, copyToCacheDirectory: true, multiple: true })
+    if (result.canceled || result.assets.length === 0) return
+    const picked = result.assets.map((asset) => ({ uri: asset.uri, name: asset.name, mimeType: asset.mimeType ?? null }))
+    const firstKey = nextKey.current
+    nextKey.current += picked.length
+    setFiles((current) => Batch.attach(current, picked, firstKey))
   }
 
   return (
@@ -154,18 +180,72 @@ export default function AddScreen() {
       ) : null}
 
       {mode === "File" ? (
-        <Tap style={styles.file} accessibilityRole="button" accessibilityLabel={file ? `File ${file.name}. Choose another` : "Choose file"} onPress={() => void chooseFile()}>
-          <Icon name={file ? "doc.fill" : "doc.badge.plus"} size={28} color={file ? colors.accent : colors.text} />
-          <Text style={styles.fileName} numberOfLines={2}>
-            {file ? file.name : "Choose PDF, EPUB or text"}
-          </Text>
-        </Tap>
+        files.length === 0 ? (
+          <Tap style={styles.file} accessibilityRole="button" accessibilityLabel="Choose files" onPress={() => void chooseFiles()}>
+            <Icon name="doc.badge.plus" size={28} />
+            <Text style={styles.fileName}>Choose PDF, EPUB or text</Text>
+          </Tap>
+        ) : (
+          <View style={styles.files}>
+            {files.map((item) => (
+              <FileRow
+                key={item.key}
+                item={item}
+                onRetry={() => setFiles((current) => Batch.retry(current, item.key))}
+                onRemove={() => setFiles((current) => Batch.remove(current, item.key))}
+              />
+            ))}
+            <Tap style={styles.fileRow} accessibilityRole="button" accessibilityLabel="Choose files" onPress={() => void chooseFiles()}>
+              <Icon name="plus" size={20} color={colors.accent} />
+              <Text style={[styles.rowName, { color: colors.accent }]}>Choose files</Text>
+            </Tap>
+          </View>
+        )
       ) : null}
 
       <EpisodeOptions voice={voice} speed={speed} onVoice={setVoice} onSpeed={setSpeed} />
 
-      <Button title="Create" icon="waveform" busy={busy} disabled={!ready || !api} onPress={() => void create()} style={styles.create} />
+      <Button title="Create" icon="waveform" busy={busy || (mode === "File" && sending)} disabled={!ready || !api} onPress={() => void create()} style={styles.create} />
     </ScrollView>
+  )
+}
+
+/** One picked file: its name, where it is, and why it failed. */
+function FileRow({ item, onRetry, onRemove }: { item: Batch.BatchFile; onRetry: () => void; onRemove: () => void }) {
+  const { file, state } = item
+  const reason = state._tag === "Failed" ? state.reason : state._tag === "Refused" ? "Unsupported type" : null
+  return (
+    <View style={styles.fileRow}>
+      {state._tag === "Uploading" ? (
+        <ActivityIndicator color={colors.textSecondary} style={styles.rowIcon} />
+      ) : (
+        <Icon
+          name={state._tag === "Done" ? "checkmark" : reason ? "exclamationmark.triangle" : "doc"}
+          size={20}
+          color={reason ? colors.danger : colors.textSecondary}
+        />
+      )}
+      <View style={styles.rowText}>
+        <Text style={[styles.rowName, state._tag === "Pending" && { color: colors.textSecondary }]} numberOfLines={1}>
+          {file.name}
+        </Text>
+        {reason ? (
+          <Text style={styles.rowReason} numberOfLines={2} accessibilityRole="alert">
+            {reason}
+          </Text>
+        ) : null}
+      </View>
+      {state._tag === "Failed" ? (
+        <Tap style={styles.rowButton} accessibilityRole="button" accessibilityLabel={`Retry ${file.name}`} onPress={onRetry}>
+          <Icon name="arrow.clockwise" size={18} />
+        </Tap>
+      ) : null}
+      {state._tag === "Uploading" || state._tag === "Done" ? null : (
+        <Tap style={styles.rowButton} accessibilityRole="button" accessibilityLabel={`Remove ${file.name}`} onPress={onRemove}>
+          <Icon name="xmark" size={16} color={colors.textSecondary} />
+        </Tap>
+      )}
+    </View>
   )
 }
 
@@ -190,5 +270,12 @@ const styles = StyleSheet.create({
   body: { minHeight: 220, paddingTop: space.lg, paddingBottom: space.lg, lineHeight: 24 },
   file: { minHeight: 120, borderRadius: radius.md, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: space.sm, padding: space.lg },
   fileName: { fontFamily: fonts.medium, fontSize: 17, color: colors.text, textAlign: "center" },
+  files: { borderRadius: radius.md, backgroundColor: colors.surface, paddingVertical: space.xs },
+  fileRow: { minHeight: 52, flexDirection: "row", alignItems: "center", gap: space.md, paddingLeft: space.lg, paddingRight: space.xs },
+  rowIcon: { width: 20 },
+  rowText: { flex: 1, paddingVertical: space.sm },
+  rowName: { fontFamily: fonts.medium, fontSize: 16, color: colors.text },
+  rowReason: { fontFamily: fonts.regular, fontSize: 14, color: colors.danger },
+  rowButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
   create: { marginTop: space.sm },
 })

@@ -12,6 +12,36 @@ const INTERACTIVE =
 
 const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false
 
+/** What a drop holds, taken during the event: the browser empties `dataTransfer` after it. */
+const droppedEntries = (event: DragEvent): ReadonlyArray<FileSystemEntry | File> =>
+  Array.from(event.dataTransfer?.items ?? []).flatMap((item): Array<FileSystemEntry | File> => {
+    if (item.kind !== "file") return []
+    const entry = item.webkitGetAsEntry()
+    if (entry) return [entry]
+    const file = item.getAsFile()
+    return file ? [file] : []
+  })
+
+const readEntries = (reader: FileSystemDirectoryReader) =>
+  new Promise<Array<FileSystemEntry>>((resolve, reject) => reader.readEntries(resolve, reject))
+
+/** The files of an entry. A folder gives its files and those of its folders, by name, without hidden files. */
+const entryFiles = async (entry: FileSystemEntry): Promise<Array<File>> => {
+  if (entry instanceof FileSystemFileEntry) return [await new Promise<File>((resolve, reject) => entry.file(resolve, reject))]
+  if (!(entry instanceof FileSystemDirectoryEntry)) return []
+  const reader = entry.createReader()
+  const children: Array<FileSystemEntry> = []
+  // Each call gives a part of the folder, and an empty array at the end.
+  for (let part = await readEntries(reader); part.length > 0; part = await readEntries(reader)) children.push(...part)
+  const visible = children.filter((child) => !child.name.startsWith(".")).sort((a, b) => a.name.localeCompare(b.name))
+  return (await Promise.all(visible.map(entryFiles))).flat()
+}
+
+const droppedFiles = (entries: ReadonlyArray<FileSystemEntry | File>): Promise<Array<File>> =>
+  Promise.all(entries.map((entry) => (entry instanceof File ? [entry] : entryFiles(entry).catch(() => [])))).then(
+    (files) => files.flat(),
+  )
+
 const mediaSession = (): MediaSession | undefined =>
   typeof navigator !== "undefined" && "mediaSession" in navigator ? navigator.mediaSession : undefined
 
@@ -134,11 +164,13 @@ export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((e
           filterMapEvent: (event) => {
             if (!hasFiles(event)) return Option.none()
             event.preventDefault()
-            return Option.map(Option.fromNullishOr(event.dataTransfer?.files[0]), (file) =>
-              Message.DroppedFile({ file }),
-            )
+            return Option.some(droppedEntries(event))
           },
-        }),
+        }).pipe(
+          Stream.mapEffect((entries) =>
+            Effect.promise(() => droppedFiles(entries)).pipe(Effect.map((files) => Message.DroppedFiles({ files }))),
+          ),
+        ),
       ],
       { concurrency: "unbounded" },
     ),
