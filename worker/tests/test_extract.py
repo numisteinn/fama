@@ -240,3 +240,12 @@ def test_pdf_without_text_layer_raises_plain_error(tmp_path):
 
     with pytest.raises(ValueError, match="This PDF has no text layer"):
         extract(FileSource(path))
+
+
+def test_a_refused_page_names_the_site_and_the_code():
+    from fama_worker.extract.web import refusal
+
+    url = "https://www.mbl.is/frettir/innlent/2026/11/24/a/"
+    assert refusal(url, 403) == "mbl.is blocked the request (403)."
+    assert refusal(url, 404) == "mbl.is has no page at this link (404)."
+    assert refusal(url, 500) == "mbl.is answered with an error (500)."
