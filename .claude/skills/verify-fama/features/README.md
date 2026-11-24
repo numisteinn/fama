@@ -41,6 +41,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode, streamable book files, and a WebVTT transcript for episodes with timing files.
 - [Timing file](./timing-file.md): each chapter has a `timingUrl` that serves its Segments as JSON, and each start time is where the voice starts that sentence in the real audio.
 - [Review before narration](./review.md) lets the owner edit the Document and choose the chapters to narrate.
+- [Web review](./review-web.md) adds the Review switch and chapter editor in the web app.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
 - [Voice Samples](./voice-samples.md): request and play clips from the first paragraph of a stored Document.
 - [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.
