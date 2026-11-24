@@ -117,6 +117,14 @@ export const listMusic = icon("list-music", [
   ["path", "M21 16V5"],
   ["circle", "18", "16", "3"],
 ])
+export const bookOpenText = icon("book-open-text", [
+  ["path", "M12 7v14"],
+  ["path", "M16 12h2"],
+  ["path", "M16 8h2"],
+  ["path", "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"],
+  ["path", "M6 12h2"],
+  ["path", "M6 8h2"],
+])
 export const check = icon("check", [["path", "M20 6 9 17l-5-5"]])
 export const copy = icon("copy", [
   rect(8, 8, 14, 14, 2),
