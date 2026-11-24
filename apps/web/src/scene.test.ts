@@ -33,7 +33,16 @@ import {
   StoreConnection,
   WaitBeforeResetTypeAhead,
 } from "~/command"
-import { baseModel, connection, harbourDays, progressAt, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
+import {
+  baseModel,
+  connection,
+  harbourDays,
+  progressAt,
+  queuedArticle,
+  runningHarbourDays,
+  withEpisodes,
+  withPlayback,
+} from "~/fixture"
 import { Message } from "~/message"
 import { Playback, StoredProgress } from "~/model"
 import { apiToken } from "~/api"
@@ -256,6 +265,31 @@ describe("play and pause", () => {
       expect(role("button", { name: "Play Harbour Days" })).toExist(),
       click(role("button", { name: /^Play$/ })),
       Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+    )
+  })
+})
+
+describe("time left", () => {
+  const running = (remainingMs: number | null) => ({
+    ...runningHarbourDays,
+    job: { ...runningHarbourDays.job, remainingMs },
+  })
+
+  test("a running row shows the time left next to the stage once the worker has an estimate", () => {
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [running(130_000)])),
+      resolveAttachKeys,
+      expect(role("listitem")).toContainText("Narrating · 2 min left"),
+    )
+  })
+
+  test("without an estimate the row shows the count", () => {
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [running(null)])),
+      resolveAttachKeys,
+      expect(role("listitem")).toContainText("Narrating 3/6"),
     )
   })
 })
