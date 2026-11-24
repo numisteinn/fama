@@ -193,30 +193,27 @@ def test_pdf_skips_text_that_the_page_does_not_show(tmp_path):
 
 def test_pdf_drops_a_running_header_with_the_page_number_on_alternating_sides(tmp_path):
     path = tmp_path / "bill.pdf"
-    width, height = A4
+    _, height = A4
     places = ["Harbour", "Lighthouse", "Glacier", "Meadow", "Quarry", "Orchard",
               "Ferry", "Bakery", "Library", "Foundry", "Vineyard", "Tannery"]
     rows = ["dues", "rent", "tolls", "wages", "repairs", "grants"]
     doc = canvas.Canvas(str(path), pagesize=A4)
     doc.setTitle("Budget Bill")
     for number, place in enumerate(places, start=1):
-        # Facing pages: the number is on the outer side. The second half of the bill also names its section.
-        doc.setFont("Helvetica", 9)
-        top = height - 40
-        if number % 2:
-            doc.drawRightString(523, top, str(number))
-            doc.drawRightString(480, top, "Budget Bill 1")
-            if number > 6:
-                doc.drawString(72, top, "Section 02")
-        else:
-            doc.drawString(72, top, str(number))
-            doc.drawString(110, top, "Budget Bill 1")
-            if number > 6:
-                doc.drawRightString(523, top, "Section 02")
-        # Two columns of small blocks, as a table gives.
-        doc.setFont("Helvetica", 11)
+        # Draw the header fragments between body rows so PDFium puts them in separate blocks.
+        header = (
+            [(72, "Section 02"), (330, "Budget Bill 1"), (510, str(number))]
+            if number % 2
+            else [(72, str(number)), (180, "Budget Bill 1"), (460, "Section 02")]
+        )
         y = height - 90
-        for row in rows:
+        for index, row in enumerate(rows):
+            if index < len(header):
+                x, label = header[index]
+                if label != "Section 02" or number > 6:
+                    doc.setFont("Helvetica", 9)
+                    doc.drawString(x, height - 40, label)
+            doc.setFont("Helvetica", 11)
             doc.drawString(72, y, f"{place} {row}")
             doc.drawString(330, y, f"{place} {row} paid")
             y -= 30

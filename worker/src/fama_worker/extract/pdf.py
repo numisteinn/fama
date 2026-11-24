@@ -75,26 +75,28 @@ def _edge_keys(blocks: list[_Block], texts: list[str]) -> dict[int, set[str]]:
     """The blocks nearest to the top and the bottom of the page, each with the keys a running line can have there.
 
     The place on the page decides, not the reading order: columns of small blocks can put a header anywhere in it.
-    A header can also come in more than one block, so the text of its full row gives a second key.
+    A header can span several blocks. Give its full row key to every block on that row.
     """
     by_top = sorted(range(len(blocks)), key=lambda i: blocks[i].y0)
     by_bottom = sorted(range(len(blocks)), key=lambda i: blocks[i].y1)
 
-    def row_text(block: _Block) -> str:
-        def same_row(other: _Block) -> bool:
-            overlap = min(block.y1, other.y1) - max(block.y0, other.y0)
-            return overlap > 0.5 * min(block.y1 - block.y0, other.y1 - other.y0)
+    def same_row(block: _Block, other: _Block) -> bool:
+        overlap = min(block.y1, other.y1) - max(block.y0, other.y0)
+        return overlap > 0.5 * min(block.y1 - block.y0, other.y1 - other.y0)
 
-        return " ".join(text for other, text in zip(blocks, texts) if same_row(other))
+    keys: dict[int, set[str]] = {}
+    for index in {*by_top[:EDGE_BLOCKS], *by_bottom[-EDGE_BLOCKS:]}:
+        block_keys = keys.setdefault(index, set())
+        if len(texts[index].split()) <= RUNNING_MAX_WORDS:
+            block_keys.add(_edge_key(texts[index]))
 
-    return {
-        index: {
-            _edge_key(text)
-            for text in (texts[index], row_text(blocks[index]))
-            if len(text.split()) <= RUNNING_MAX_WORDS
-        }
-        for index in {*by_top[:EDGE_BLOCKS], *by_bottom[-EDGE_BLOCKS:]}
-    }
+        row = [i for i, other in enumerate(blocks) if same_row(blocks[index], other)]
+        text = " ".join(texts[i] for i in row)
+        if len(text.split()) <= RUNNING_MAX_WORDS:
+            key = _edge_key(text)
+            for i in row:
+                keys.setdefault(i, set()).add(key)
+    return keys
 
 
 _Box = tuple[float, float, float, float]  # left, bottom, right, top in PDF page space

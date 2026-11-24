@@ -9,7 +9,7 @@ A user attaches a PDF, EPUB, Markdown, plain text or HTML file. Fama uploads it,
 - `file-ios-pick` picks a file with `Choose file` on the iPhone (document picker).
 - `file-ios-share` shares a PDF or EPUB to Fama from another app.
 - `file-epub` makes one chapter for each nav entry, with the book's title and author.
-- `file-pdf` makes one chapter for each outline entry, without running headers and page numbers.
+- `file-pdf` makes one chapter for each outline entry, without running headers, page numbers, or text hidden outside the page or by a clip path.
 - `file-remove` removes an attached file before submit (`Remove file`).
 
 ## How to get to it (user POV)
@@ -31,6 +31,7 @@ Preconditions:
 - **Web, submit.** Choose `Add`. The preview network log has `POST /api/episodes/upload` with status 201. A row with status `Queued` appears.
 - **EPUB chapters.** Run `preview_wait_for {locator: 'role=button[name="Play Harbour Days"]', timeoutMs: 60000}`, then `fama-verify wait <id>`. The output starts with `Ready`, with title `Harbour Days`, chapters `Morning` and `Evening` in that order, and a `bookUrl`.
 - **PDF chapters.** Upload `harbour-notes.pdf` the same way. `fama-verify wait <id>` shows title `Harbour Notes` and chapters `Part One` and `Part Two`.
+- **PDF running headers.** Run `uv run pytest -q tests/test_extract.py -k 'alternating_sides or page_does_not_show'` from `worker/`. The checks use PDFs with a page number on alternating sides, separate blocks on the same header row, and text hidden by the page box or a clip path. Check that visible body text remains.
 - **Markdown.** Upload `harbour.md`. `fama-verify wait <id>` shows title `Harbour Note` and one chapter.
 - **iPhone, pick.** Run `$AD press 'label="Add"'`, `$AD press 'label="File"'`, `$AD press 'label="Choose file"'`, pick `harbour-days.epub` in the picker, check that the button now reads `File harbour-days.epub. Choose another`, then `$AD press 'label="Create"' --settle`. The app goes to `Library`, and `fama-verify wait <id>` shows the same chapters as on the web.
 - **Proof.** Web: `preview_snapshot {save: true}` with the file attached and again with the ready row, copied to `$EVIDENCE/file-web/`. Save each `wait` line to `$EVIDENCE/file-web/<fixture>.txt`.
