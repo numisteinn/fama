@@ -10,6 +10,8 @@ const item = (overrides: Partial<FeedItem> = {}): FeedItem => ({
   bookUrl: "https://fama.example/media/secret/episodes/ep-1/book.m4b",
   bookSize: 12345,
   coverUrl: null,
+  language: null,
+  transcriptUrl: null,
   ...overrides,
 })
 
@@ -26,6 +28,7 @@ describe("renderFeed", () => {
   it("renders an Apple Podcasts channel", () => {
     const xml = channel([])
     expect(xml).toContain('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"')
+    expect(xml).toContain('xmlns:podcast="https://podcastindex.org/namespace/1.0"')
     expect(xml).toContain("<title>Fama</title>")
     expect(xml).toContain("<itunes:author>Fama</itunes:author>")
     expect(xml).toContain('<itunes:image href="https://fama.example/feed/secret/cover.jpg"/>')
@@ -64,10 +67,25 @@ describe("renderFeed", () => {
     expect(itemXml).not.toContain("<itunes:author>")
     expect(itemXml).not.toContain("<itunes:duration>")
     expect(itemXml).not.toContain("<itunes:image")
+    expect(itemXml).not.toContain("<podcast:transcript")
   })
 
   it("adds the episode cover when there is one", () => {
     const xml = channel([item({ coverUrl: "https://fama.example/media/secret/episodes/ep-1/cover.jpg" })])
     expect(xml).toContain('<itunes:image href="https://fama.example/media/secret/episodes/ep-1/cover.jpg"/>')
+  })
+
+  it("links the WebVTT transcript with the episode language", () => {
+    const xml = channel([
+      item({ transcriptUrl: "https://fama.example/media/a&b/episodes/ep-1/transcript.vtt", language: "is" }),
+    ])
+    expect(xml).toContain(
+      '<podcast:transcript url="https://fama.example/media/a&amp;b/episodes/ep-1/transcript.vtt" type="text/vtt" language="is"/>',
+    )
+  })
+
+  it("leaves the language out of the transcript tag when it is unknown", () => {
+    const xml = channel([item({ transcriptUrl: "https://fama.example/t.vtt" })])
+    expect(xml).toContain('<podcast:transcript url="https://fama.example/t.vtt" type="text/vtt"/>')
   })
 })

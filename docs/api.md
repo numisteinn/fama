@@ -80,6 +80,19 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 - `endsParagraph` is `true` on the last Segment of a paragraph. The spoken title, author and chapter title come first, each as its own paragraph. The Document text does not have them.
 - The last `endMs` is the chapter's `durationMs`, within 50 ms.
 
+## Feed and transcript
+
+`GET /feed/<feedToken>/rss.xml` is RSS 2.0 with the iTunes and the Podcasting 2.0 (`xmlns:podcast="https://podcastindex.org/namespace/1.0"`) namespaces. It has one item for each `Ready` episode with a book file, newest first. The enclosure is the book file (`audio/x-m4a`).
+
+An item has `<podcast:transcript url="<origin>/media/<feedToken>/episodes/<episodeId>/transcript.vtt" type="text/vtt" language="<language>"/>` when each chapter of the episode has a timing file. An episode with a chapter made before timing files has no tag. `language` is the episode's language, left out when it is unknown.
+
+`GET` or `HEAD` on the transcript path returns WebVTT as `text/vtt; charset=utf-8`, with `Range` support. It is `404` while the job is not `Ready`, or when a chapter has no timing file.
+
+- One cue for each Segment, in reading order. The spoken title Segments are cues too, because they are in the audio.
+- A cue is on the episode timeline, the timeline of the book file: the Segment's `startMs` and `endMs` plus the durations of the chapters before it. These sums are the chapter marks of the book file. A cue ends at the end of its chapter at the latest.
+- The cue text is the Segment `text` on one line: white space runs become one space, and `&`, `<`, `>` are escaped (`&amp;`, `&lt;`, `&gt;`). A Segment with empty text keeps its cue time.
+- The API makes the file on the first request after a `Ready` and stores it. Later requests read the stored file.
+
 ## Listening progress
 
 `EpisodeProgress` is `{ positionMs, updatedAt }`. `positionMs` is a whole number of milliseconds, 0 or more, on the whole episode timeline (all chapters in order). `updatedAt` is an ISO 8601 time: when the listener was at that position.
@@ -165,6 +178,7 @@ Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves 
 - `users/<userId>/episodes/<episodeId>/chapters/<index:000>.m4a`
 - `users/<userId>/episodes/<episodeId>/chapters/<index:000>.json` (the timing file)
 - `users/<userId>/episodes/<episodeId>/book.m4b`
+- `users/<userId>/episodes/<episodeId>/transcript/<finishedAtMs>.vtt` (the transcript of the `Ready` that finished at that time, in ms since the epoch; the media path `episodes/<episodeId>/transcript.vtt` serves it)
 - `users/<userId>/episodes/<episodeId>/cover.<ext>`
 - `users/<userId>/episodes/<episodeId>/document.json`
 

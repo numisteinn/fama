@@ -16,6 +16,8 @@ export const keys = {
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
   timing: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.json`,
+  /** The media path of the transcript. The object the API stores for one Ready is under `transcript/`. */
+  transcript: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/transcript.vtt`,
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
