@@ -4,10 +4,12 @@
 Run from the repo root: uv run --project worker python .claude/skills/verify-fama/scripts/make-fixtures.py
 """
 
+import textwrap
 import zipfile
 from pathlib import Path
 
-import pymupdf
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 OUT = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -62,14 +64,23 @@ def epub(path: Path, title: str, chapters: list[tuple[str, list[str]]]) -> None:
 
 
 def pdf(path: Path) -> None:
-    doc = pymupdf.open()
-    for part, text in (("Part One", EN[0]), ("Part Two", EN[2])):
-        page = doc.new_page()
-        page.insert_text((72, 100), part, fontsize=18)
-        page.insert_textbox(pymupdf.Rect(72, 140, 520, 400), text, fontsize=11)
-    doc.set_toc([[1, "Part One", 1], [1, "Part Two", 2]])
-    doc.set_metadata({"title": "Harbour Notes", "author": "Fama Fixtures"})
-    doc.save(path)
+    _, height = A4
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.setTitle("Harbour Notes")
+    doc.setAuthor("Fama Fixtures")
+    for idx, (part, text) in enumerate((("Part One", EN[0]), ("Part Two", EN[2]))):
+        key = f"part-{idx}"
+        doc.bookmarkPage(key)
+        doc.addOutlineEntry(part, key, level=0)
+        doc.setFont("Helvetica-Bold", 18)
+        doc.drawString(72, height - 100, part)
+        doc.setFont("Helvetica", 11)
+        y = height - 140
+        for line in textwrap.wrap(text, width=82):
+            doc.drawString(72, y, line)
+            y -= 15
+        doc.showPage()
+    doc.save()
 
 
 if __name__ == "__main__":

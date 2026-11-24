@@ -12,7 +12,7 @@ A user attaches one or many PDF, EPUB, Markdown, plain text or HTML files, or dr
 - `file-ios-pick` picks one or many files with `Choose files` on the iPhone (document picker).
 - `file-ios-share` shares a PDF or EPUB to Fama from another app.
 - `file-epub` makes one chapter for each nav entry, with the book's title and author.
-- `file-pdf` makes one chapter for each outline entry, without running headers and page numbers.
+- `file-pdf` makes one chapter for each outline entry, without running headers, page numbers, or text hidden outside the page or by a clip path.
 - `file-remove` removes a file before submit, or a failed or refused file after (`Remove <name>`).
 
 ## How to get to it (user POV)
@@ -36,6 +36,7 @@ Preconditions:
 - **Web, drop.** The preview tools cannot drop OS files. Dispatch a synthetic drop with `preview_evaluate`: build a `DataTransfer`, `items.add(new File([...], "dropped-one.md"))` for each file, then `window.dispatchEvent(new DragEvent("drop", {dataTransfer, bubbles: true, cancelable: true}))`. The add bar shows one row for each file.
 - **EPUB chapters.** Run `preview_wait_for {locator: 'role=button[name="Play Harbour Days"]', timeoutMs: 60000}`, then `fama-verify wait <id>`. The output starts with `Ready`, with title `Harbour Days`, chapters `Morning` and `Evening` in that order, and a `bookUrl`.
 - **PDF chapters.** Upload `harbour-notes.pdf` the same way. `fama-verify wait <id>` shows title `Harbour Notes` and chapters `Part One` and `Part Two`.
+- **PDF running headers.** Run `uv run pytest -q tests/test_extract.py -k 'alternating_sides or page_does_not_show'` from `worker/`. The checks use PDFs with a page number on alternating sides, separate blocks on the same header row, and text hidden by the page box or a clip path. Check that visible body text remains.
 - **Markdown.** Upload `harbour.md`. `fama-verify wait <id>` shows title `Harbour Note` and one chapter.
 - **iPhone, pick many.** Run `$AD press 'label="Add"'`, `$AD press 'label="File"'`, `$AD press 'label="Choose files"'`. In the picker choose `Browse` if it opens on `Recents`, then press the cells `harbour-days.epub, epub, …` and `harbour-notes, pdf, …` (the cell labels carry the time and size, so read them from `snapshot -i`). Each gets a tick. Press `Open` (see Gotchas). The Add screen shows `Remove harbour-days.epub` and `Remove harbour-notes.pdf`. `$AD press 'label="Create"'`. The app goes to `Library` with both episodes, and `fama-verify wait <id>` shows the same chapters as on the web.
 - **Proof.** Web: `preview_snapshot {save: true}` with the files attached, with the ready rows, and with the refused row, copied to `$EVIDENCE/file-web-batch/`. iPhone: `$AD screenshot` of the ticked picker, the attached rows and the Library, in `$EVIDENCE/file-ios-batch/`. Save each `wait` line next to them.
