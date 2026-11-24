@@ -35,6 +35,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Add a file](./add-file.md): attach one or many PDF, EPUB, Markdown or text files, or drop a folder, and get one episode for each, with one chapter for each table-of-contents entry.
 - [Empty Library](./empty-library.md): see folded Pan when the Library has no Episodes.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
+- [Read along on iPhone](./reader-ios.md) covers the mark, sentence taps, scrolling and offline text.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
 - [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode and streamable book files.

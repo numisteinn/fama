@@ -22,12 +22,11 @@ now ──┬─ V1 Review core ──┬─ V2 Review web ─────┬─
       │                                              └─ N3 iPhone
       ├─ S1  Sample core
       ├─ R2  Reader web
-      ├─ R3  Reader iPhone
       ├─ R4  Feed transcript
       └─ X   Extraction (OCR, PDF library)
 ```
 
-Six units can start now: `V1`, `S1`, `R2`, `R3`, `R4`, `X`.
+Five units can start now: `V1`, `S1`, `R2`, `R4`, `X`.
 
 ## Rules for parallel work
 
@@ -55,7 +54,6 @@ First principles: the mark must never be on the wrong sentence. So each marked u
 Units:
 
 - **R2. Reader on the web.**
-- **R3. Reader on the iPhone.**
 - **R4. Transcript in the feed.** The API builds one WebVTT file for the book file from the timing files and the chapter durations, and the feed item gets a `podcast:transcript` tag.
 
 ### V. Review
@@ -113,7 +111,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | Unit | Its own files | Migration |
 |---|---|---|
 | R2 | `apps/web/src/reader/` | |
-| R3 | `apps/mobile/src/reader/` | |
 | R4 | `apps/api/src/feed.ts`, `apps/api/src/transcript.ts` | |
 | V1 | `contracts/src/review.ts`, `apps/api/src/routes/review.ts`, `apps/api/src/job.ts` | `0004_review.sql` |
 | V2, V3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
