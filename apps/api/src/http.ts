@@ -21,6 +21,7 @@ import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
+import { timingRoutes } from "./routes/timing.ts"
 import { documentRoutes } from "./routes/document.ts"
 import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, TooLarge, webRequest, worker } from "./routes/kit.ts"
 import { Wake } from "./wake.ts"
@@ -400,6 +401,7 @@ export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
   documentRoutes,
+  timingRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

@@ -116,6 +116,8 @@ fama-verify feed               # print the feed URL
 fama-verify down               # stop what this run started, keep evidence
 ```
 
+`scripts/check-timing.py <episodeId> --out <dir>` proves the timing files of an episode against its chapter audio (see `features/timing-file.md`).
+
 `scripts/make-fixtures.py` rewrites `fixtures/` (run `uv run --project worker python .claude/skills/verify-fama/scripts/make-fixtures.py`). The fixtures are short on purpose: each narrates in seconds, except `harbour-year.epub`.
 
 | Fixture | Expect |

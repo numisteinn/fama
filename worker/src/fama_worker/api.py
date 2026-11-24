@@ -133,6 +133,9 @@ class Api:
     def put_chapter(self, job: ClaimedJob, index: int, title: str, duration_ms: int, file: Path) -> None:
         self._put(job, f"chapters/{index}", file, "audio/mp4", {"title": title, "durationMs": str(duration_ms)})
 
+    def put_timing(self, job: ClaimedJob, index: int, file: Path) -> None:
+        self._put(job, f"chapters/{index}/timing", file, "application/json", {})
+
     def put_book(self, job: ClaimedJob, file: Path) -> None:
         self._put(job, "book", file, "audio/mp4", {})
 

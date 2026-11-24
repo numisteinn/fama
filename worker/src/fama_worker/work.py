@@ -110,6 +110,9 @@ class JobReporter:
         self.heartbeat.update(stage=stage, done=done, total=total)
 
     def chapter_ready(self, chapter: ChapterFile) -> None:
+        # The timing file goes first: the API lists a chapter when its audio arrives, and a stop between the two
+        # uploads leaves no chapter, so the next attempt sends both again.
+        self.api.put_timing(self.job, chapter.index, chapter.timing)
         self.api.put_chapter(self.job, chapter.index, chapter.title, chapter.duration_ms, chapter.path)
         log(f"{self.job.episode_id}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
 

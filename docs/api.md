@@ -1,6 +1,6 @@
 # Fama HTTP API
 
-The source of truth for every shape is `packages/contracts/src/index.ts` (Effect Schema). This file is the same contract in words, for the Python worker and for humans. Terms follow `CONTEXT.md`.
+The source of truth for every shape is `packages/contracts/src/` (Effect Schema; `index.ts` exports all of it). This file is the same contract in words, for the Python worker and for humans. Terms follow `CONTEXT.md`.
 
 All JSON. Tagged unions use a `_tag` field. Times are ISO 8601 strings. Nullable fields are always present and set to `null`, never left out.
 
@@ -17,7 +17,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 - A user has any number of client tokens. The server stores only their SHA-256, so it shows a client token once, when it is made.
 - A user has one feed token. It is a capability URL, so the server can print it again. `POST /api/feed/rotate` replaces it, and the old feed and media URLs stop working.
 - A wrong or missing credential gets `401`. Another user's episode gets `404`, as if it did not exist.
-- Every `url` the API returns (chapter, book, cover) is a path that starts with `/media/<feedToken>/episodes/`. Clients prefix the server origin. They never build media paths.
+- Every `url` the API returns (chapter, timing file, book, cover) is a path that starts with `/media/<feedToken>/episodes/`. Clients prefix the server origin. They never build media paths.
 - `/media/<feedToken>/<path>` serves only `episodes/...` of the feed token's user. A path with a `.` or `..` segment, or under `uploads/`, gets `404`.
 - `/media/*` supports HTTP `Range` requests (`206`), because AVPlayer and podcast apps need it.
 
@@ -42,7 +42,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 
 The client routes see only the token user's episodes.
 
-`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url}], bookUrl, coverUrl, job, progress`.
+`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url, timingUrl}], bookUrl, coverUrl, job, progress`.
 
 `progress` is the token user's `EpisodeProgress` for the episode, or `null` when there is none.
 
@@ -64,6 +64,21 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 - The worker stores the Document once, after the first extraction. The API keeps it with the episode and deletes it with the episode.
 - Audio chapter `i` narrates Document chapter `i`. `Episode.chapters[i]` is the audio of `Document.chapters[i]`.
 - The Document has no cover. The cover is a file of its own (`coverUrl`).
+
+## Timing file
+
+`timingUrl` of a chapter is the media path of its timing file, or `null` for a chapter made before timing files. A client shows no text for such a chapter. `GET` on the path returns `Timing` as `application/json`:
+
+```json
+{ "segments": [{ "text": "Hún á 3 bækur.", "startMs": 1500, "endMs": 3240, "endsParagraph": false }] }
+```
+
+- A Segment is the text of one synthesis call: one sentence, or a few short ones. `text` is the Document text, not the text the engine reads ("3 bækur", not "þrjár bækur").
+- `startMs` and `endMs` are whole milliseconds from the start of the chapter audio. Add the durations of the chapters before it to get a position on the episode timeline.
+- `startMs` is where the voice starts the text, so a seek to it starts on the first word. `endMs` is where the audio of the Segment ends: the voice has stopped, and the short silence the engine closes a call with is inside.
+- Segments are in reading order and do not overlap. The pause between two Segments is on the timeline and belongs to neither. So the Segment at a position is the last one whose `startMs` is at or before it. The first `startMs` of a chapter can be a few hundred ms after 0.
+- `endsParagraph` is `true` on the last Segment of a paragraph. The spoken title, author and chapter title come first, each as its own paragraph. The Document text does not have them.
+- The last `endMs` is the chapter's `durationMs`, within 50 ms.
 
 ## Listening progress
 
@@ -97,6 +112,7 @@ A worker loops: claim, process, report. All calls are idempotent. A crash at any
 | `GET /api/worker/jobs/:id/source?leaseToken=<urlenc>` | | the uploaded file bytes (File sources only) |
 | `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice, remainingMs }` | `204`. Also the heartbeat |
 | `PUT /api/worker/jobs/:id/chapters/:index?workerId=<urlenc>&leaseToken=<urlenc>&title=<urlenc>&durationMs=<int>` | `audio/mp4` bytes (`.m4a`) | `204`. Overwrites the same index |
+| `PUT /api/worker/jobs/:id/chapters/:index/timing?workerId=<urlenc>&leaseToken=<urlenc>` | `Timing` as JSON | `204`. Overwrites the same index. `400` when the body is not a `Timing` |
 | `PUT /api/worker/jobs/:id/book?workerId=<urlenc>&leaseToken=<urlenc>` | `audio/mp4` bytes (`.m4b`) | `204` |
 | `PUT /api/worker/jobs/:id/cover?workerId=<urlenc>&leaseToken=<urlenc>` | `image/jpeg` or `image/png` | `204` |
 | `GET /api/worker/jobs/:id/cover?leaseToken=<urlenc>` | | the cover bytes with their `Content-Type`, or `404` (`NotStored`) |
@@ -114,6 +130,7 @@ Rules:
 - The worker uploads the cover before the Document. So a stored Document means the first extraction is complete.
 - `leaseToken` is a random secret for this one claim. Every job route needs it: reads (source, Document, cover) in the query, uploads in the query, JSON `POST` writes in the body. The server stores only its SHA-256. `workerId` is for diagnostics only.
 - A call whose `leaseToken` is not the current claim's (another worker claimed the job since, or the job went back to `Queued`), or whose job is no longer `Running`, gets `409`. The worker then drops the job. A repeated `complete` or `fail` with the same lease after it took effect gets `204`.
+- The worker uploads the timing file of a chapter before the chapter audio. The API lists a chapter when its audio arrives, so a listed chapter already has its `timingUrl`, and a stop between the two uploads leaves no chapter: the next attempt sends both again.
 - Byte uploads (`PUT`) need a `Content-Length` header and are at most 100 MB.
 - The worker sends `progress` at least once a minute while it works.
 - `remainingMs` is a whole number of milliseconds, 0 or more, or `null`. The worker measures its own speed in this job: only chunks the engine made count, not chunks from its cache. It moves the estimate slower than the clock, so the time left goes down from one heartbeat to the next. It sends `null` before it has measured enough chunks and after narration. A worker that leaves the field out sends `null`.
@@ -146,6 +163,7 @@ Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves 
 
 - `users/<userId>/uploads/<episodeId>/<fileName>`
 - `users/<userId>/episodes/<episodeId>/chapters/<index:000>.m4a`
+- `users/<userId>/episodes/<episodeId>/chapters/<index:000>.json` (the timing file)
 - `users/<userId>/episodes/<episodeId>/book.m4b`
 - `users/<userId>/episodes/<episodeId>/cover.<ext>`
 - `users/<userId>/episodes/<episodeId>/document.json`

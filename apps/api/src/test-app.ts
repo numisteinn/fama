@@ -27,7 +27,7 @@ export const users = {
 
 type Init = { json?: unknown; body?: BodyInit; headers?: Record<string, string> }
 
-const TABLES = ["progress", "chapters", "episodes", "tokens", "users", "voices"]
+const TABLES = ["timings", "progress", "chapters", "episodes", "tokens", "users", "voices"]
 
 const statements = migrations
   .replace(/--.*$/gm, "")
