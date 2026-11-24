@@ -4,6 +4,7 @@ import { AudioPlayer } from "~/audio"
 import { SETTING_KEYS, storedSettings } from "~/flags"
 import { Message } from "~/message"
 import { type Model, POLL_MS, SKIP_BACK_MS, SKIP_FORWARD_MS, current, episodes, isWorking } from "~/model"
+import { readerSubscriptions } from "~/reader/subscription"
 import { chapterStartMs, totalMs } from "~/timeline"
 
 /** Focused controls keep their own keys. */
@@ -98,7 +99,7 @@ const isLoaded = (model: Model) => Option.isSome(current(model))
 export const storageEventMessage = (key: string | null): Option.Option<Message> =>
   key === null || SETTING_KEYS.includes(key) ? Option.some(Message.ChangedStoredSettings(storedSettings())) : Option.none()
 
-export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((entry) => ({
+const appSubscriptions = Subscription.make<Model, Message, AudioPlayer>()((entry) => ({
   /** Refetch every 2 s while a job is Queued or Running. */
   poll: entry(
     { isPolling: Schema.Boolean },
@@ -356,3 +357,5 @@ export const subscriptions = Subscription.make<Model, Message, AudioPlayer>()((e
     ),
   ),
 }))
+
+export const subscriptions = Subscription.aggregate(appSubscriptions, readerSubscriptions)

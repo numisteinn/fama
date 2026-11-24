@@ -5,6 +5,7 @@ import { defineTaggedUnion } from "foldkit/schema"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { BatchFile, hasAttached } from "~/batch"
 import { formatRate } from "~/lib/format"
+import { Reader } from "~/reader/model"
 
 // CONSTANTS
 
@@ -166,6 +167,8 @@ export const Model = Schema.Struct({
 
   /** Fact: what the audio element has. */
   playback: Playback,
+  /** The text of the episode that plays, and whether it shows. */
+  reader: Reader,
   /** Intent: the episode the listener plays or paused. `None`: nothing is loaded. */
   maybeListening: Schema.Option(Listening),
   /**

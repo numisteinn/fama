@@ -5,6 +5,7 @@ import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { PickerId, StoredProgress } from "~/model"
+import { ReaderMessage } from "~/reader/message"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
 export type PlayerShortcut = typeof PlayerShortcut.Type
@@ -62,6 +63,9 @@ export const Message = defineMessageUnion({
   FailedDeleteEpisode: { episodeId: EpisodeId, failure: ApiFailure },
   CompletedWaitBeforeDisarmDelete: { episodeId: EpisodeId },
   CompletedFocusDeleteConfirm: {},
+
+  // Reader
+  GotReaderMessage: { message: ReaderMessage },
 
   // Settings
   ClickedSettings: {},

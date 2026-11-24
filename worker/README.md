@@ -155,4 +155,4 @@ Samples go to `~/Developer/fama-samples/<lang>/<engine>-<voice>.m4a`. Results go
 
 ## Licenses
 
-See `NOTICE.md`. The worker code is MIT. `piper-tts` (GPL-3.0) and `PyMuPDF` (AGPL-3.0) are copyleft dependencies.
+See `NOTICE.md`. The worker code is MIT. `piper-tts` (GPL-3.0) is a copyleft dependency.

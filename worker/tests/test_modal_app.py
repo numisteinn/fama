@@ -120,8 +120,8 @@ def _transport(status, body=None, seen=None):
 def test_claim_on_cpu_returns_the_job(modal_app):
     seen = []
     job = modal_app.claim_on_cpu("https://api/", "tok", "modal-1",
-                                 transport=_transport(200, {"job": {"episodeId": "ep1"}}, seen))
-    assert job == {"episodeId": "ep1"}
+                                 transport=_transport(200, {"work": {"_tag": "Sample", "episodeId": "ep1"}}, seen))
+    assert job == {"_tag": "Sample", "episodeId": "ep1"}
     assert str(seen[0].url) == "https://api/api/worker/claim"
     assert seen[0].headers["authorization"] == "Bearer tok"
     assert json.loads(seen[0].content) == {"workerId": "modal-1", "voices": []}

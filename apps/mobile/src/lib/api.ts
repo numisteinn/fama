@@ -89,7 +89,7 @@ export function createApi(connection: Connection) {
     me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
     createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> =>
-      json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed }))),
+      json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review: false }))),
     uploadEpisode: (file: PickedFile, voice: VoiceRef | null, speed: number): Promise<Episode> => {
       const form = new FormData()
       // Expo's fetch sends a file part that has `bytes()`. It refuses React Native's `{ uri }` part.

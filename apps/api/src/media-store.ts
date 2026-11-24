@@ -14,11 +14,17 @@ export const keys = {
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
   chapter: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
+  sample: (userId: string, episodeId: string, voice: string) =>
+    `${userPrefix(userId)}episodes/${episodeId}/samples/${voice}.m4a`,
   timing: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.json`,
+  /** The media path of the transcript. The object the API stores for one Ready is under `transcript/`. */
+  transcript: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/transcript.vtt`,
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+  documentRevision: (userId: string, episodeId: string, digest: string) =>
+    `${userPrefix(userId)}documents/${episodeId}/${digest}.json`,
   document: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/document.json`,
 }
 
@@ -53,6 +59,9 @@ export interface Interface {
     body: ReadableStream | Blob,
     contentType: string,
   ) => Effect.Effect<{ readonly size: number }, StorageError>
+  readonly putSample: (key: string, body: ReadableStream) => Effect.Effect<void, StorageError>
+  readonly deleteSample: (key: string) => Effect.Effect<void, StorageError>
+  readonly deleteSamples: (userId: string, episodeId: string) => Effect.Effect<void, StorageError>
   readonly get: (key: string, range: ByteRange | null) => Effect.Effect<R2ObjectBody | null, StorageError>
   readonly head: (key: string) => Effect.Effect<R2Object | null, StorageError>
   /** Removes every object of one episode of one user: its media and its upload. */
@@ -98,9 +107,20 @@ export const layer = Layer.effect(
 
     const deleteEpisode = Effect.fn("MediaStore.deleteEpisode")(function* (userId: string, episodeId: string) {
       yield* deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/`)
+      yield* deletePrefix(`${userPrefix(userId)}documents/${episodeId}/`)
       yield* deletePrefix(`${userPrefix(userId)}uploads/${episodeId}/`)
     })
 
-    return MediaStore.of({ put, get, head, deleteEpisode })
+    const putSample = (key: string, body: ReadableStream) =>
+      tryR2("putSample", () => bucket.put(key, body, {
+        onlyIf: { etagDoesNotMatch: "*" },
+        httpMetadata: { contentType: "audio/mp4" },
+      })).pipe(Effect.asVoid)
+
+    const deleteSample = (key: string) => tryR2("deleteSample", () => bucket.delete(key))
+    const deleteSamples = (userId: string, episodeId: string) =>
+      deletePrefix(`${userPrefix(userId)}episodes/${episodeId}/samples/`)
+
+    return MediaStore.of({ put, putSample, get, head, deleteEpisode, deleteSample, deleteSamples })
   }),
 )

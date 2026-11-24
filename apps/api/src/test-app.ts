@@ -8,6 +8,7 @@ import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
+import * as SampleRepo from "./sample-repo.ts"
 import { sha256Hex } from "./secrets.ts"
 import * as Wake from "./wake.ts"
 
@@ -27,7 +28,7 @@ export const users = {
 
 type Init = { json?: unknown; body?: BodyInit; headers?: Record<string, string> }
 
-const TABLES = ["timings", "progress", "chapters", "episodes", "tokens", "users", "voices"]
+const TABLES = ["timings", "samples", "progress", "chapters", "episodes", "tokens", "users", "voices"]
 
 const statements = migrations
   .replace(/--.*$/gm, "")
@@ -50,6 +51,7 @@ export const startApp = async () => {
     AccountRepo.layer,
     EpisodeRepo.layer,
     MediaStore.layer,
+    SampleRepo.layer,
     Wake.layer({ waitUntil: () => {} }),
   ).pipe(Layer.provideMerge(Layer.succeed(Bindings, env)))
   const app = HttpRouter.toWebHandler(

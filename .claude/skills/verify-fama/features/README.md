@@ -38,7 +38,10 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Read along on iPhone](./reader-ios.md) covers the mark, sentence taps, scrolling and offline text.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
-- [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode and streamable book files.
+- [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode, streamable book files, and a WebVTT transcript for episodes with timing files.
 - [Timing file](./timing-file.md): each chapter has a `timingUrl` that serves its Segments as JSON, and each start time is where the voice starts that sentence in the real audio.
+- [Review before narration](./review.md) lets the owner edit the Document and choose the chapters to narrate.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
+- [Voice Samples](./voice-samples.md): request and play clips from the first paragraph of a stored Document.
+- [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.

@@ -65,6 +65,33 @@ class ClaimedJob:
         )
 
 
+@dataclass(frozen=True)
+class ClaimedSample:
+    episode_id: str
+    lease_token: str
+    document_path: str
+    voice: VoiceRef
+    speed: float
+
+    @property
+    def params(self) -> dict[str, str]:
+        return {"voice": str(self.voice), "leaseToken": self.lease_token}
+
+
+Work = ClaimedJob | ClaimedSample
+
+
+def parse_work(data: dict) -> Work:
+    match data["_tag"]:
+        case "Narrate":
+            return ClaimedJob.parse(data)
+        case "Sample":
+            return ClaimedSample(data["episodeId"], data["leaseToken"], data["documentPath"],
+                                 VoiceRef.parse(data["voice"]), float(data["speed"]))
+        case tag:
+            raise ApiError(f"Unknown work tag {tag!r}")
+
+
 class Api:
     def __init__(self, base_url: str, token: str, worker_id: str, transport: httpx.BaseTransport | None = None):
         self.worker_id = worker_id
@@ -90,9 +117,9 @@ class Api:
                 time.sleep(2**attempt)
         raise ApiError(failure)
 
-    def claim(self, voices: list[dict]) -> ClaimedJob | None:
+    def claim(self, voices: list[dict]) -> Work | None:
         response = self._send("POST", "/api/worker/claim", json={"workerId": self.worker_id, "voices": voices})
-        return None if response.status_code == 204 else ClaimedJob.parse(response.json()["job"])
+        return None if response.status_code == 204 else parse_work(response.json()["work"])
 
     def source(self, job: ClaimedJob) -> bytes:
         if not job.source_path:
@@ -111,9 +138,17 @@ class Api:
             cover = Cover(response.content, "png" if is_png else "jpg")
         return Document.from_json(self._send("GET", job.document_path, params=lease).json(), cover)
 
-    def put_document(self, job: ClaimedJob, document: Document) -> None:
-        self._send("PUT", f"/api/worker/jobs/{job.episode_id}/document", json=document.to_json(),
-                   params={"workerId": self.worker_id, "leaseToken": job.lease_token})
+    def put_document(self, job: ClaimedJob, document: Document, voice: VoiceRef) -> bool:
+        """Store the Document and return whether the job has stopped in Review."""
+        response = self._send("PUT", f"/api/worker/jobs/{job.episode_id}/document", json=document.to_json(),
+                              params={"workerId": self.worker_id, "leaseToken": job.lease_token,
+                                      "voice": str(voice)})
+        if response.status_code == 204:  # Servers before Review always continue.
+            return False
+        next_step = response.json().get("next")
+        if next_step not in ("Review", "Narrate"):
+            raise ApiError(f"Invalid Document upload response: {next_step!r}")
+        return next_step == "Review"
 
     def progress(self, job: ClaimedJob, stage: str, done: int, total: int, *, title: str | None,
                  author: str | None, language: str | None, voice: str | None, remaining_ms: int | None) -> None:
@@ -150,3 +185,14 @@ class Api:
     def fail(self, job: ClaimedJob, reason: str) -> None:
         self._send("POST", f"/api/worker/jobs/{job.episode_id}/fail",
                    json={"workerId": self.worker_id, "leaseToken": job.lease_token, "reason": reason[:1000]})
+
+    def sample_document(self, sample: ClaimedSample) -> Document:
+        return Document.from_json(self._send("GET", sample.document_path, params=sample.params).json())
+
+    def put_sample(self, sample: ClaimedSample, file: Path) -> None:
+        self._send("PUT", f"/api/worker/samples/{sample.episode_id}/clip", content=file.read_bytes(),
+                   params=sample.params, headers={"Content-Type": "audio/mp4"})
+
+    def fail_sample(self, sample: ClaimedSample, reason: str) -> None:
+        self._send("POST", f"/api/worker/samples/{sample.episode_id}/fail",
+                   json={**sample.params, "reason": reason[:1000]})

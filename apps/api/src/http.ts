@@ -21,12 +21,14 @@ import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
-import { timingRoutes } from "./routes/timing.ts"
 import { documentRoutes } from "./routes/document.ts"
-import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, TooLarge, webRequest, worker } from "./routes/kit.ts"
+import { api, BadRequest, BlobParams, handle, IdParams, json, MAX_UPLOAD_BYTES, noContent, TooLarge, uploadRequest, webRequest, worker } from "./routes/kit.ts"
+import { reviewRoutes } from "./routes/review.ts"
+import { sampleRoutes } from "./routes/sample.ts"
+import { timingRoutes } from "./routes/timing.ts"
+import { transcriptRoutes } from "./routes/transcript.ts"
+import { SampleRepo } from "./sample-repo.ts"
 import { Wake } from "./wake.ts"
-
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 /** The decoded path after `/media/<token>/`, for example `episodes/<id>/book.m4b`. Empty when it does not decode. */
 const mediaPathOf = (url: string) => {
@@ -74,13 +76,8 @@ const safeFileName = (name: string) => name.replace(/[/\\]/g, "_").replace(/^\.+
 
 /** Reads a raw upload body into R2. Needs `Content-Length`, because R2 stores only bodies of known length. */
 const putBody = Effect.fn("http.putBody")(function* (key: string, fallbackType: string) {
-  const request = yield* webRequest
-  const length = Number(request.headers.get("content-length") ?? Number.NaN)
-  if (!Number.isFinite(length)) return yield* new BadRequest({ message: "Content-Length required" })
-  if (length > MAX_UPLOAD_BYTES) return yield* new TooLarge()
-  if (request.body === null) return yield* new BadRequest({ message: "Body required" })
-  const store = yield* MediaStore
-  return yield* store.put(key, request.body, request.headers.get("content-type") ?? fallbackType)
+  const { body, headers } = yield* uploadRequest
+  return yield* (yield* MediaStore).put(key, body, headers.get("content-type") ?? fallbackType)
 })
 
 const clientRoutes = HttpRouter.addAll([
@@ -102,6 +99,7 @@ const clientRoutes = HttpRouter.addAll([
           title: provisionalTitle(body.source),
           voice: body.voice,
           speed: body.speed,
+          review: body.review,
         })
         yield* wakeWorker
         return json(episode, 201)
@@ -128,6 +126,8 @@ const clientRoutes = HttpRouter.addAll([
         const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
         const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
         if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
+        const reviewField = form.get("review") ?? "false"
+        if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
         const id = EpisodeId.make(crypto.randomUUID())
         const fileName = safeFileName(file.name)
         const contentType = file.type || "application/octet-stream"
@@ -135,7 +135,14 @@ const clientRoutes = HttpRouter.addAll([
         yield* store.put(keys.upload(userId, id, fileName), file, contentType)
         const repo = yield* EpisodeRepo
         const source: Source = { _tag: "File", fileName, contentType }
-        const episode = yield* repo.create(userId, { id, source, title: provisionalTitle(source), voice, speed })
+        const episode = yield* repo.create(userId, {
+          id,
+          source,
+          title: provisionalTitle(source),
+          voice,
+          speed,
+          review: reviewField === "true",
+        })
         yield* wakeWorker
         return json(episode, 201)
       }),
@@ -169,8 +176,11 @@ const clientRoutes = HttpRouter.addAll([
         const repo = yield* EpisodeRepo
         // Ownership first: another user's id is 404 and touches no media.
         yield* repo.get(userId, id)
-        yield* (yield* MediaStore).deleteEpisode(userId, id)
+        const store = yield* MediaStore
+        yield* store.deleteEpisode(userId, id)
         yield* repo.remove(userId, id)
+        // Sweep clips that finished during the first media deletion.
+        yield* store.deleteSamples(userId, id)
         return noContent
       }),
     ),
@@ -236,8 +246,9 @@ const workerRoutes = HttpRouter.addAll([
     worker(
       Effect.gen(function* () {
         const body = yield* HttpServerRequest.schemaBodyJson(ClaimRequest)
-        const job = yield* (yield* EpisodeRepo).claim(body.workerId, body.voices)
-        return job === null ? noContent : json({ job })
+        const samples = yield* SampleRepo
+        const work = yield* (yield* EpisodeRepo).claim(body.workerId, body.voices, samples.claim)
+        return work === null ? noContent : json({ work })
       }),
     ),
   ),
@@ -401,7 +412,10 @@ export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
   documentRoutes,
+  reviewRoutes,
+  sampleRoutes,
   timingRoutes,
+  transcriptRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

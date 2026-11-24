@@ -1,25 +1,13 @@
 import { Effect, Schema } from "effect"
+import { EpisodeId, LeaseToken, UserId, VoiceRef, WorkerId } from "./ids.ts"
+import { ClaimedSample } from "./sample.ts"
 
 export * from "./connect.ts"
+export * from "./ids.ts"
+export * from "./review.ts"
+export * from "./sample.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
-
-export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
-export type EpisodeId = typeof EpisodeId.Type
-
-export const WorkerId = Schema.String.pipe(Schema.brand("WorkerId"))
-export type WorkerId = typeof WorkerId.Type
-
-export const UserId = Schema.String.pipe(Schema.brand("UserId"))
-export type UserId = typeof UserId.Type
-
-/** The secret `claim` hands out for one attempt at a job. Every job route needs it. */
-export const LeaseToken = Schema.String.pipe(Schema.brand("LeaseToken"))
-export type LeaseToken = typeof LeaseToken.Type
-
-/** `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. */
-export const VoiceRef = Schema.String.pipe(Schema.brand("VoiceRef"))
-export type VoiceRef = typeof VoiceRef.Type
 
 export const Voice = Schema.Struct({
   id: VoiceRef,
@@ -60,6 +48,8 @@ export const JobState = Schema.TaggedUnion({
     /** The worker's estimate of the wall time until Ready, as of `heartbeatAt`. `null` when it has none. */
     remainingMs: Schema.NullOr(Millis),
   },
+  /** The Document is stored and the job waits for its user to start narration. No worker holds it. */
+  Review: {},
   Ready: { finishedAt: Schema.String },
   Failed: { reason: Schema.String, failedAt: Schema.String },
 })
@@ -106,8 +96,8 @@ export const isFinished = (positionMs: number, totalMs: number): boolean =>
  *
  * - The job ended (Ready or Failed), so no more audio comes, and the position is finished (`isFinished`): the Play
  *   starts at 0.
- * - The job still works (Queued or Running) and the position is the end of the chapters made so far: the Play
- *   waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
+ * - The job still works (Queued, Running or Review) and the position is the end of the chapters made so far: the
+ *   Play waits there for the next chapter (`isWaiting`). When a later list has that chapter, the same position is its
  *   start, and the Play goes on there. It never starts at 0.
  * - Otherwise the Play starts at the position.
  */
@@ -117,7 +107,7 @@ export const playStart = (
   job: { readonly _tag: JobState["_tag"] },
 ): { readonly positionMs: number; readonly isWaiting: boolean } => {
   const totalMs = chapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
-  if (job._tag === "Queued" || job._tag === "Running") {
+  if (job._tag === "Queued" || job._tag === "Running" || job._tag === "Review") {
     return positionMs >= totalMs ? { positionMs: totalMs, isWaiting: true } : { positionMs, isWaiting: false }
   }
   return { positionMs: isFinished(positionMs, totalMs) ? 0 : positionMs, isWaiting: false }
@@ -184,6 +174,8 @@ export const CreateEpisode = Schema.Struct({
   source: SourceInput,
   voice: Schema.NullOr(VoiceRef),
   speed: Schema.Number,
+  /** Stop the job in `Review` after extraction. A client that leaves it out sends `false`. */
+  review: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export interface CreateEpisode extends Schema.Schema.Type<typeof CreateEpisode> {}
 
@@ -223,7 +215,11 @@ export const ClaimedJob = Schema.Struct({
 })
 export interface ClaimedJob extends Schema.Schema.Type<typeof ClaimedJob> {}
 
-export const ClaimResponse = Schema.Struct({ job: ClaimedJob })
+/** What `claim` hands out: an episode job to narrate, or one Sample to make. Sample work comes first. */
+export const Work = Schema.TaggedUnion({ Narrate: ClaimedJob.fields, Sample: ClaimedSample.fields })
+export type Work = typeof Work.Type
+
+export const ClaimResponse = Schema.Struct({ work: Work })
 
 export const ProgressRequest = Schema.Struct({
   workerId: WorkerId,

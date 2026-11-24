@@ -1,6 +1,6 @@
 # Timing file
 
-For each chapter the worker uploads a timing file next to the audio. It lists the Segments of the chapter (one sentence, or a few short ones) with the time the voice starts and stops each one. Each chapter of an episode has a `timingUrl` that serves this file as JSON. No screen shows it yet: the readers (roadmap `R2`, `R3`) and the feed transcript (`R4`) build on it. So this recipe proves the file against the real audio.
+For each chapter the worker uploads a timing file next to the audio. It lists the Segments of the chapter (one sentence, or a few short ones) with the time the voice starts and stops each one. Each chapter of an episode has a `timingUrl` that serves this file as JSON. The web reader uses the file to mark the current Segment. This recipe checks the file against the audio.
 
 ## Sub-features
 
@@ -15,7 +15,7 @@ For each chapter the worker uploads a timing file next to the audio. It lists th
 ## How to get to it (user POV)
 
 - Add any source (see [Add a file](./add-file.md) and [Add a link](./add-link.md)). The user does nothing more: the worker makes the timing files while it narrates.
-- There is no screen for it yet. A client reads `chapters[].timingUrl` from `GET /api/episodes` and fetches the file from the media path.
+- Open Text in the web player to read along. A client reads `chapters[].timingUrl` from `GET /api/episodes` and fetches the file from the media path.
 
 ## Driving it with preview tools and agent-device
 

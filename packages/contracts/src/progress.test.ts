@@ -72,6 +72,8 @@ describe("playStart", () => {
   test("the end of the chapters of a job that still works is a wait, not the end", () => {
     expect(playStart(26_825, [morning], running)).toEqual({ positionMs: 26_825, isWaiting: true })
     expect(playStart(26_825, [morning], { _tag: "Queued" })).toEqual({ positionMs: 26_825, isWaiting: true })
+    // A job in Review has no audio yet, and its audio comes after the user starts it.
+    expect(playStart(0, [], { _tag: "Review" })).toEqual({ positionMs: 0, isWaiting: true })
     // Both chapters are made and the job still encodes the book.
     expect(playStart(46_525, [morning, evening], running)).toEqual({ positionMs: 46_525, isWaiting: true })
     // Inside the finished margin of the chapters made so far there is still audio to play.

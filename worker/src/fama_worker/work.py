@@ -17,17 +17,18 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from fama_worker import audio
-from fama_worker.api import MAX_UPLOAD_BYTES, Api, ApiError, ClaimedJob, FileRef, LeaseLost
+from fama_worker.api import MAX_UPLOAD_BYTES, Api, ApiError, ClaimedJob, ClaimedSample, FileRef, LeaseLost, Work
 from fama_worker.engines import all_voices, default_voice
 from fama_worker.eta import Eta
 from fama_worker.extract import extract
 from fama_worker.model import Document, FileSource, Source
 from fama_worker.pipeline import Book, ChapterFile, narrate
+from fama_worker.sample import make_sample
 
 HEARTBEAT_S = 30
 PROGRESS_THROTTLE_S = 5
-IDLE_MIN_S = 2
-IDLE_MAX_S = 10  # a new episode waits at most this long in Queued
+IDLE_POLL_S = 2
+VOICE_REFRESH_S = 60
 
 
 def log(message: str) -> None:
@@ -135,15 +136,15 @@ def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     api.put_book(job, book)
 
 
-def extract_document(api: Api, job: ClaimedJob, workdir: Path) -> Document:
+def extract_document(api: Api, job: ClaimedJob, workdir: Path) -> Document | None:
     """Source to stored Document. The cover goes up first, so a stored Document means extraction is complete."""
     with tempfile.TemporaryDirectory() as tmp:
         document = extract(_source(api, job, Path(tmp)))
     if document.cover:
         api.put_cover(job, audio.write_cover(document.cover, workdir))
-    api.put_document(job, document)
+    review = api.put_document(job, document, job.voice or default_voice(document.language))
     log(f"{job.episode_id}: extracted the source, stored the Document ({len(document.chapters)} chapters)")
-    return document
+    return None if review else document
 
 
 def stored_document(api: Api, job: ClaimedJob) -> Document:
@@ -176,7 +177,12 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     try:
         with Heartbeat(api, job) as heartbeat:
             document = stored_document(api, job) if job.document_path else extract_document(api, job, workdir)
-            book = narrate_document(api, job, document, heartbeat, workdir)
+            if document is not None:
+                book = narrate_document(api, job, document, heartbeat, workdir)
+        if document is None:
+            log(f"{episode}: stopped for Review")
+            shutil.rmtree(workdir, ignore_errors=True)
+            return None
         log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
             f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)
@@ -194,15 +200,41 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     return None
 
 
+def process_sample(api: Api, sample: ClaimedSample, voices: set[str]) -> None:
+    label = f"{sample.episode_id}: sample {sample.voice}"
+    log(f"{label} claimed")
+    started = time.monotonic()
+    try:
+        if str(sample.voice) not in voices:
+            raise ValueError(f"This Worker does not have the voice {sample.voice}.")
+        document = api.sample_document(sample)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.m4a"
+            synthesize_s, encode_s = make_sample(document, sample.voice, sample.speed, path)
+            api.put_sample(sample, path)
+        log(f"{label} ready in {time.monotonic() - started:.3f}s "
+            f"(render {synthesize_s:.3f}s, encode {encode_s:.3f}s)")
+    except LeaseLost:
+        log(f"{label} dropped, lease lost")
+    except Exception as error:
+        reason = str(error) if isinstance(error, ValueError) else f"{type(error).__name__}: {error}"
+        log(f"{label} failed: {reason}")
+        try:
+            api.fail_sample(sample, reason)
+        except (LeaseLost, ApiError) as fail_error:
+            log(f"{label} could not report failure: {fail_error}")
+
+
 def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool = False, drain: bool = False,
-        first_job: ClaimedJob | None = None, stop: threading.Event | None = None, api: Api | None = None) -> None:
+        first_job: Work | None = None, stop: threading.Event | None = None, api: Api | None = None) -> None:
     """Pull jobs until stopped. `once` stops after one job or an empty queue.
     `drain` takes jobs until the queue is empty, then stops (the cloud worker runs this).
     `first_job` is a job this worker id already claimed; it is made before the first claim."""
     api = api or Api(api_url, token, worker_id)
     stop = stop or threading.Event()
     voices = [v.to_json() for v in all_voices()]
-    delay = IDLE_MIN_S
+    voice_ids = {v["id"] for v in voices}
+    refresh_voices_at = 0.0
     started, jobs, audio_ms = time.monotonic(), 0, 0
     log(f"worker {worker_id} polling {api_url} with {len(voices)} voices")
     while not stop.is_set():
@@ -210,19 +242,24 @@ def run(api_url: str, token: str, worker_id: str, *, out_dir: Path, once: bool =
             job, first_job = first_job, None
         else:
             try:
-                job = api.claim(voices)
+                now = time.monotonic()
+                announce = now >= refresh_voices_at
+                job = api.claim(voices if announce else [])
+                if announce:
+                    refresh_voices_at = now + VOICE_REFRESH_S
             except ApiError as error:
                 log(f"claim failed: {error}")
                 job = None
         if job is None:
             if once or drain:
                 break
-            stop.wait(delay)
-            delay = min(delay * 2, IDLE_MAX_S)
+            stop.wait(IDLE_POLL_S)
             continue
-        delay = IDLE_MIN_S
-        jobs += 1
-        audio_ms += process(api, job, out_dir) or 0
+        if isinstance(job, ClaimedSample):
+            process_sample(api, job, voice_ids)
+        else:
+            jobs += 1
+            audio_ms += process(api, job, out_dir) or 0
         if once:
             break
     if drain:

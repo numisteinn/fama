@@ -30,7 +30,7 @@ interface Claimed {
 const claim = async () => {
   const response = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
   expect(response.status).toBe(200)
-  return ((await response.json()) as { job: Claimed }).job
+  return ((await response.json()) as { work: Claimed }).work
 }
 
 /** Alice adds a text episode and a worker claims it. */
@@ -70,8 +70,10 @@ it("a new claim has no Document, and the client route answers 404 until the work
 
 it("the worker stores the Document, its owner reads it, and the next claim points at it", async () => {
   const job = await claimed()
-  expect((await putDocument(job, { ...document, cover: "not part of the shape" })).status).toBe(204)
-  expect(await keysOf()).toEqual([`users/${users.alice.id}/episodes/${job.episodeId}/document.json`])
+  const written = await putDocument(job, { ...document, cover: "not part of the shape" })
+  expect(written.status).toBe(200)
+  expect(await written.json()).toEqual({ next: "Narrate" })
+  expect(await keysOf()).toEqual([expect.stringContaining(`users/${users.alice.id}/documents/${job.episodeId}/`)])
 
   const read = await app.alice("GET", `/api/episodes/${job.episodeId}/document`)
   expect(read.status).toBe(200)
@@ -85,10 +87,22 @@ it("the worker stores the Document, its owner reads it, and the next claim point
   expect(await forWorker.json()).toEqual(document)
 })
 
+it("reads Documents stored before the Review migration", async () => {
+  const job = await claimed()
+  const key = `users/${users.alice.id}/episodes/${job.episodeId}/document.json`
+  const body = JSON.stringify(document)
+  await app.env.MEDIA.put(key, body, { httpMetadata: { contentType: "application/json" } })
+  await app.env.DB.prepare("UPDATE episodes SET document_size = ? WHERE id = ?").bind(body.length, job.episodeId).run()
+
+  expect(await (await app.alice("GET", `/api/episodes/${job.episodeId}/document`)).json()).toEqual(document)
+  const again = await claimedAgain(job)
+  expect(await (await app.asWorker("GET", `${again.documentPath}?leaseToken=${again.leaseToken}`)).json()).toEqual(document)
+})
+
 it("a repeated upload under the same lease is safe", async () => {
   const job = await claimed()
-  expect((await putDocument(job, document)).status).toBe(204)
-  expect((await putDocument(job, document)).status).toBe(204)
+  expect((await putDocument(job, document)).status).toBe(200)
+  expect((await putDocument(job, document)).status).toBe(200)
   expect(await (await app.alice("GET", `/api/episodes/${job.episodeId}/document`)).json()).toEqual(document)
 })
 
@@ -97,7 +111,7 @@ it("the Document routes need the current lease and the right token", async () =>
   const id = job.episodeId
   expect((await putDocument(job, document, "not-the-lease")).status).toBe(409)
   expect(await keysOf()).toEqual([])
-  expect((await putDocument(job, document)).status).toBe(204)
+  expect((await putDocument(job, document)).status).toBe(200)
 
   const again = await claimedAgain(job)
   expect((await putDocument(job, document)).status, "an old lease cannot replace the Document").toBe(409)
@@ -121,7 +135,7 @@ it("a body that is not a Document is refused and stores nothing", async () => {
 
 it("another user cannot read the Document, and deleting the episode deletes it", async () => {
   const job = await claimed()
-  expect((await putDocument(job, document)).status).toBe(204)
+  expect((await putDocument(job, document)).status).toBe(200)
   expect((await app.bob("GET", `/api/episodes/${job.episodeId}/document`)).status).toBe(404)
   expect((await app.alice("DELETE", `/api/episodes/${job.episodeId}`)).status).toBe(204)
   expect(await keysOf()).toEqual([])

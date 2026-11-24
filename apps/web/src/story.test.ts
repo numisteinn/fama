@@ -233,7 +233,7 @@ describe("settings", () => {
       Command.expectExact(
         CreateEpisodeFromSource({
           connection,
-          input: { source: { _tag: "Text", title: null, text: "A short note." }, voice: sarah, speed: 1.2 },
+          input: { source: { _tag: "Text", title: null, text: "A short note." }, voice: sarah, speed: 1.2, review: false },
         }),
       ),
       Command.resolve(CreateEpisodeFromSource, Message.SucceededCreateEpisode({ episode: queuedArticle })),

@@ -41,6 +41,7 @@ import {
   WaitBeforeResetTypeAhead,
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
+import type { ReaderMessage } from "~/reader/message"
 import {
   Feed,
   type Flags,
@@ -65,6 +66,8 @@ import {
   sortedVoices,
   toDraft,
 } from "~/model"
+import { initReader } from "~/reader/model"
+import * as Reader from "~/reader/update"
 import { chapterStartMs, locate, scrubTargetMs, totalMs } from "~/timeline"
 
 export type Services = AudioPlayer | HttpClient.HttpClient
@@ -104,6 +107,7 @@ export const init = (flags: Flags): UpdateReturn => {
     isFeedUrlCopied: false,
     feedUrlCopies: 0,
     playback: Playback.Stopped(),
+    reader: initReader,
     maybeListening: Option.none(),
     playIntents: 0,
     maybePendingPlay: Option.none(),
@@ -298,7 +302,7 @@ const submitAdd: Step = (model) => {
     draft._tag === "Url" ? { _tag: "Url", url: draft.url } : { _tag: "Text", title: null, text: draft.text }
   return {
     model: modifyFields(model, { isAdding: () => true, maybeAddError: () => Option.none() }),
-    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed } })],
+    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed, review: false } })],
   }
 }
 
@@ -771,19 +775,22 @@ const seek = (ms: number): Step => withLoaded(() => intend(setListening({ maybeS
 const skip = (deltaMs: number): Step =>
   withLoaded(({ playback, episode }) => seek(globalMs(playback, episode) + deltaMs))
 
+/** The listener moves to `ms` on the episode timeline, and playback goes on from there. */
+const playFrom = (ms: number): Step =>
+  withLoaded(() => intend(setListening({ maybeSeekMs: Option.some(ms), wantsPlay: true, isPlayDue: false })))
+
 /** The listener picks a chapter: a move to its start, and playback from there. */
 const playChapter = (index: number): Step =>
-  withLoaded(({ episode }) =>
-    episode.chapters[index]
-      ? intend(
-          setListening({
-            maybeSeekMs: Option.some(chapterStartMs(episode.chapters, index)),
-            wantsPlay: true,
-            isPlayDue: false,
-          }),
-        )
-      : unchanged,
-  )
+  withLoaded(({ episode }) => (episode.chapters[index] ? playFrom(chapterStartMs(episode.chapters, index)) : unchanged))
+
+/** A message of the reader. A click on a Segment plays from its start. */
+const readerStep = (message: ReaderMessage): Step => (model) => {
+  const { model: next, commands, outMessage } = Reader.update(model, message)
+  return Update.combine(next, [
+    (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
+    outMessage ? playFrom(outMessage.positionMs) : unchanged,
+  ])
+}
 
 /** The element stopped though the tab did not tell it to: that is a Pause of the listener. */
 const takeOwnPause: Step = (model) =>
@@ -1090,6 +1097,8 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     }),
     CompletedFocusDeleteConfirm: () => ({ model }),
 
+    GotReaderMessage: ({ message: readerMessage }) => readerStep(readerMessage)(model),
+
     ClickedSettings: () => openSettings(model),
     GotSettingsDialogMessage: ({ message: dialogMessage }) => foldSettingsDialog(model, dialogMessage),
     UpdatedTokenDraft: ({ value }) => ({
@@ -1160,9 +1169,9 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     CompletedStoreProgress: () => ({ model }),
   })
 
-/** Every Message goes two steps: `handle` changes intent and facts, then `reconcile` decides what the audio does. */
-export const update = (model: Model, message: Message): UpdateReturn => {
-  const handled = handle(model, message)
-  const reconciled = reconcile(handled.model)
-  return { model: reconciled.model, commands: [...(handled.commands ?? []), ...(reconciled.commands ?? [])] }
-}
+/**
+ * Every Message goes three steps: `handle` changes intent and facts, `reconcile` decides what the audio does, and the
+ * reader's `reconcile` loads text and keeps the mark in sight.
+ */
+export const update = (model: Model, message: Message): UpdateReturn =>
+  Update.combine(model, [(start) => handle(start, message), reconcile, Reader.reconcile])
