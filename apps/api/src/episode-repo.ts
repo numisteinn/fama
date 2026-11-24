@@ -1,5 +1,6 @@
 import {
   ClaimedJob,
+  type ClaimedSample,
   Episode,
   type EpisodeId,
   EpisodeProgress,
@@ -12,6 +13,7 @@ import {
   Voice,
   type VoiceRef,
   type WorkerId,
+  type Work,
 } from "@fama/contracts"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { Bindings } from "./bindings.ts"
@@ -154,7 +156,11 @@ export interface Interface {
   readonly get: (userId: UserId, id: string) => Effect.Effect<Episode, EpisodeNotFound | Failure>
   readonly remove: (userId: UserId, id: string) => Effect.Effect<void, DatabaseError>
   readonly retry: (userId: UserId, id: string) => Effect.Effect<Episode, EpisodeNotFound | Job.NotRetryable | Failure>
-  readonly claim: (workerId: WorkerId, voices: ReadonlyArray<Voice>) => Effect.Effect<ClaimedJob | null, Failure>
+  readonly claim: (
+    workerId: WorkerId,
+    voices: ReadonlyArray<Voice>,
+    claimSample: Effect.Effect<ClaimedSample | null, Failure>,
+  ) => Effect.Effect<Work | null, Failure>
   readonly progress: (id: string, request: ProgressRequest) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly complete: (
     id: string,
@@ -376,7 +382,11 @@ export const layer = Layer.effect(
     const leaseOf = (lease: string) => Effect.promise(() => sha256Hex(lease))
     const holds = (row: EpisodeRow, leaseHash: string) => row.lease_hash !== null && row.lease_hash === leaseHash
 
-    const claim = Effect.fn("EpisodeRepo.claim")(function* (workerId: WorkerId, voices: ReadonlyArray<Voice>) {
+    const claim = Effect.fn("EpisodeRepo.claim")(function* (
+      workerId: WorkerId,
+      voices: ReadonlyArray<Voice>,
+      claimSample: Effect.Effect<ClaimedSample | null, Failure>,
+    ) {
       const at = yield* now
       const seenAt = new Date(at).toISOString()
       if (voices.length > 0) {
@@ -394,6 +404,8 @@ export const layer = Layer.effect(
           ),
         )
       }
+      const sample = yield* claimSample
+      if (sample !== null) return { ...sample, _tag: "Sample" as const }
       const staleBefore = new Date(at - LEASE_MS).toISOString()
       const candidates = yield* all(
         "episode.candidates",
@@ -413,7 +425,7 @@ export const layer = Layer.effect(
         )
         if (claimed === null) continue
         const chapters = yield* chaptersOf(id)
-        return yield* Schema.decodeUnknownEffect(ClaimedJob)({
+        const job = yield* Schema.decodeUnknownEffect(ClaimedJob)({
           episodeId: claimed.id,
           leaseToken,
           source: Schema.encodeSync(Source)(claimed.source),
@@ -424,6 +436,7 @@ export const layer = Layer.effect(
           speed: claimed.speed,
           completedChapters: chapters.map((chapter) => chapter.idx),
         })
+        return { ...job, _tag: "Narrate" as const }
       }
       return null
     })

@@ -100,13 +100,13 @@ try {
 
   // Worker A claims both jobs, oldest first.
   const claim1 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #1")
-  check(claim1.job.episodeId === text.id && claim1.job.sourcePath === null && claim1.job.completedChapters.length === 0 && claim1.job.leaseToken, "claim #1 returns the Text job with a lease", claim1)
+  check(claim1.work.episodeId === text.id && claim1.work.sourcePath === null && claim1.work.completedChapters.length === 0 && claim1.work.leaseToken, "claim #1 returns the Text job with a lease", claim1)
   const claim2 = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerA, voices: [voice] } }), 200, "claim #2")
-  check(claim2.job.episodeId === file.id && claim2.job.sourcePath === `/api/worker/jobs/${file.id}/source`, "claim #2 returns the File job with sourcePath", claim2)
-  const leaseText = encodeURIComponent(claim1.job.leaseToken)
-  const leaseFile = claim2.job.leaseToken
-  await expectStatus(await work("GET", `${claim2.job.sourcePath}?leaseToken=${leaseText}`), 409, "GET source with another job's lease")
-  const sourceResponse = await work("GET", `${claim2.job.sourcePath}?leaseToken=${encodeURIComponent(leaseFile)}`)
+  check(claim2.work.episodeId === file.id && claim2.work.sourcePath === `/api/worker/jobs/${file.id}/source`, "claim #2 returns the File job with sourcePath", claim2)
+  const leaseText = encodeURIComponent(claim1.work.leaseToken)
+  const leaseFile = claim2.work.leaseToken
+  await expectStatus(await work("GET", `${claim2.work.sourcePath}?leaseToken=${leaseText}`), 409, "GET source with another job's lease")
+  const sourceResponse = await work("GET", `${claim2.work.sourcePath}?leaseToken=${encodeURIComponent(leaseFile)}`)
   check(sourceResponse.status === 200 && (await sourceResponse.text()) === "Hello from an uploaded file.", "GET source returns the uploaded bytes")
 
   const voices = await expectStatus(await call("GET", "/api/voices"), 200, "GET /api/voices")
@@ -126,7 +126,7 @@ try {
   )
 
   // Worker A reports progress, uploads chapters and the book, then completes.
-  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerA, claim1.job.leaseToken, 0) }), 204, "progress")
+  await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerA, claim1.work.leaseToken, 0) }), 204, "progress")
   const chapters = [chapter0, chapter1]
   for (const [index, bytes] of chapters.entries()) {
     await expectStatus(
@@ -151,7 +151,7 @@ try {
   )
 
   await expectStatus(await work("PUT", `/api/worker/jobs/${text.id}/book?workerId=${workerA}&leaseToken=${leaseText}`, { body: book, headers: { "content-type": "audio/mp4" } }), 204, "PUT book")
-  const completeBody = { workerId: workerA, leaseToken: claim1.job.leaseToken, durationMs: 2000 }
+  const completeBody = { workerId: workerA, leaseToken: claim1.work.leaseToken, durationMs: 2000 }
   await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/complete`, { json: completeBody }), 204, "complete")
   await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/complete`, { json: completeBody }), 204, "complete again (idempotent)")
   await expectStatus(await call("POST", `/api/episodes/${text.id}/retry`), 409, "retry of a Ready job")
@@ -222,9 +222,9 @@ try {
   const retried = await expectStatus(await call("POST", `/api/episodes/${file.id}/retry`), 200, "retry")
   check(retried.job._tag === "Queued", "retry puts the job back to Queued", retried.job)
   const reclaim = await expectStatus(await work("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } }), 200, "worker B claims the retried job")
-  check(reclaim.job.episodeId === file.id && reclaim.job.leaseToken !== leaseFile, "retried job is claimable with a new lease", reclaim)
+  check(reclaim.work.episodeId === file.id && reclaim.work.leaseToken !== leaseFile, "retried job is claimable with a new lease", reclaim)
   await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerA, leaseToken: leaseFile, reason: "old" } }), 409, "the old lease is refused after a new claim")
-  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, leaseToken: reclaim.job.leaseToken, reason: "smoke cleanup" } }), 204, "worker B fails it")
+  await expectStatus(await work("POST", `/api/worker/jobs/${file.id}/fail`, { json: { workerId: workerB, leaseToken: reclaim.work.leaseToken, reason: "smoke cleanup" } }), 204, "worker B fails it")
 
   // Delete removes the episode and its media.
   for (const episode of [text, file]) {
@@ -234,7 +234,7 @@ try {
   for (const url of [...ready.chapters.map((c: any) => c.url), ready.bookUrl]) {
     check((await fetch(base + url)).status === 404, `media gone: ${url.split("/").slice(-2).join("/")}`)
   }
-  await expectStatus(await work("GET", `/api/worker/jobs/${file.id}/source?leaseToken=${encodeURIComponent(reclaim.job.leaseToken)}`), 404, "upload gone")
+  await expectStatus(await work("GET", `/api/worker/jobs/${file.id}/source?leaseToken=${encodeURIComponent(reclaim.work.leaseToken)}`), 404, "upload gone")
 
   console.log(`\nsmoke passed: ${checks} checks`)
 } catch (error) {

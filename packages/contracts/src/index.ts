@@ -1,25 +1,12 @@
 import { Effect, Schema } from "effect"
+import { EpisodeId, LeaseToken, UserId, VoiceRef, WorkerId } from "./ids.ts"
+import { ClaimedSample } from "./sample.ts"
 
 export * from "./connect.ts"
+export * from "./ids.ts"
+export * from "./sample.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
-
-export const EpisodeId = Schema.String.pipe(Schema.brand("EpisodeId"))
-export type EpisodeId = typeof EpisodeId.Type
-
-export const WorkerId = Schema.String.pipe(Schema.brand("WorkerId"))
-export type WorkerId = typeof WorkerId.Type
-
-export const UserId = Schema.String.pipe(Schema.brand("UserId"))
-export type UserId = typeof UserId.Type
-
-/** The secret `claim` hands out for one attempt at a job. Every job route needs it. */
-export const LeaseToken = Schema.String.pipe(Schema.brand("LeaseToken"))
-export type LeaseToken = typeof LeaseToken.Type
-
-/** `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. */
-export const VoiceRef = Schema.String.pipe(Schema.brand("VoiceRef"))
-export type VoiceRef = typeof VoiceRef.Type
 
 export const Voice = Schema.Struct({
   id: VoiceRef,
@@ -223,7 +210,11 @@ export const ClaimedJob = Schema.Struct({
 })
 export interface ClaimedJob extends Schema.Schema.Type<typeof ClaimedJob> {}
 
-export const ClaimResponse = Schema.Struct({ job: ClaimedJob })
+/** What `claim` hands out: an episode job to narrate, or one Sample to make. Sample work comes first. */
+export const Work = Schema.TaggedUnion({ Narrate: ClaimedJob.fields, Sample: ClaimedSample.fields })
+export type Work = typeof Work.Type
+
+export const ClaimResponse = Schema.Struct({ work: Work })
 
 export const ProgressRequest = Schema.Struct({
   workerId: WorkerId,

@@ -10,7 +10,7 @@ import { api, BlobParams, IdParams, NotStored, noContent, worker } from "./kit.t
 const ReadParams = Schema.Struct({ ...SourceQuery.fields, id: EpisodeId })
 
 /** Serves one stored object, or `404` when the key holds nothing. */
-const stored = Effect.fn("document.stored")(function* (key: string | null, what: string) {
+export const stored = Effect.fn("document.stored")(function* (key: string | null, what: string) {
   const object = key === null ? null : yield* (yield* MediaStore).get(key, null)
   if (object === null) return yield* new NotStored({ message: `This episode has no ${what}.` })
   return HttpServerResponse.raw(

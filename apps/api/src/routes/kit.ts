@@ -51,3 +51,14 @@ export const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsa
 
 export const IdParams = Schema.Struct({ id: EpisodeId })
 export const BlobParams = Schema.Struct({ ...UploadQuery.fields, id: EpisodeId })
+
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+export const uploadRequest = Effect.gen(function* () {
+  const request = yield* webRequest
+  const length = Number(request.headers.get("content-length") ?? Number.NaN)
+  if (!Number.isFinite(length)) return yield* new BadRequest({ message: "Content-Length required" })
+  if (length > MAX_UPLOAD_BYTES) return yield* new TooLarge()
+  if (request.body === null) return yield* new BadRequest({ message: "Body required" })
+  return { body: request.body, headers: request.headers }
+})

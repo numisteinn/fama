@@ -30,7 +30,7 @@ interface Claimed {
 const claim = async () => {
   const response = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
   expect(response.status).toBe(200)
-  return ((await response.json()) as { job: Claimed }).job
+  return ((await response.json()) as { work: Claimed }).work
 }
 
 /** Alice adds a text episode and a worker claims it. */
