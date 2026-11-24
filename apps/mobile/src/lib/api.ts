@@ -1,5 +1,6 @@
 import {
   CreateEpisode,
+  Document,
   Episode,
   EpisodeList,
   EpisodeProgress,
@@ -88,17 +89,24 @@ export function createApi(connection: Connection) {
     mediaUrl: (path: string) => `${base}${path}`,
     me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
-    createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode> =>
-      json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review: false }))),
-    uploadEpisode: (file: PickedFile, voice: VoiceRef | null, speed: number): Promise<Episode> => {
+    createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number, review = false): Promise<Episode> =>
+      json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review }))),
+    uploadEpisode: (file: PickedFile, voice: VoiceRef | null, speed: number, review = false): Promise<Episode> => {
       const form = new FormData()
       // Expo's fetch sends a file part that has `bytes()`. It refuses React Native's `{ uri }` part.
       const part = { name: file.name, type: file.mimeType ?? "application/octet-stream", bytes: () => new File(file.uri).bytes() }
       form.append("file", part as never)
       if (voice !== null) form.append("voice", voice)
+      form.append("review", String(review))
       form.append("speed", String(speed))
       return json(Episode, "/api/episodes/upload", { method: "POST", body: form })
     },
+    document: (id: string): Promise<Document> => json(Document, `/api/episodes/${encodeURIComponent(id)}/document`),
+    saveDocument: async (id: string, document: Document): Promise<void> => {
+      await send(`/api/episodes/${encodeURIComponent(id)}/document`, { ...jsonBody(document), method: "PUT" })
+    },
+    start: (id: string, document: Document): Promise<Episode> =>
+      json(Episode, `/api/episodes/${encodeURIComponent(id)}/start`, jsonBody({ document })),
     deleteEpisode: async (id: string): Promise<void> => {
       await send(`/api/episodes/${encodeURIComponent(id)}`, { method: "DELETE" })
     },

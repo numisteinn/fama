@@ -10,7 +10,7 @@ export const isAccepted = (name: string): boolean => {
 }
 
 /** The voice and speed a file is sent with: the screen's choice when the user chose Create. */
-type Sent = { readonly voice: VoiceRef | null; readonly speed: number }
+type Sent = { readonly voice: VoiceRef | null; readonly speed: number; readonly review: boolean }
 
 /**
  * Where one picked file is. `Attached` waits for Create. `Refused` is a type the API does not narrate, and is never
@@ -46,14 +46,14 @@ export const isSending = (batch: Batch): boolean =>
   batch.some((item) => item.state._tag === "Pending" || item.state._tag === "Uploading")
 
 /** Create: each attached file waits to upload with this voice and speed. */
-export const send = (batch: Batch, voice: VoiceRef | null, speed: number): Batch =>
-  batch.map((item) => (item.state._tag === "Attached" ? { ...item, state: { _tag: "Pending", voice, speed } } : item))
+export const send = (batch: Batch, voice: VoiceRef | null, speed: number, review = false): Batch =>
+  batch.map((item) => (item.state._tag === "Attached" ? { ...item, state: { _tag: "Pending", voice, speed, review } } : item))
 
 /** A failed file waits to upload again, with the voice and speed it had. */
 export const retry = (batch: Batch, key: number): Batch =>
   batch.map((item) =>
     item.state._tag === "Failed" && item.key === key
-      ? { ...item, state: { _tag: "Pending", voice: item.state.voice, speed: item.state.speed } }
+      ? { ...item, state: { _tag: "Pending", voice: item.state.voice, speed: item.state.speed, review: item.state.review } }
       : item,
   )
 
@@ -66,7 +66,7 @@ export const startNext = (batch: Batch): { batch: Batch; started: (BatchFile & {
   if (batch.some((item) => item.state._tag === "Uploading")) return { batch, started: null }
   const next = batch.find((item) => item.state._tag === "Pending")
   if (!next || next.state._tag !== "Pending") return { batch, started: null }
-  const state = { _tag: "Uploading", voice: next.state.voice, speed: next.state.speed } as const
+  const state = { _tag: "Uploading", voice: next.state.voice, speed: next.state.speed, review: next.state.review } as const
   return { batch: setState(batch, next.key, state), started: { ...next, state } }
 }
 
@@ -79,7 +79,7 @@ export const fail = (batch: Batch, key: number, reason: string): Batch =>
   settle(
     batch.map((item) =>
       item.key === key && item.state._tag === "Uploading"
-        ? { ...item, state: { _tag: "Failed", reason, voice: item.state.voice, speed: item.state.speed } }
+        ? { ...item, state: { _tag: "Failed", reason, voice: item.state.voice, speed: item.state.speed, review: item.state.review } }
         : item,
     ),
   )

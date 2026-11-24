@@ -33,16 +33,16 @@ describe("a batch of picked files", () => {
   })
 
   test("one failed file does not stop the others, keeps its reason, and goes again with its own voice and speed", () => {
-    const first = next(send(attach([], [picked("a.pdf"), picked("b.pdf")], 0), null, 0.9))
+    const first = next(send(attach([], [picked("a.pdf"), picked("b.pdf")], 0), null, 0.9, true))
     const second = next(fail(first.batch, 0, "The server failed (500)."))
     expect(second.file).toMatchObject({ key: 1 })
     const ended = succeed(second.batch, 1)
     expect(ended).toEqual([
-      { key: 0, file: picked("a.pdf"), state: { _tag: "Failed", reason: "The server failed (500).", voice: null, speed: 0.9 } },
+      { key: 0, file: picked("a.pdf"), state: { _tag: "Failed", reason: "The server failed (500).", voice: null, speed: 0.9, review: true } },
     ])
 
     const again = next(retry(ended, 0))
-    expect(again.file).toMatchObject({ key: 0, state: { _tag: "Uploading", voice: null, speed: 0.9 } })
+    expect(again.file).toMatchObject({ key: 0, state: { _tag: "Uploading", voice: null, speed: 0.9, review: true } })
     expect(remove(again.batch, 0)).toEqual(again.batch)
   })
 })

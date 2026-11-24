@@ -12,12 +12,13 @@ import { Icon, Tap } from "./ui"
 
 type Props = {
   episode: Episode
+  onReview(episode: Episode): void
   onPlay(episode: Episode): void
   onRetry(episode: Episode): Promise<void>
   onDelete(episode: Episode): void
 }
 
-export function EpisodeRow({ episode, onPlay, onRetry, onDelete }: Props) {
+export function EpisodeRow({ episode, onReview, onPlay, onRetry, onDelete }: Props) {
   const swipeable = useRef<SwipeableMethods>(null)
   const playable = isPlayable(episode)
   return (
@@ -44,8 +45,8 @@ export function EpisodeRow({ episode, onPlay, onRetry, onDelete }: Props) {
       <Tap
         style={styles.row}
         accessibilityRole="button"
-        accessibilityLabel={episode.title}
-        onPress={() => playable && onPlay(episode)}
+        accessibilityLabel={episode.job._tag === "Review" ? `Review ${episode.title}` : episode.title}
+        onPress={() => episode.job._tag === "Review" ? onReview(episode) : playable && onPlay(episode)}
       >
         <Artwork episode={episode} size={56} rounded={radius.sm} />
         <View style={styles.body}>
