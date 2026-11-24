@@ -96,10 +96,10 @@ class Api:
         return self._send("GET", job.source_path, params={"leaseToken": job.lease_token}).content
 
     def progress(self, job: ClaimedJob, stage: str, done: int, total: int, *, title: str | None,
-                 author: str | None, language: str | None, voice: str | None) -> None:
+                 author: str | None, language: str | None, voice: str | None, remaining_ms: int | None) -> None:
         self._send("POST", f"/api/worker/jobs/{job.episode_id}/progress", json={
             "workerId": self.worker_id, "leaseToken": job.lease_token, "stage": stage, "done": done, "total": total,
-            "title": title, "author": author, "language": language, "voice": voice,
+            "title": title, "author": author, "language": language, "voice": voice, "remainingMs": remaining_ms,
         })
 
     def _put(self, job: ClaimedJob, path: str, file: Path, content_type: str, params: dict) -> None:
