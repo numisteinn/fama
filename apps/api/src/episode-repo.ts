@@ -42,6 +42,7 @@ const EpisodeRow = Schema.Struct({
   duration_ms: Schema.NullOr(Schema.Number),
   book_size: Schema.NullOr(Schema.Number),
   cover_key: Schema.NullOr(Schema.String),
+  document_size: Schema.NullOr(Schema.Number),
   job_version: Schema.Number,
   job_state: Schema.Literals(["Queued", "Running", "Ready", "Failed"]),
   worker_id: Schema.NullOr(Schema.String),
@@ -159,17 +160,21 @@ export interface Interface {
     durationMs: number,
   ) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly fail: (id: string, lease: LeaseToken, reason: string) => Effect.Effect<void, EpisodeNotFound | Job.LeaseLost | Failure>
-  /** Checks the lease and returns what a job route needs: the source and the owner. */
+  /** Checks the lease and returns what a job route needs: the source, the owner and the key of the stored cover. */
   readonly holdLease: (
     id: string,
     lease: LeaseToken,
-  ) => Effect.Effect<{ readonly source: Source; readonly userId: UserId }, EpisodeNotFound | Job.LeaseLost | Failure>
+  ) => Effect.Effect<
+    { readonly source: Source; readonly userId: UserId; readonly coverKey: string | null },
+    EpisodeNotFound | Job.LeaseLost | Failure
+  >
   readonly putChapter: (
     id: string,
     chapter: { readonly index: number; readonly title: string; readonly durationMs: number; readonly size: number },
   ) => Effect.Effect<void, DatabaseError>
   readonly setBook: (id: string, size: number) => Effect.Effect<void, DatabaseError>
   readonly setCover: (id: string, key: string) => Effect.Effect<void, DatabaseError>
+  readonly setDocument: (id: string, size: number) => Effect.Effect<void, DatabaseError>
   readonly feedItems: (userId: UserId, origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, Failure>
   readonly voices: Effect.Effect<ReadonlyArray<Voice>, Failure>
   /**
@@ -402,6 +407,8 @@ export const layer = Layer.effect(
           leaseToken,
           source: Schema.encodeSync(Source)(claimed.source),
           sourcePath: claimed.source._tag === "File" ? `/api/worker/jobs/${claimed.id}/source` : null,
+          documentPath: claimed.document_size === null ? null : `/api/worker/jobs/${claimed.id}/document`,
+          coverPath: claimed.cover_key === null ? null : `/api/worker/jobs/${claimed.id}/cover`,
           voice: claimed.voice,
           speed: claimed.speed,
           completedChapters: chapters.map((chapter) => chapter.idx),
@@ -438,7 +445,7 @@ export const layer = Layer.effect(
       const job = yield* Schema.decodeUnknownEffect(JobState)(jobOf(row))
       const held = Job.holdLease(job, holds(row, leaseHash))
       if (Result.isFailure(held)) return yield* Effect.fail(held.failure)
-      return { source: row.source, userId: row.user_id }
+      return { source: row.source, userId: row.user_id, coverKey: row.cover_key }
     })
 
     const putChapter = Effect.fn("EpisodeRepo.putChapter")(function* (
@@ -463,6 +470,9 @@ export const layer = Layer.effect(
 
     const setCover = (id: string, key: string) =>
       run("episode.setCover", "UPDATE episodes SET cover_key = ? WHERE id = ?", key, id)
+
+    const setDocument = (id: string, size: number) =>
+      run("episode.setDocument", "UPDATE episodes SET document_size = ? WHERE id = ?", size, id)
 
     const feedItems = Effect.fn("EpisodeRepo.feedItems")(function* (userId: UserId, origin: string) {
       const rows = yield* all(
@@ -548,6 +558,7 @@ export const layer = Layer.effect(
       putChapter,
       setBook,
       setCover,
+      setDocument,
       feedItems,
       voices,
     })

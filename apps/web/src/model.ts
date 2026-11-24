@@ -1,9 +1,9 @@
 import { Episode, EpisodeId, EpisodeProgress, type JobState, Voice, VoiceRef } from "@fama/contracts"
 import { Dialog } from "@foldkit/ui"
 import { Option, Schema } from "effect"
-import { File } from "foldkit"
 import { defineTaggedUnion } from "foldkit/schema"
 import { ApiFailure, ApiToken, Connection } from "~/api"
+import { BatchFile, hasAttached } from "~/batch"
 import { formatRate } from "~/lib/format"
 
 // CONSTANTS
@@ -12,8 +12,6 @@ import { formatRate } from "~/lib/format"
 export const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as const
 /** Synthesis speeds of the add bar. */
 export const SPEEDS = [0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.5] as const
-/** File types the add bar takes. */
-export const ACCEPT = ".pdf,.epub,.txt,.md,.markdown,.html,.htm"
 export const POLL_MS = 2000
 export const SAVE_EVERY_MS = 5000
 export const SKIP_BACK_MS = 15_000
@@ -135,7 +133,11 @@ export const Model = Schema.Struct({
   voices: Schema.Array(Voice),
 
   addText: Schema.String,
-  maybeAttachedFile: Schema.Option(File.File),
+  /** Files of the add bar, in the order the user added them. */
+  batch: Schema.Array(BatchFile),
+  /** Counts attached files. Each file's key is its number. */
+  batchKeys: Schema.Number,
+  /** A link or text is being added. */
   isAdding: Schema.Boolean,
   maybeAddError: Schema.Option(Schema.String),
   /** `None` is Auto. */
@@ -228,12 +230,13 @@ export const Draft = defineTaggedUnion({
   Empty: {},
   Url: { url: Schema.String },
   Text: { text: Schema.String },
-  File: { file: File.File },
+  /** The attached files of the batch. */
+  Files: {},
 })
 export type Draft = typeof Draft.Type
 
 export const toDraft = (model: Model): Draft => {
-  if (Option.isSome(model.maybeAttachedFile)) return Draft.File({ file: model.maybeAttachedFile.value })
+  if (model.batch.length > 0) return hasAttached(model.batch) ? Draft.Files() : Draft.Empty()
   const trimmed = model.addText.trim()
   if (!trimmed) return Draft.Empty()
   if (!/\s/.test(trimmed) && /^https?:\/\//i.test(trimmed) && URL.canParse(trimmed)) {

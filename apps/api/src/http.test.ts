@@ -4,14 +4,13 @@ import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { getPlatformProxy } from "wrangler"
-import migration from "../migrations/0001_init.sql?raw"
-import remainingMigration from "../migrations/0007_remaining.sql?raw"
 import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import { sha256Hex } from "./secrets.ts"
+import { migrations } from "./test-app.ts"
 import * as Wake from "./wake.ts"
 
 const WORKER_TOKEN = "test-worker-token"
@@ -91,9 +90,7 @@ beforeEach(async () => {
   waitUntilThrows = false
   const tables = ["progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
-  await env.DB.batch(
-    [migration, remainingMigration].flatMap(statements).map((statement) => env.DB.prepare(statement)),
-  )
+  await env.DB.batch(statements(migrations).map((statement) => env.DB.prepare(statement)))
   for (const user of Object.values(users)) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO users (id, feed_token, created_at) VALUES (?, ?, ?)").bind(

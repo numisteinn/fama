@@ -1,6 +1,6 @@
 # Worker makes an episode
 
-The Mac worker pulls the oldest queued job, extracts the document, narrates it chapter by chapter, uploads each chapter as soon as it is done, then uploads the book file and marks the job Ready. The user sees the job move from `Queued` through `Reading`, `Narrating n/m`, `Encoding` and `Uploading` to a duration. While it narrates, the row shows the time left once the worker has measured its speed: `Narrating · 25 s left`. When extraction fails, the row shows a plain reason and a `Retry` button. When a worker stops halfway, another worker takes the job after the lease runs out and skips the chapters that already exist. A cloud worker that sleeps is woken by the API each time a job becomes Queued.
+The Mac worker pulls the oldest queued job, extracts the Document and stores it with the API (see [Stored Document](./stored-document.md)), narrates it chapter by chapter, uploads each chapter as soon as it is done, then uploads the book file and marks the job Ready. The user sees the job move from `Queued` through `Reading`, `Narrating n/m`, `Encoding` and `Uploading` to a duration. While it narrates, the row shows the time left once the worker has measured its speed: `Narrating · 25 s left`. When extraction fails, the row shows a plain reason and a `Retry` button. When a worker stops halfway, another worker takes the job after the lease runs out and skips the chapters that already exist. A cloud worker that sleeps is woken by the API each time a job becomes Queued.
 
 ## Sub-features
 

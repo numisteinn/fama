@@ -23,6 +23,8 @@ class FakeApi:
         self.calls: list[tuple[str, str]] = []
         self.chapters: dict[int, dict] = {}
         self.book: bytes | None = None
+        self.document: dict | None = None  # the stored Document
+        self.cover: bytes | None = None  # the stored cover, a PNG
         self.state = "Queued"
         self.steal_after_chapter: int | None = None
         self.progress: list[dict] = []
@@ -41,13 +43,20 @@ class FakeApi:
                 return 204, b""
             self.claims += 1
             self.lease, self.state = f"lease-{self.claims}", "Running"
-            return 200, json.dumps({"job": {**self.job, "leaseToken": self.lease}}).encode()
+            base = f"/api/worker/jobs/{self.job['episodeId']}"
+            stored = {"documentPath": f"{base}/document" if self.document else None,
+                      "coverPath": f"{base}/cover" if self.cover else None}
+            return 200, json.dumps({"job": {**self.job, **stored, "leaseToken": self.lease}}).encode()
         lease = query.get("leaseToken") if request.command in ("GET", "PUT") else json.loads(body).get("leaseToken")
         self.leases.append((url.path, lease))
         if lease != self.lease or self.state != "Running":
             return 409, b""
         if request.command == "GET" and parts[-1] == "source":
             return 200, TEXT.encode()
+        if request.command == "GET" and parts[-1] == "document":
+            return 200, json.dumps(self.document).encode()
+        if request.command == "GET" and parts[-1] == "cover":
+            return 200, self.cover or b""
         if request.command == "PUT":
             assert length is not None and int(length) == len(body) > 0
         kind = parts[4]
@@ -60,6 +69,10 @@ class FakeApi:
                 self.lease = "another-workers-lease"
         elif kind == "book":
             self.book = body
+        elif kind == "document":
+            self.document = json.loads(body)
+        elif kind == "cover":
+            self.cover = body
         elif kind == "complete":
             self.state = "Ready"
         elif kind == "fail":
@@ -79,6 +92,8 @@ def server():
                 status, payload = fake.handle(self)
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(payload)))
+                if self.command == "GET" and self.path.split("?")[0].endswith("/cover"):
+                    self.send_header("Content-Type", "image/png")
                 self.end_headers()
                 self.wfile.write(payload)
 

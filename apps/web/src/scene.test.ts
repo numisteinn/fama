@@ -31,6 +31,7 @@ import {
   ScrollPickerItem,
   StoreSetting,
   StoreConnection,
+  UploadEpisode,
   WaitBeforeResetTypeAhead,
 } from "~/command"
 import {
@@ -92,8 +93,31 @@ describe("attach a file", () => {
       Mount.expectExact(OpenFilePickerOnKey),
       resolveAttachKeys,
       changeFiles(`#${FILE_INPUT_ID}`, [new File(["book"], "harbour-days.epub", { type: "application/epub+zip" })]),
-      expect(role("button", { name: "Remove file" })).toExist(),
+      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
       expect(role("button", { name: "Add" })).toBeEnabled(),
+    )
+  })
+
+  test("each file of a batch has its row; a refused or failed file says why, and a failed one has Retry", () => {
+    const epub = new File(["book"], "harbour-days.epub")
+    const png = new File(["png"], "cover.png")
+    scene(
+      { update, view },
+      given(withEpisodes(baseModel(), [])),
+      resolveAttachKeys,
+      changeFiles(`#${FILE_INPUT_ID}`, [epub, png]),
+      expect(linkOrText).toBeAbsent(),
+      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
+      expect(role("button", { name: "Remove cover.png" })).toExist(),
+      expect(role("alert")).toHaveText("Unsupported type"),
+      click(role("button", { name: "Add" })),
+      Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: { status: 413, message: "The file is too large" } })),
+      expect(role("button", { name: "Retry harbour-days.epub" })).toExist(),
+      expect(role("button", { name: "Add" })).toBeDisabled(),
+      click(role("button", { name: "Remove harbour-days.epub" })),
+      click(role("button", { name: "Remove cover.png" })),
+      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      expect(linkOrText).toExist(),
     )
   })
 })
