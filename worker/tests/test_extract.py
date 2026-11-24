@@ -1,7 +1,9 @@
 import zipfile
 from pathlib import Path
 
-import pymupdf
+import pytest
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 from fama_worker.extract import extract
 from fama_worker.extract.common import markdown_chapters, split_long
@@ -79,23 +81,32 @@ def test_epub_chapters_follow_the_toc_and_skip_front_matter(tmp_path):
 
 
 def _pdf(path: Path) -> Path:
-    doc = pymupdf.open()
+    width, height = A4
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.setTitle("City Book")
+    doc.setAuthor("Jón")
     lines = ["This is a long paragraph about the history of the city and how it grew over the cen-",
              "turies into a capital that people visit for its harbour and its swimming pools."]
     for number in range(1, 7):
-        page = doc.new_page()
-        page.insert_text((72, 30), "A RUNNING HEADER", fontsize=9)
-        y = 100
+        doc.setFont("Helvetica", 9)
+        doc.drawString(72, height - 30, "A RUNNING HEADER")
+        y = height - 100
         if number in (1, 4):
-            page.insert_text((72, y), f"Part {1 if number == 1 else 2}", fontsize=18)
-            y += 40
+            part = f"Part {1 if number == 1 else 2}"
+            key = f"part-{number}"
+            doc.bookmarkPage(key)
+            doc.addOutlineEntry(part, key, level=0)
+            doc.setFont("Helvetica-Bold", 18)
+            doc.drawString(72, y, part)
+            y -= 40
+        doc.setFont("Helvetica", 11)
         for line in lines:
-            page.insert_text((72, y), line, fontsize=11)
-            y += 14
-        page.insert_text((300, 800), str(number), fontsize=9)
-    doc.set_toc([[1, "Part 1", 1], [1, "Part 2", 4]])
-    doc.set_metadata({"title": "City Book", "author": "Jón"})
-    doc.save(path)
+            doc.drawString(72, y, line)
+            y -= 14
+        doc.setFont("Helvetica", 9)
+        doc.drawString(300, height - 800, str(number))
+        doc.showPage()
+    doc.save()
     return path
 
 
@@ -108,3 +119,47 @@ def test_pdf_uses_toc_and_drops_headers_page_numbers_and_hyphens(tmp_path):
     assert "centuries" in text and "cen-" not in text
     assert not any(line.strip().isdigit() for line in text.splitlines())
     assert not text.startswith("Part 1")
+
+
+def test_pdf_falls_back_to_largest_horizontal_title_and_joins_page_break(tmp_path):
+    path = tmp_path / "paper.pdf"
+    width, height = A4
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.setTitle("Untitled")
+    doc.setAuthor("")
+
+    # Rotated margin stamp in a larger font must be skipped when detecting the title.
+    doc.saveState()
+    doc.translate(24, 200)
+    doc.rotate(90)
+    doc.setFont("Helvetica", 22)
+    doc.drawString(0, 0, "arXiv:2601.00001v1 [cs.CL] 1 Jan 2026")
+    doc.restoreState()
+
+    doc.setFont("Helvetica-Bold", 18)
+    doc.drawString(72, height - 100, "Harbour Currents")
+    doc.setFont("Helvetica", 11)
+    doc.drawString(72, height - 140, "The fishing fleet leaves the bay before dawn and follows the warm")
+    doc.showPage()
+
+    doc.setFont("Helvetica", 11)
+    doc.drawString(72, height - 100, "coastal current toward the northern fishing grounds every winter morning.")
+    doc.showPage()
+    doc.save()
+
+    document = extract(FileSource(path))
+    assert document.title == "Harbour Currents"
+    assert document.author is None
+    assert "warm coastal current" in document.chapters[0].text
+    assert "arXiv" not in document.chapters[0].text
+
+
+def test_pdf_without_text_layer_raises_plain_error(tmp_path):
+    path = tmp_path / "scan.pdf"
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.rect(72, 72, 200, 200)
+    doc.showPage()
+    doc.save()
+
+    with pytest.raises(ValueError, match="This PDF has no text layer"):
+        extract(FileSource(path))
