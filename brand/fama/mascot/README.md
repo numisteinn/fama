@@ -1,6 +1,26 @@
-# Pan
+# Fama mascots
 
-Pan uses the Take B Fold model. The Feed cover shows Pan with open ears. The empty-state assets show Pan asleep with the ears crossed like a cloak.
+## Ribbon + Fan
+
+One clay surface forms the ear hollow, rim, and feather tips. Pan wears a sage beret. His companion has short plum curls.
+
+| Character | Transparent 512 × 512 PNGs |
+| --- | --- |
+| Pan | [Open](ribbon-fan/pan/open.png), [folded](ribbon-fan/pan/folded.png), [listening](ribbon-fan/pan/listening.png), [speaking](ribbon-fan/pan/speaking.png), [waving](ribbon-fan/pan/waving.png) |
+| Companion | [Open](ribbon-fan/companion/open.png), [listening](ribbon-fan/companion/listening.png) |
+
+Rebuild with Blender 5.2 from `brand/fama/mascot`.
+
+```sh
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
+  --python-exit-code 1 --python src/poses.py -- ribbon-fan/pan
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
+  --python-exit-code 1 --python src/companion.py -- ribbon-fan/companion
+```
+
+## Feed cover and sleeping pose
+
+The Feed cover and empty-state art use the Take B Fold model.
 
 | File | Dimensions | Size | Use |
 | --- | --- | --- | --- |
@@ -32,7 +52,7 @@ Use Blender 5.2 and `uv` on macOS. The proof uses the system Arial fonts. Run fr
 )
 ```
 
-[src/studio.py](src/studio.py) renders both poses from the Take B model. [src/export.py](src/export.py) adds the spruce ground, makes the smaller sleeping files and builds the proof. The original studies are kept outside the repo.
+[src/studio.py](src/studio.py) renders the Feed cover and sleeping pose from the Take B model. [src/export.py](src/export.py) adds the spruce ground, makes the smaller sleeping files and builds the proof. The original studies are kept outside the repo.
 
 ## In the apps
 
