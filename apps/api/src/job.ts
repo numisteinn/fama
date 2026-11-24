@@ -1,3 +1,11 @@
+// The job state machine. Each function is one event: it returns the next state, or the error of an illegal move.
+//
+//   Queued ──claim──▶ Running ──complete──▶ Ready
+//      ▲                 │ ├──────fail────▶ Failed ──retry──▶ Queued
+//      │                 │ └─storeDocument, review on─▶ Review ──start──▶ Queued
+//      └─────────────────┘ a claim by another worker, when the lease is expired, stays Running
+//
+// A job in Review has no lease and waits for its user. A worker cannot claim it or write to it.
 import { JobState, LEASE_MS, type Stage, type WorkerId } from "@fama/contracts"
 import { Result, Schema } from "effect"
 
@@ -6,6 +14,10 @@ export class LeaseLost extends Schema.TaggedError<LeaseLost>()("LeaseLost", {}) 
 export class NotClaimable extends Schema.TaggedError<NotClaimable>()("NotClaimable", {}) {}
 
 export class NotRetryable extends Schema.TaggedError<NotRetryable>()("NotRetryable", {
+  state: Schema.String,
+}) {}
+
+export class NotInReview extends Schema.TaggedError<NotInReview>()("NotInReview", {
   state: Schema.String,
 }) {}
 
@@ -64,6 +76,17 @@ export const progress = (
     }),
   )
 
+/**
+ * The worker stored the Document. With `review` (the episode was added with review on, and this is its first stored
+ * Document) the job stops in `Review`, and the lease ends with it. So a repeat of the upload after the stop is
+ * `LeaseLost` like every other worker call, and it cannot replace a Document the user has changed since.
+ */
+export const storeDocument = (
+  state: JobState,
+  event: { readonly held: boolean; readonly review: boolean },
+): Result.Result<JobState, LeaseLost> =>
+  Result.map(holdLease(state, event.held), (running) => (event.review ? JobState.cases.Review.make({}) : running))
+
 /** A repeated `complete` by the same lease after success is a no-op, so a worker can retry it. */
 export const complete = (
   state: JobState,
@@ -84,7 +107,10 @@ export const fail = (
         JobState.cases.Failed.make({ reason: event.reason, failedAt: iso(event.now) }),
       )
 
-/** Retrying a queued job is a no-op, so a double tap in the app is harmless. */
+/**
+ * Retrying a queued job is a no-op, so a double tap in the app is harmless. A job in `Review` did not fail: its
+ * user starts it or deletes it.
+ */
 export const retry = (state: JobState): Result.Result<JobState, NotRetryable> => {
   switch (state._tag) {
     case "Queued":
@@ -95,3 +121,14 @@ export const retry = (state: JobState): Result.Result<JobState, NotRetryable> =>
       return Result.fail(new NotRetryable({ state: state._tag }))
   }
 }
+
+/** The user can change the Document only while the job waits in `Review`: later, a worker narrates from it. */
+export const editDocument = (state: JobState): Result.Result<JobState, NotInReview> =>
+  state._tag === "Review" ? Result.succeed(state) : Result.fail(new NotInReview({ state: state._tag }))
+
+/**
+ * The user starts narration. Only from `Review`: `start` stores the Document it narrates, so a second `start` is
+ * refused and cannot change the Document under a worker.
+ */
+export const start = (state: JobState): Result.Result<JobState, NotInReview> =>
+  Result.map(editDocument(state), () => JobState.cases.Queued.make({}))

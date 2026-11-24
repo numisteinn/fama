@@ -16,17 +16,16 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 The foundation and the timing file are built. The lanes fan out from them.
 
 ```
-now ──┬─ V1 Review core ──┬─ V2 Review web ─────┬─ S2 Sample web
-      │                   ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
-      │                   └─ N1 Narrate again core ──┬─ N2 web
-      │                                              └─ N3 iPhone
-      ├─ S1  Sample core
-      ├─ R3  Reader iPhone
-      ├─ R4  Feed transcript
-      └─ X   Extraction (OCR, PDF library)
+now ──┬─ V2 Review web ─────┬─ S2 Sample web
+      ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
+      ├─ N1 Narrate again core ──┬─ N2 web
+      │                          └─ N3 iPhone
+      ├─ R2 Reader web
+      ├─ R3 Reader iPhone
+      └─ X  Extraction (OCR, PDF library)
 ```
 
-Five units can start now: `V1`, `S1`, `R3`, `R4`, `X`.
+Eight units can start now: `V2`, `V3`, `N1`, `S1`, `R2`, `R3`, `R4`, `X`.
 
 ## Rules for parallel work
 
@@ -53,8 +52,9 @@ First principles: the mark must never be on the wrong sentence. So each marked u
 
 Units:
 
+- **R2. Reader on the web.**
 - **R3. Reader on the iPhone.**
-- **R4. Transcript in the feed.** The API builds one WebVTT file for the book file from the timing files and the chapter durations, and the feed item gets a `podcast:transcript` tag.
+- Built: **R4, the transcript in the feed.** `docs/api.md` ("Feed and transcript").
 
 ### V. Review
 
@@ -68,19 +68,17 @@ First principles: this is the only moment when a change costs no narration time.
 - `POST /api/episodes/:id/start` moves the job to `Queued`. Chapters that are not ticked are removed from the Document at this point, so the rule from `F` holds.
 - "Remove a header that repeats on each page" is not part of Review. The PDF extractor already does it (see "Already in Fama"). A text correction covers what is left.
 
-Units: **V1** core (API, contract, worker), then **V2** web and **V3** iPhone.
+The Review API takes the full Document at Start. Send the corrected text and only the kept chapters, in order. See [the HTTP contract](./api.md#review).
+
+Units: **V2** web and **V3** iPhone.
 
 ### S. Voice sample
 
 In Review, each voice reads the first paragraph of your Document. You choose by ear.
 
-First principles: a sample is `(text, voice)` to a short clip. The text must come from the Document, so the sample comes after extraction, not before the add as the old roadmap said. This matters most for Icelandic, where the choice is between Piper voices.
+The Sample API is in place. Once an Episode has a stored Document, use `POST /api/episodes/:id/samples` to ask for clips and `GET /api/episodes/:id/samples` to read the states and URLs. See [the Sample contract](api.md#samples). A Worker finishes any narration it already started before it claims Samples.
 
-- A sample is not an episode job. It is a second kind of work: `claim` returns `Narrate` or `Sample`. Sample work is claimed first.
-- `POST /api/episodes/:id/samples` asks for clips for the voices of the Document's language. The worker uploads each clip to `episodes/<episodeId>/samples/<voice>.m4a`. `GET /api/episodes/:id/samples` lists them.
-- Limit: a worker that narrates another episode finishes that job first. With one Mac worker, a sample can wait.
-
-Units: **S1** core (worker, API, contract) after `F`. **S2** web and **S3** iPhone add the samples to the Review screen, so they come after `V2` and `V3`.
+**S2** adds Samples to web Review after `V2`. **S3** adds Samples to iPhone Review after `V3`.
 
 ### N. Narrate again
 
@@ -93,14 +91,13 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 - `PUT /api/episodes/:id/document` also works on a `Ready` or `Failed` episode, for chapter text only. The number of chapters cannot change. `PUT /api/episodes/:id/voice` changes the voice and the speed. Both put the job back to `Queued`.
 - While the job runs again, the old audio of a stale chapter stays playable until the new upload replaces it.
 
-Units: **N1** core after `V1` (it extends the same route and the claim), then **N2** web and **N3** iPhone.
+Units: **N1** core (it extends the Review route and the claim), then **N2** web and **N3** iPhone.
 
 
 ### X. Extraction
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
 
-- **X1. Replace PyMuPDF** (AGPL) with `pypdfium2`. Needed before we charge for a managed service. It goes first, because OCR builds on the PDF code.
 - **X2. OCR for scanned PDFs.** A scanned PDF has no text to extract. On the Mac, Apple Vision OCR works offline. Check its Icelandic support first. Seen in: abogen (on its roadmap).
 - **X3. LLM pass to fix text, for Icelandic only.** This fixes Icelandic numbers ("3 bækur" must be read as "þrjár bækur"), which the rules in `normalize.py` do not handle. Optional, with a local model or an API model. Seen in: abogen.
 
@@ -110,11 +107,9 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 | Unit | Its own files | Migration |
 |---|---|---|
+| R2 | `apps/web/src/reader/` | |
 | R3 | `apps/mobile/src/reader/` | |
-| R4 | `apps/api/src/feed.ts`, `apps/api/src/transcript.ts` | |
-| V1 | `contracts/src/review.ts`, `apps/api/src/routes/review.ts`, `apps/api/src/job.ts` | `0004_review.sql` |
 | V2, V3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
-| S1 | `contracts/src/sample.ts`, `apps/api/src/routes/sample.ts`, `apps/api/src/sample-repo.ts`, `worker/.../sample.py` | `0005_samples.sql` |
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
@@ -122,7 +117,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 Known shared points, and who goes first:
 
-- `claim` in `job.ts` and `episode-repo.ts`: `F`, then `V1` and `S1`, then `N1`. `V1` and `S1` each add their own branch to the claim. The second one to merge rebases.
 
 ## Open choices
 
@@ -134,7 +128,7 @@ Each has a default. A unit follows the default unless the owner says no.
    - Both engines use one call for each sentence. No engine needed the other path (sentence times from the engine's own word timestamps), which Kokoro has for English voices only.
    - Sound: the pause between sentences is as before, because a Segment that continues a paragraph drops the silence its call opens with. The owner should still listen: `~/Developer/fama-samples/read-along/`.
 2. **Review is for all sources, off by default.** The old roadmap said files only.
-3. **Voice samples exist only in Review.** No sample before the add, and none for an episode that already narrates.
+3. **Apps show Samples in Review.** The API can make Samples for any Episode with a stored Document.
 4. **Unticked chapters are removed at Start.** You cannot tick them again later.
 5. **Narrate again also covers a new voice and a new speed.** The old roadmap had only edited text.
 
@@ -161,6 +155,5 @@ Each has a default. A unit follows the default unless the owner says no.
 
 ## Before charging for a managed service
 
-- `X1`: replace PyMuPDF (AGPL) or change the license.
 - Measure the GPU cost per hour of audio on Modal. The price depends on it.
 - Design: [design/two-paths.md](design/two-paths.md).

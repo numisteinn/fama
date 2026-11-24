@@ -72,7 +72,7 @@ def authorized(header: str | None, secret: str) -> bool:
 
 
 def claim_on_cpu(api_url: str, token: str, worker_id: str, transport=None) -> dict | None:
-    """Claim one job without a GPU: the raw `ClaimedJob`, or None when the queue is empty.
+    """Claim one job without a GPU: the raw tagged work, or None when the queue is empty.
 
     An empty voice list leaves the voice registry as it is; the drain registers the voices.
     """
@@ -82,7 +82,7 @@ def claim_on_cpu(api_url: str, token: str, worker_id: str, transport=None) -> di
                       headers={"Authorization": f"Bearer {token}"}) as client:
         response = client.post("/api/worker/claim", json={"workerId": worker_id, "voices": []})
     response.raise_for_status()
-    return None if response.status_code == 204 else response.json()["job"]
+    return None if response.status_code == 204 else response.json()["work"]
 
 
 def dispatch(drain_function, claim: Callable[[str], dict | None]) -> str:
@@ -166,12 +166,12 @@ secret = modal.Secret.from_name(SECRET_NAME)
               max_containers=MAX_DRAINS, scaledown_window=SCALEDOWN_S)
 def drain(job: dict | None = None, worker_id: str | None = None) -> None:
     """`fama work --drain` on the GPU. `job` is one the dispatcher claimed as `worker_id`."""
-    from fama_worker.api import ClaimedJob
+    from fama_worker.api import parse_work
     from fama_worker.work import run
 
     worker_id = worker_id or f"modal-{os.environ.get('MODAL_TASK_ID', 'drain')}"
     run(os.environ["FAMA_API_URL"], os.environ["FAMA_WORKER_TOKEN"], worker_id,
-        out_dir=Path("/tmp/fama/work"), drain=True, first_job=ClaimedJob.parse(job) if job else None)
+        out_dir=Path("/tmp/fama/work"), drain=True, first_job=parse_work(job) if job else None)
 
 
 @app.function(image=dispatch_image, secrets=[secret])

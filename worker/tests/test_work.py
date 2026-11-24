@@ -26,6 +26,8 @@ class FakeApi:
         self.timings: dict[int, dict] = {}
         self.book: bytes | None = None
         self.document: dict | None = None  # the stored Document
+        self.review = False
+        self.document_voice: str | None = None
         self.cover: bytes | None = None  # the stored cover, a PNG
         self.state = "Queued"
         self.steal_after_chapter: int | None = None
@@ -48,7 +50,7 @@ class FakeApi:
             base = f"/api/worker/jobs/{self.job['episodeId']}"
             stored = {"documentPath": f"{base}/document" if self.document else None,
                       "coverPath": f"{base}/cover" if self.cover else None}
-            return 200, json.dumps({"job": {**self.job, **stored, "leaseToken": self.lease}}).encode()
+            return 200, json.dumps({"work": {"_tag": "Narrate", **self.job, **stored, "leaseToken": self.lease}}).encode()
         lease = query.get("leaseToken") if request.command in ("GET", "PUT") else json.loads(body).get("leaseToken")
         self.leases.append((url.path, lease))
         if lease != self.lease or self.state != "Running":
@@ -76,6 +78,10 @@ class FakeApi:
             self.book = body
         elif kind == "document":
             self.document = json.loads(body)
+            self.document_voice = query["voice"]
+            if self.review:
+                self.state = "Review"
+            return 200, json.dumps({"next": "Review" if self.review else "Narrate"}).encode()
         elif kind == "cover":
             self.cover = body
         elif kind == "complete":
@@ -151,6 +157,28 @@ def test_claim_progress_chapters_book_complete(tone, server, tmp_path):
     assert {lease for _, lease in fake.leases} == {"lease-1"}
 
 
+def test_review_stops_and_the_next_claim_narrates_the_edited_document(tone, server, tmp_path):
+    fake, url = server(_job())
+    fake.review = True
+    work.run(url, TOKEN, "mac", out_dir=tmp_path / "work", drain=True)
+    assert fake.state == "Review"
+    assert fake.document and fake.document_voice == "tone:a"
+    assert not fake.chapters and not fake.timings and fake.book is None
+    assert fake.calls[-1] == ("POST", "/api/worker/claim")
+    assert ("POST", "/api/worker/jobs/ep1/fail") not in fake.calls
+
+    edit = "The harbour glows at dusk."
+    fake.document["chapters"] = [{"title": "Dusk", "text": edit}]
+    fake.state = "Queued"
+    _run(url, tmp_path)
+    assert fake.state == "Ready"
+    assert list(fake.chapters) == [0]
+    assert fake.chapters[0]["title"] == "Dusk"
+    assert edit in [s["text"] for s in fake.timings[0]["segments"]]
+    assert fake.calls.count(("GET", "/api/worker/jobs/ep1/source")) == 1
+    assert fake.calls.count(("PUT", "/api/worker/jobs/ep1/document")) == 1
+
+
 def test_409_drops_the_job_without_failing_it(tone, server, tmp_path):
     fake, url = server(_job())
     fake.steal_after_chapter = 0
@@ -204,7 +232,7 @@ def test_drain_makes_a_job_claimed_elsewhere_under_the_same_worker_id(tone, serv
     fake, url = server(_job())
     # As the Modal dispatcher does: claim on the CPU, hand the raw job to the GPU drain.
     raw = httpx.post(f"{url}/api/worker/claim", json={"workerId": "modal-1", "voices": []},
-                     headers={"Authorization": f"Bearer {TOKEN}"}).json()["job"]
+                     headers={"Authorization": f"Bearer {TOKEN}"}).json()["work"]
     work.run(url, TOKEN, "modal-1", out_dir=tmp_path / "work", drain=True, first_job=ClaimedJob.parse(raw))
     assert fake.state == "Ready" and sorted(fake.chapters) == [0, 1, 2]
 
