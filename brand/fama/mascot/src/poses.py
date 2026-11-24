@@ -51,23 +51,26 @@ def render_pose(name, output):
     render_scene(output / f"{name}.png", 512, .84, tilt=pose["tilt"], rim_strength=.7)
 
 
-def render_open_or_folded(output, *, folded):
+def render_open_or_folded(path, *, folded, resolution=512, fill=.84):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     clay = materials()
     head(clay, closed_eyes=folded)
     pose = "wrapped" if folded else "open"
     for side in (-1, 1):
         make_wing(wing_path(pose, side), side, clay, folded=folded)
-    filename = "folded.png" if folded else "open.png"
-    render_scene(output / filename, 512, .84, tilt=-7 if folded else 0, rim_strength=.65)
+    render_scene(path, resolution, fill, tilt=-7 if folded else 0, rim_strength=.65)
 
 
 if __name__ == "__main__":
     output, *names = sys.argv[sys.argv.index("--") + 1:]
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    if not names:
-        render_open_or_folded(output, folded=False)
-        render_open_or_folded(output, folded=True)
-    for name in names or POSES:
-        render_pose(name, output)
+    if names == ["--app-art"]:
+        render_open_or_folded(output / "open.png", folded=False, resolution=3000, fill=.80)
+        render_open_or_folded(output / "wrapped.png", folded=True, resolution=1024, fill=.86)
+    else:
+        if not names:
+            render_open_or_folded(output / "open.png", folded=False)
+            render_open_or_folded(output / "folded.png", folded=True)
+        for name in names or POSES:
+            render_pose(name, output)

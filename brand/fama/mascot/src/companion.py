@@ -1,4 +1,4 @@
-"""Render the companion with short plum curls and Ribbon + Fan ears."""
+"""Render Pippa with short plum curls and Ribbon + Fan ears."""
 import math
 import sys
 from pathlib import Path

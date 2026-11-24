@@ -1,11 +1,13 @@
 """Export the Feed cover, sleeping cutouts and proof from Blender's straight-alpha PNGs."""
 import sys
 from pathlib import Path
+from shutil import copyfile
 
 import numpy as np
 from PIL import Image, ImageCms, ImageDraw, ImageFont
 
 OUT = Path(__file__).resolve().parent.parent
+APPS = OUT.parents[2] / "apps"
 LANCZOS = Image.Resampling.LANCZOS
 BICUBIC = Image.Resampling.BICUBIC
 SRGB = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
@@ -118,3 +120,9 @@ if __name__ == "__main__":
     sleeping = read_render(renders / "wrapped.png", 1024)
     sleeping_assets(sleeping)
     proof(cover, sleeping)
+    cover.resize((1400, 1400), LANCZOS).save(
+        APPS / "api/src/cover.jpg", quality=88, subsampling=0,
+        optimize=True, progressive=True, icc_profile=SRGB,
+    )
+    for path in ("web/public/pan-sleeping.png", "mobile/assets/pan-sleeping.png"):
+        copyfile(OUT / "sleeping-512.png", APPS / path)
