@@ -13,19 +13,17 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 | Voice sample | yes | yes (the worker must be free) |
 | Narrate again | yes | no |
 
-The foundation and the timing file are built. The lanes fan out from them.
+The foundation, Read-along, and the API parts of Review and Voice sample are built. What is left is the screens for Review and Voice sample, and Narrate again.
 
 ```
-now ──┬─ V2 Review web ─────┬─ S2 Sample web
-      ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
+now ──┬─ V2 Review web ─────── S2 Sample web
+      ├─ V3 Review iPhone ──── S3 Sample iPhone
       ├─ N1 Narrate again core ──┬─ N2 web
       │                          └─ N3 iPhone
-      ├─ R2 Reader web
-      ├─ R3 Reader iPhone
-      └─ X  Extraction (OCR, PDF library)
+      └─ X  Extraction (OCR, LLM text fix)
 ```
 
-Eight units can start now: `V2`, `V3`, `N1`, `S1`, `R2`, `R3`, `R4`, `X`.
+Four units can start now: `V2`, `V3`, `N1`, `X`.
 
 ## Rules for parallel work
 
@@ -35,7 +33,7 @@ Eight units can start now: `V2`, `V3`, `N1`, `S1`, `R2`, `R3`, `R4`, `X`.
 4. **The shapes in this file are the seams.** A unit that must change a shape another unit uses changes this file in the same PR, and says so in the PR title.
 5. **Each unit owns one migration file.** Numbers are reserved in "Files". Do not edit another unit's migration.
 6. **API routes and their tests go in their own files.** A route file imports its guards from `apps/api/src/routes/kit.ts`. Its test uses `apps/api/src/test-app.ts`, which applies each migration file. A unit that adds a table adds its name to `TABLES` there.
-7. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR also removes the unit from this file and updates `CONTEXT.md` and `docs/api.md` for its own terms and routes.
+7. **Each unit ends with its proof.** Tests, a verify-fama run, and a recipe in `.claude/skills/verify-fama/features/`. The PR updates `CONTEXT.md` and `docs/api.md` for its own terms and routes. It does not edit this file. The one who merges the PR removes the unit here. When each unit edited the graph in this file, each PR had a merge conflict.
 
 ## Lanes
 
@@ -50,11 +48,7 @@ First principles: the mark must never be on the wrong sentence. So each marked u
 - `startMs` is where the voice starts the sentence, so a tap on a sentence can seek to it. The worker makes one call for each sentence, because only then does it know that time. An estimate from the sentence's share of the characters of a packed chunk was wrong by 0.41 s (median) and 1.49 s (90th percentile).
 - Cost: open choice 1 has the numbers.
 
-Units:
-
-- **R2. Reader on the web.**
-- **R3. Reader on the iPhone.**
-- Built: **R4, the transcript in the feed.** `docs/api.md` ("Feed and transcript").
+All four units are built: the timing file, the reader on the web and on the iPhone, and the transcript in the feed (`docs/api.md`, "Feed and transcript").
 
 ### V. Review
 
@@ -90,6 +84,9 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 - `ClaimedJob.completedChapters` becomes `chapters: [{ index, inputHash }]`. The worker skips a chapter whose hash matches.
 - `PUT /api/episodes/:id/document` also works on a `Ready` or `Failed` episode, for chapter text only. The number of chapters cannot change. `PUT /api/episodes/:id/voice` changes the voice and the speed. Both put the job back to `Queued`.
 - While the job runs again, the old audio of a stale chapter stays playable until the new upload replaces it.
+- The API keeps each Document version under its own key and the episode points at the current one (`documentKey` in `episode-repo.ts`). Read the Document through it, never through a fixed key.
+- The API stores the feed transcript after the first request. When a chapter changes, delete the stored transcript.
+- The timing file of a chapter changes with its audio. The readers keep timing files in memory and on the phone, so they must load them again.
 
 Units: **N1** core (it extends the Review route and the claim), then **N2** web and **N3** iPhone.
 
@@ -107,8 +104,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 | Unit | Its own files | Migration |
 |---|---|---|
-| R2 | `apps/web/src/reader/` | |
-| R3 | `apps/mobile/src/reader/` | |
 | V2, V3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
@@ -137,6 +132,9 @@ Each has a default. A unit follows the default unless the owner says no.
 - M4B book file with chapters, title, author and cover.
 - The stored Document (unit `F`). The worker uploads the Document after extraction, and each later attempt narrates from the stored one. The shape and the routes are in `docs/api.md` ("Document"). The rule that no unit may break: audio chapter `i` narrates Document chapter `i`. A new route file builds on `apps/api/src/routes/kit.ts`, and its tests on `apps/api/src/test-app.ts`.
 - Chapter 1 plays while the worker narrates the other chapters.
+- Read-along on the web and the iPhone: the text of the episode, with the sentence that plays marked. A click or tap on a sentence moves playback to it.
+- A WebVTT transcript of each episode in the private feed.
+- The time left while an episode is narrated.
 - After a stop, a job continues and keeps its finished chapters.
 - Each job keeps its own voice and narration speed.
 - Chapters come from Markdown headings in text.
