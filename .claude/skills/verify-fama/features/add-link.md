@@ -6,7 +6,7 @@ A user pastes a link to a web article. Fama adds an episode at once with a provi
 
 - `link-web` adds a link from the web add bar.
 - `link-ios` adds a link from the iPhone Add screen.
-- `link-clipboard` fills the iPhone Link field from a link on the clipboard.
+- `link-paste` fills the iPhone Link field from the clipboard with the system `Paste` button, with no iOS paste prompt. The button shows only while the field is empty.
 - `link-language` picks the default voice by detected language: English `kokoro:af_heart`, Icelandic `piper:is_IS-steinn-medium`.
 - `link-voice` uses the voice and speed picked in the add bar or the Add screen.
 - `link-share` adds a link from the iOS share sheet (Safari, Share, Fama).
@@ -38,9 +38,9 @@ Preconditions:
 ## Gotchas
 
 - The provisional title is `host/path` without the scheme. Wait for the real title before you assert it.
-- The iPhone Add screen fills an empty `Link` field from the clipboard when the clipboard holds a link. Check the field value before you type, or you append to it.
+- The iPhone app never reads the clipboard by itself. Put a link there with `$AD clipboard write <url>`, then press button `Paste`. The field gets the clipboard text and `Create` turns on.
 - Never `fill` on the iPhone. See `README.md`.
 - On iPhone, `Create` stays disabled until the text looks like `http(s)://host.tld...`. `http://localhost:8790/...` passes because of the dot in the path.
 - On the web, input with a space, or without `http(s)://`, is sent as a Text source, not a link. That is expected behavior, not a link failure.
 - The worker fetches the URL itself. A URL that only the browser or simulator can reach fails in the worker with a plain reason.
-- `link-share` and `link-clipboard` were not yet driven in a recorded run. The first run that drives them should replace this line with what it saw.
+- `link-paste` was driven on 2026-11-24 on the iPhone 18 Pro Simulator: `Paste` filled the field with no prompt, and the clear button left it empty with `Paste` back. `link-share` was not yet driven in a recorded run.
