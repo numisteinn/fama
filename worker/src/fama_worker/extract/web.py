@@ -76,12 +76,22 @@ def url_title(url: str) -> str:
     return tail or parsed.netloc
 
 
+def refusal(url: str, status: int) -> str:
+    """The reason a user reads in a narrow row: who refused, and the code."""
+    host = urlparse(url).netloc.removeprefix("www.")
+    if status in (401, 403, 429):
+        return f"{host} blocked the request ({status})."
+    if status in (404, 410):
+        return f"{host} has no page at this link ({status})."
+    return f"{host} answered with an error ({status})."
+
+
 def download(url: str) -> tuple[httpx.Response, Path | None]:
     """Fetch the URL. A PDF or EPUB lands in a temporary file for the file extractors."""
     try:
         response = fetch(url)
     except httpx.HTTPStatusError as error:
-        raise ValueError(f"The page returned {error.response.status_code} {error.response.reason_phrase}.") from error
+        raise ValueError(refusal(url, error.response.status_code)) from error
     except httpx.TransportError as error:
         raise ValueError(f"Could not fetch the page: {error}") from error
     kind = response.headers.get("content-type", "").split(";")[0].strip()

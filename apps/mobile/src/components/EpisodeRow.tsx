@@ -77,7 +77,7 @@ function Meta({ episode }: { episode: Episode }) {
     return (
       <View style={styles.meta}>
         <Icon name="exclamationmark.circle.fill" size={15} color={colors.danger} />
-        <Text style={[styles.metaText, styles.reason]} numberOfLines={1}>
+        <Text style={[styles.metaText, styles.reason]} numberOfLines={3}>
           {job.reason}
         </Text>
       </View>
