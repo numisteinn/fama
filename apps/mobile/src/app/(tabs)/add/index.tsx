@@ -34,7 +34,7 @@ async function clipboardLink(): Promise<string | null> {
 
 export default function AddScreen() {
   const router = useRouter()
-  const { api } = useSettings()
+  const { api, connection } = useSettings()
   const library = useLibrary()
   const [mode, setMode] = useState<Mode>("Link")
   const [link, setLink] = useState("")
@@ -46,14 +46,22 @@ export default function AddScreen() {
   const [speed, setSpeed] = useState(1)
   const [busy, setBusy] = useState(false)
 
-  // A link on the clipboard fills an empty field.
+  // A link on the clipboard fills an empty field, once each time the screen comes into view. Not after each edit,
+  // so the listener can clear the field. A link it already offered, or one on the Fama server itself (the feed URL
+  // from Settings), it never offers.
+  const linkRef = useRef(link)
+  linkRef.current = link
+  const offered = useRef<string | null>(null)
+  const serverUrl = connection?.serverUrl ?? null
   useFocusEffect(
     useCallback(() => {
-      if (link !== "") return
+      if (linkRef.current !== "") return
       void clipboardLink().then((url) => {
-        if (url) setLink((current) => (current === "" ? url : current))
+        if (!url || url === offered.current || (serverUrl !== null && url.startsWith(serverUrl))) return
+        offered.current = url
+        setLink((current) => (current === "" ? url : current))
       })
-    }, [link]),
+    }, [serverUrl]),
   )
 
   const sending = Batch.isSending(files)
