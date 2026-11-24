@@ -10,60 +10,22 @@ import {
   ProgressRequest,
   type Source,
   SourceQuery,
-  UploadQuery,
   VoiceRef,
 } from "@fama/contracts"
 import { Effect, Layer, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { AccountRepo } from "./account-repo.ts"
-import { clientUser, feedUser, requireWorker, type User } from "./auth.ts"
+import { feedUser } from "./auth.ts"
 import cover from "./cover.jpg"
 import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
+import { documentRoutes } from "./routes/document.ts"
+import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, TooLarge, webRequest, worker } from "./routes/kit.ts"
 import { Wake } from "./wake.ts"
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-
-class BadRequest extends Schema.TaggedError<BadRequest>()("BadRequest", { message: Schema.String }) {}
-class TooLarge extends Schema.TaggedError<TooLarge>()("TooLarge", {}) {}
-
-const statusOf: Record<string, number> = {
-  Unauthorized: 401,
-  BadRequest: 400,
-  SchemaError: 400,
-  HttpServerError: 400,
-  EpisodeNotFound: 404,
-  TooLarge: 413,
-  LeaseLost: 409,
-  NotRetryable: 409,
-}
-
-const errorResponse = (error: unknown) =>
-  Effect.gen(function* () {
-    const tag =
-      typeof error === "object" && error !== null && "_tag" in error ? String(error._tag) : "Unknown"
-    const status = statusOf[tag] ?? 500
-    if (status === 500) yield* Effect.logError("request failed", error)
-    const message = status === 500 ? "Internal error" : error instanceof Error && error.message !== "" ? error.message : tag
-    return HttpServerResponse.jsonUnsafe({ error: tag, message }, { status })
-  })
-
-const webRequest = Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-  HttpServerRequest.toWeb(request),
-)
-
-const handle = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-  Effect.catch(effect, errorResponse)
-
-/** A client route: runs as the user of the client token. */
-const api = <E, R>(effect: (user: User) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-  handle(Effect.flatMap(clientUser, effect))
-
-/** A worker route: needs the worker token. Job routes also check the lease token. */
-const worker = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-  handle(Effect.andThen(requireWorker, effect))
 
 /** The decoded path after `/media/<token>/`, for example `episodes/<id>/book.m4b`. Empty when it does not decode. */
 const mediaPathOf = (url: string) => {
@@ -76,16 +38,11 @@ const mediaPathOf = (url: string) => {
 
 const feedUrl = (origin: string, feedToken: string) => `${origin}/feed/${feedToken}/rss.xml`
 
-const noContent = HttpServerResponse.empty({ status: 204 })
-const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body, { status })
-
-const IdParams = Schema.Struct({ id: EpisodeId })
 const ChapterParams = Schema.Struct({
   ...ChapterUploadQuery.fields,
   id: EpisodeId,
   index: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
 })
-const BlobParams = Schema.Struct({ ...UploadQuery.fields, id: EpisodeId })
 const SourceParams = Schema.Struct({ ...SourceQuery.fields, id: EpisodeId })
 
 const firstWords = (text: string, count: number) => {
@@ -442,6 +399,7 @@ const notFound = HttpRouter.route(
 export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
+  documentRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

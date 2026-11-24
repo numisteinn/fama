@@ -49,6 +49,20 @@ class Document:
     chapters: tuple[Chapter, ...]
     cover: Cover | None = None
 
+    def to_json(self) -> dict:
+        """The stored shape, `Document` in docs/api.md. The cover is a file of its own."""
+        return {
+            "title": self.title,
+            "author": self.author,
+            "language": self.language,
+            "chapters": [{"title": c.title, "text": c.text} for c in self.chapters],
+        }
+
+    @staticmethod
+    def from_json(data: dict, cover: Cover | None = None) -> Document:
+        chapters = tuple(Chapter(c["title"], c["text"]) for c in data["chapters"])
+        return Document(data["title"], data["author"], data["language"], chapters, cover)
+
 
 @dataclass(frozen=True)
 class VoiceRef:

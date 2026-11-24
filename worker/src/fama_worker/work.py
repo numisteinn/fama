@@ -1,7 +1,9 @@
 """`fama work`: the pull loop from docs/api.md.
 
-Claim a job, extract, synthesize, upload each chapter as it finishes, then the book,
-then complete. A heartbeat thread sends progress every 30 seconds. Any 409 drops the job.
+Claim a job, extract the source to a stored Document, then narrate the stored Document:
+synthesize, upload each chapter as it finishes, then the book, then complete. A job whose
+Document the API already has is not extracted again. A heartbeat thread sends progress
+every 30 seconds. Any 409 drops the job.
 """
 
 from __future__ import annotations
@@ -18,8 +20,8 @@ from fama_worker import audio
 from fama_worker.api import MAX_UPLOAD_BYTES, Api, ApiError, ClaimedJob, FileRef, LeaseLost
 from fama_worker.engines import all_voices, default_voice
 from fama_worker.extract import extract
-from fama_worker.model import FileSource, Source
-from fama_worker.pipeline import ChapterFile, narrate
+from fama_worker.model import Document, FileSource, Source
+from fama_worker.pipeline import Book, ChapterFile, narrate
 
 HEARTBEAT_S = 30
 PROGRESS_THROTTLE_S = 5
@@ -126,6 +128,37 @@ def _upload_book(api: Api, job: ClaimedJob, book: Path) -> None:
     api.put_book(job, book)
 
 
+def extract_document(api: Api, job: ClaimedJob, workdir: Path) -> Document:
+    """Source to stored Document. The cover goes up first, so a stored Document means extraction is complete."""
+    with tempfile.TemporaryDirectory() as tmp:
+        document = extract(_source(api, job, Path(tmp)))
+    if document.cover:
+        api.put_cover(job, audio.write_cover(document.cover, workdir))
+    api.put_document(job, document)
+    log(f"{job.episode_id}: extracted the source, stored the Document ({len(document.chapters)} chapters)")
+    return document
+
+
+def stored_document(api: Api, job: ClaimedJob) -> Document:
+    document = api.document(job)
+    log(f"{job.episode_id}: read the stored Document ({len(document.chapters)} chapters), no extraction")
+    return document
+
+
+def narrate_document(api: Api, job: ClaimedJob, document: Document, heartbeat: Heartbeat, workdir: Path) -> Book:
+    """Stored Document to audio. Audio chapter i narrates Document chapter i."""
+    voice = job.voice or default_voice(document.language)
+    heartbeat.update(stage="extracting", done=1, total=1, title=document.title, author=document.author,
+                     language=document.language, voice=str(voice))
+    book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, job, heartbeat),
+                   skip=job.completed_chapters)
+    heartbeat.update(stage="uploading", done=0, total=1)
+    _upload_book(api, job, book.path)
+    heartbeat.update(stage="uploading", done=1, total=1)
+    api.complete(job, book.duration_ms)
+    return book
+
+
 def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     """Make one episode. Returns its audio length in ms when it is ready, else None."""
     episode = job.episode_id
@@ -135,19 +168,8 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     log(f"{episode}: claimed, skipping chapters {sorted(job.completed_chapters)}")
     try:
         with Heartbeat(api, job) as heartbeat:
-            with tempfile.TemporaryDirectory() as tmp:
-                document = extract(_source(api, job, Path(tmp)))
-            voice = job.voice or default_voice(document.language)
-            heartbeat.update(stage="extracting", done=1, total=1, title=document.title, author=document.author,
-                             language=document.language, voice=str(voice))
-            if document.cover:
-                api.put_cover(job, audio.write_cover(document.cover, workdir))
-            book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, job, heartbeat),
-                           skip=job.completed_chapters)
-            heartbeat.update(stage="uploading", done=0, total=1)
-            _upload_book(api, job, book.path)
-            heartbeat.update(stage="uploading", done=1, total=1)
-            api.complete(job, book.duration_ms)
+            document = stored_document(api, job) if job.document_path else extract_document(api, job, workdir)
+            book = narrate_document(api, job, document, heartbeat, workdir)
         log(f"{episode}: ready, {book.duration_ms / 1000:.0f}s audio in {len(book.chapters)} chapters, "
             f"{time.monotonic() - started:.0f}s wall")
         shutil.rmtree(workdir, ignore_errors=True)

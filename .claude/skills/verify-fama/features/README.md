@@ -38,4 +38,5 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
 - [Private feed](./private-feed.md): the feed URL from Settings serves RSS with one item for each ready episode and streamable book files.
+- [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.
