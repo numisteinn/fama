@@ -70,11 +70,101 @@ def _edge_key(text: str) -> str:
     return re.sub(r"\d+", "#", text.lower())
 
 
+_Box = tuple[float, float, float, float]  # left, bottom, right, top in PDF page space
+_Matrix = tuple[float, float, float, float, float, float]
+
+
+def _inside(box: _Box, x: float, y: float) -> bool:
+    return box[0] <= x <= box[2] and box[1] <= y <= box[3]
+
+
+def _concat(first: _Matrix, then: _Matrix) -> _Matrix:
+    a1, b1, c1, d1, e1, f1 = first
+    a2, b2, c2, d2, e2, f2 = then
+    return (
+        a1 * a2 + b1 * c2,
+        a1 * b2 + b1 * d2,
+        c1 * a2 + d1 * c2,
+        c1 * b2 + d1 * d2,
+        e1 * a2 + f1 * c2 + e2,
+        e1 * b2 + f1 * d2 + f2,
+    )
+
+
+def _clip_boxes(page) -> dict[int, _Box]:
+    """Map each clipped text object to the box its clip paths leave visible, in page space.
+
+    PDFium returns all text of a page, also text that a clip path hides. Layout tools place a
+    neighbour page or an old running header on the page and clip it away, so that text must go.
+    The box is the bounds of each clip path, so it can only keep too much, never too little.
+    """
+    import pypdfium2.raw as pdfium_c
+
+    boxes: dict[int, _Box] = {}
+    x = ctypes.c_float()
+    y = ctypes.c_float()
+
+    def clip_box(obj, matrix: _Matrix, inherited: _Box | None) -> _Box | None:
+        clip = pdfium_c.FPDFPageObj_GetClipPath(obj)
+        box = inherited
+        for path in range(pdfium_c.FPDFClipPath_CountPaths(clip) if clip else 0):
+            xs: list[float] = []
+            ys: list[float] = []
+            for index in range(pdfium_c.FPDFClipPath_CountPathSegments(clip, path)):
+                segment = pdfium_c.FPDFClipPath_GetPathSegment(clip, path, index)
+                if pdfium_c.FPDFPathSegment_GetPoint(segment, x, y):
+                    xs.append(matrix[0] * x.value + matrix[2] * y.value + matrix[4])
+                    ys.append(matrix[1] * x.value + matrix[3] * y.value + matrix[5])
+            if not xs:
+                continue
+            bounds = (min(xs), min(ys), max(xs), max(ys))
+            box = bounds if box is None else (
+                max(box[0], bounds[0]), max(box[1], bounds[1]), min(box[2], bounds[2]), min(box[3], bounds[3])
+            )
+        return box
+
+    def walk(count: int, get, matrix: _Matrix, inherited: _Box | None, depth: int) -> None:
+        for index in range(count):
+            obj = get(index)
+            kind = pdfium_c.FPDFPageObj_GetType(obj)
+            if kind == pdfium_c.FPDF_PAGEOBJ_TEXT:
+                box = clip_box(obj, matrix, inherited)
+                if box is not None:
+                    boxes[ctypes.cast(obj, ctypes.c_void_p).value] = box
+            elif kind == pdfium_c.FPDF_PAGEOBJ_FORM and depth < 16:
+                # Objects in a form XObject are in the space of the form. Its matrix moves them to the parent.
+                form = pdfium_c.FS_MATRIX()
+                inner = matrix
+                if pdfium_c.FPDFPageObj_GetMatrix(obj, form):
+                    inner = _concat((form.a, form.b, form.c, form.d, form.e, form.f), matrix)
+                walk(
+                    pdfium_c.FPDFFormObj_CountObjects(obj),
+                    lambda i, obj=obj: pdfium_c.FPDFFormObj_GetObject(obj, i),
+                    inner,
+                    clip_box(obj, matrix, inherited),
+                    depth + 1,
+                )
+
+    walk(
+        pdfium_c.FPDFPage_CountObjects(page.raw),
+        lambda i: pdfium_c.FPDFPage_GetObject(page.raw, i),
+        (1.0, 0.0, 0.0, 1.0, 0.0, 0.0),
+        None,
+        0,
+    )
+    return boxes
+
+
 def _extract_lines(page) -> tuple[float, list[_Line]]:
-    """Read character geometry from PDFium and assemble visual lines in top-down coordinates."""
+    """Read character geometry from PDFium and assemble visual lines in top-down coordinates.
+
+    Only glyphs that the page shows are read: inside the page box and inside the clip of their text object.
+    """
     import pypdfium2.raw as pdfium_c
 
     page_w, page_h = page.get_size()
+    page_box = page.get_bbox()
+    clips = _clip_boxes(page)
     textpage = page.get_textpage()
     try:
         tp = textpage.raw
@@ -159,6 +249,12 @@ def _extract_lines(page) -> tuple[float, list[_Line]]:
                 continue
 
             if not pdfium_c.FPDFText_GetLooseCharBox(tp, char_idx, ctypes.byref(rect)):
+                continue
+            mid_x = (rect.left + rect.right) / 2
+            mid_y = (rect.top + rect.bottom) / 2
+            clip = clips.get(ctypes.cast(pdfium_c.FPDFText_GetTextObject(tp, char_idx), ctypes.c_void_p).value) if clips else None
+            if not _inside(page_box, mid_x, mid_y) or (clip is not None and not _inside(clip, mid_x, mid_y)):
+                flush()  # a hidden glyph also ends the visible line before it
                 continue
             cx0 = float(rect.left)
             cy0 = page_h - float(rect.top)
