@@ -20,7 +20,6 @@ now ──┬─ V2 Review web ─────┬─ S2 Sample web
       ├─ V3 Review iPhone ──┴─ S3 Sample iPhone
       ├─ N1 Narrate again core ──┬─ N2 web
       │                          └─ N3 iPhone
-      ├─ S1 Sample core ─────────── S2 and S3 also need this
       ├─ R2 Reader web
       ├─ R3 Reader iPhone
       └─ X  Extraction (OCR, PDF library)
@@ -77,13 +76,9 @@ Units: **V2** web and **V3** iPhone.
 
 In Review, each voice reads the first paragraph of your Document. You choose by ear.
 
-First principles: a sample is `(text, voice)` to a short clip. The text must come from the Document, so the sample comes after extraction, not before the add as the old roadmap said. This matters most for Icelandic, where the choice is between Piper voices.
+The Sample API is in place. Once an Episode has a stored Document, use `POST /api/episodes/:id/samples` to ask for clips and `GET /api/episodes/:id/samples` to read the states and URLs. See [the Sample contract](api.md#samples). A Worker finishes any narration it already started before it claims Samples.
 
-- A sample is not an episode job. It is a second kind of work: `claim` returns `Narrate` or `Sample`. Sample work is claimed first.
-- `POST /api/episodes/:id/samples` asks for clips for the voices of the Document's language. The worker uploads each clip to `episodes/<episodeId>/samples/<voice>.m4a`. `GET /api/episodes/:id/samples` lists them.
-- Limit: a worker that narrates another episode finishes that job first. With one Mac worker, a sample can wait.
-
-Units: **S1** core (worker, API, contract) after `F`. **S2** web and **S3** iPhone add the samples to the Review screen, so they come after `V2` and `V3`.
+**S2** adds Samples to web Review after `V2`. **S3** adds Samples to iPhone Review after `V3`.
 
 ### N. Narrate again
 
@@ -115,7 +110,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | R2 | `apps/web/src/reader/` | |
 | R3 | `apps/mobile/src/reader/` | |
 | V2, V3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
-| S1 | `contracts/src/sample.ts`, `apps/api/src/routes/sample.ts`, `apps/api/src/sample-repo.ts`, `worker/.../sample.py` | `0005_samples.sql` |
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
@@ -123,7 +117,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 Known shared points, and who goes first:
 
-- `claim` in `job.ts` and `episode-repo.ts`: `S1` and `N1` both extend the existing claim. The second one to merge rebases.
 
 ## Open choices
 
@@ -135,7 +128,7 @@ Each has a default. A unit follows the default unless the owner says no.
    - Both engines use one call for each sentence. No engine needed the other path (sentence times from the engine's own word timestamps), which Kokoro has for English voices only.
    - Sound: the pause between sentences is as before, because a Segment that continues a paragraph drops the silence its call opens with. The owner should still listen: `~/Developer/fama-samples/read-along/`.
 2. **Review is for all sources, off by default.** The old roadmap said files only.
-3. **Voice samples exist only in Review.** No sample before the add, and none for an episode that already narrates.
+3. **Apps show Samples in Review.** The API can make Samples for any Episode with a stored Document.
 4. **Unticked chapters are removed at Start.** You cannot tick them again later.
 5. **Narrate again also covers a new voice and a new speed.** The old roadmap had only edited text.
 

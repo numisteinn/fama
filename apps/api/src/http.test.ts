@@ -9,6 +9,7 @@ import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
+import * as SampleRepo from "./sample-repo.ts"
 import { sha256Hex } from "./secrets.ts"
 import { migrations } from "./test-app.ts"
 import * as Wake from "./wake.ts"
@@ -63,7 +64,7 @@ beforeAll(async () => {
     fetch: fakeWakeFetch,
     timeoutMs: WAKE_TIMEOUT_MS,
   })
-  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, wake).pipe(
+  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, SampleRepo.layer, wake).pipe(
     Layer.provideMerge(Layer.succeed(Bindings, env)),
   )
   const app = HttpRouter.toWebHandler(
@@ -88,7 +89,7 @@ beforeEach(async () => {
   pendingWakes = []
   wakeAnswer = async () => new Response(null, { status: 202 })
   waitUntilThrows = false
-  const tables = ["timings", "progress", "chapters", "episodes", "tokens", "users", "voices"]
+  const tables = ["timings", "samples", "progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
   await env.DB.batch(statements(migrations).map((statement) => env.DB.prepare(statement)))
   for (const user of Object.values(users)) {
@@ -150,7 +151,7 @@ const readyEpisode = async () => {
   expect(created.status).toBe(201)
   const episode = (await created.json()) as { id: string }
   const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [voice] } })
-  const { job } = (await claim.json()) as { job: { episodeId: string; leaseToken: string } }
+  const { work: job } = (await claim.json()) as { work: { episodeId: string; leaseToken: string } }
   expect(job.episodeId).toBe(episode.id)
   const lease = job.leaseToken
   const put = (path: string, body: string) =>
@@ -289,7 +290,7 @@ describe("leases", () => {
     form.set("file", new Blob(["file body"], { type: "text/plain" }), "notes.txt")
     const created = (await (await alice("POST", "/api/episodes/upload", { body: form })).json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { job } = (await claim.json()) as { job: { episodeId: string; leaseToken: string; sourcePath: string } }
+    const { work: job } = (await claim.json()) as { work: { episodeId: string; leaseToken: string; sourcePath: string } }
     expect(job.episodeId).toBe(created.id)
     return job
   }
@@ -330,7 +331,7 @@ describe("leases", () => {
     expect((await alice("POST", `/api/episodes/${id}/retry`)).status).toBe(200)
     expect((await fail(first.leaseToken)).status, "old lease after retry").toBe(409)
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const second = ((await claim.json()) as { job: { leaseToken: string } }).job
+    const second = ((await claim.json()) as { work: { leaseToken: string } }).work
     expect(second.leaseToken).not.toBe(first.leaseToken)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${first.leaseToken}`)).status).toBe(409)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${second.leaseToken}`)).status).toBe(200)
@@ -342,7 +343,7 @@ describe("time left", () => {
     const createBody = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
     const created = (await (await alice("POST", "/api/episodes", { json: createBody })).json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
     const report = (extra: Record<string, unknown>) =>
       asWorker("POST", `/api/worker/jobs/${created.id}/progress`, {
         json: { workerId: "w1", leaseToken: job.leaseToken, stage: "synthesizing", done: 4, total: 9, title: null, author: null, language: null, voice: null, ...extra },
@@ -483,7 +484,7 @@ describe("worker wake", () => {
   it("retry sends one wake with the secret, after the job is Queued again", async () => {
     const { id } = (await (await uploadFile()).json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
     const fail = await asWorker("POST", `/api/worker/jobs/${id}/fail`, {
       json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" },
     })
@@ -498,7 +499,7 @@ describe("worker wake", () => {
     const created = await alice("POST", "/api/episodes", { json: { ...textEpisode, review: true } })
     const { id } = (await created.json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
     const document = {
       title: "Harbour", author: null, language: "en",
       chapters: [{ title: "Morning", text: "The harbour is quiet." }],
@@ -592,7 +593,7 @@ describe("worker wake", () => {
   it("a retry with a slow wake still returns 200", async () => {
     const { id } = (await (await uploadFile()).json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
     await asWorker("POST", `/api/worker/jobs/${id}/fail`, { json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" } })
     setWake(WAKE_URL, WAKE_SECRET)
     wakeAnswer = (signal) => new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)))
@@ -622,7 +623,7 @@ describe("timing files", () => {
     })
     const { id } = (await created.json()) as { id: string }
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [voice] } })
-    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
     return { id, lease: job.leaseToken }
   }
   const putTiming = (id: string, lease: string, json: unknown, token: string | null = WORKER_TOKEN) =>

@@ -41,4 +41,5 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Timing file](./timing-file.md): each chapter has a `timingUrl` that serves its Segments as JSON, and each start time is where the voice starts that sentence in the real audio.
 - [Review before narration](./review.md) lets the owner edit the Document and choose the chapters to narrate.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
+- [Voice Samples](./voice-samples.md): request and play clips from the first paragraph of a stored Document.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.

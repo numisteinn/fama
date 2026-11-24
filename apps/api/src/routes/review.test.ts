@@ -35,7 +35,7 @@ const add = async () => {
 const take = async () => {
   const response = await claim()
   expect(response.status).toBe(200)
-  return (await response.json() as { job: ClaimedJob }).job
+  return (await response.json() as { work: ClaimedJob }).work
 }
 
 const upload = (job: ClaimedJob) =>

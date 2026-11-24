@@ -50,7 +50,7 @@ class FakeApi:
             base = f"/api/worker/jobs/{self.job['episodeId']}"
             stored = {"documentPath": f"{base}/document" if self.document else None,
                       "coverPath": f"{base}/cover" if self.cover else None}
-            return 200, json.dumps({"job": {**self.job, **stored, "leaseToken": self.lease}}).encode()
+            return 200, json.dumps({"work": {"_tag": "Narrate", **self.job, **stored, "leaseToken": self.lease}}).encode()
         lease = query.get("leaseToken") if request.command in ("GET", "PUT") else json.loads(body).get("leaseToken")
         self.leases.append((url.path, lease))
         if lease != self.lease or self.state != "Running":
@@ -232,7 +232,7 @@ def test_drain_makes_a_job_claimed_elsewhere_under_the_same_worker_id(tone, serv
     fake, url = server(_job())
     # As the Modal dispatcher does: claim on the CPU, hand the raw job to the GPU drain.
     raw = httpx.post(f"{url}/api/worker/claim", json={"workerId": "modal-1", "voices": []},
-                     headers={"Authorization": f"Bearer {TOKEN}"}).json()["job"]
+                     headers={"Authorization": f"Bearer {TOKEN}"}).json()["work"]
     work.run(url, TOKEN, "modal-1", out_dir=tmp_path / "work", drain=True, first_job=ClaimedJob.parse(raw))
     assert fake.state == "Ready" and sorted(fake.chapters) == [0, 1, 2]
 

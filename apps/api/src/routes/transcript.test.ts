@@ -34,7 +34,7 @@ const made = async ({ untimed = -1, complete = true } = {}) => {
   })
   const { id } = (await created.json()) as { id: string }
   const claim = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-  const lease = ((await claim.json()) as { job: { leaseToken: string } }).job.leaseToken
+  const lease = ((await claim.json()) as { work: { leaseToken: string } }).work.leaseToken
   const query = `workerId=w1&leaseToken=${lease}`
   const put = (path: string, body: string) =>
     app.asWorker("PUT", path, { body: bytes(body), headers: { "content-type": "audio/mp4", "content-length": String(body.length) } })

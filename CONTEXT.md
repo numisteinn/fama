@@ -9,6 +9,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Episode** | One narrated source in the library. The unit the user sees, plays, downloads, and finds in the feed. |
 | **Chapter** | One audio file of an episode (AAC `.m4a`). Chapters upload one by one, so playback can start before the episode is done. A Document has chapters too: a title and its text. |
 | **Segment** | The text of one synthesis call, with the time its voice starts and the time its audio ends in the chapter audio. One sentence, or a few short ones. It keeps the text as the Document has it, not as the engine reads it. |
+| **Sample** | One Voice reading the start of an Episode’s stored Document at the Episode’s speed. Each Episode and Voice pair has one Sample. Its state is `Requested`, `Ready` with a clip URL, or `Failed` with a reason. Like the Episode, the Sample belongs to the User. |
 | **Timing file** | The Segments of one chapter, in reading order. The worker uploads it next to the chapter audio. Read-along marks text from it. |
 | **Book file** | One `.m4b` of the whole episode with chapter marks, for download and the feed. |
 | **Transcript** | One WebVTT file of an episode for podcast apps: a cue for each Segment, on the timeline of the book file. Only an episode whose chapters all have a timing file has one. |
@@ -22,7 +23,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Client token** | A bearer secret for the web and phone apps. It acts as one user on `/api/*`. A user can have many. |
 | **Feed token** | The secret in the feed and media URLs of one user. It opens only `/feed/` and `/media/`. Rotating it closes the old URLs. |
 | **Worker token** | The bearer secret of workers. It opens only `/api/worker/*`, for the jobs of all users. |
-| **Lease** | One worker's claim on one job, proven by the lease token `claim` returns. Every job call carries it. A new claim makes the old lease useless. |
+| **Lease** | One Worker’s claim on one Job or Sample, proven by the lease token `claim` returns. Calls for that work carry the token. A new claim makes the old lease useless. |
 
 Rules:
 
