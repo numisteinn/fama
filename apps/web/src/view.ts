@@ -3,6 +3,7 @@ import type { Message } from "~/message"
 import { type Model, current } from "~/model"
 import { Message as M } from "~/message"
 import { isReaderShown, reader } from "~/reader/view"
+import { isReviewShown, review } from "~/review/view"
 import { addBar } from "~/view/addBar"
 import { buttonClass } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -45,7 +46,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
           ),
           ...(isReaderShown(model)
             ? [reader(model, h)]
-            : [...addBar(model, h), h.section([h.Class("mt-6")], [library(model, h)])]),
+            : isReviewShown(model)
+              ? [review(model, h)]
+              : [...addBar(model, h), h.section([h.Class("mt-6")], [library(model, h)])]),
         ],
       ),
       ...playerBar(model, h),

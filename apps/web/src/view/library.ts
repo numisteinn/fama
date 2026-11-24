@@ -5,6 +5,7 @@ import { deleteConfirmId } from "~/command"
 import { formatDuration } from "~/lib/format"
 import { Message } from "~/message"
 import type { Model } from "~/model"
+import { openReviewMessage, reviewBadge } from "~/review/view"
 import { totalMs } from "~/timeline"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -50,6 +51,8 @@ const row = (model: Model, episode: Episode, h: HtmlBuilder<Message>): Html => {
   const isCurrent = playback._tag === "Loaded" && playback.episodeId === episode.id
   const isPlaying = isCurrent && playback.isPlaying
   const isPlayable = episode.chapters.length > 0
+  const isReview = episode.job._tag === "Review"
+  const isActionable = isPlayable || isReview
   const maybeRowError = Option.fromNullishOr(model.rowErrors[episode.id])
   const maybeErrorText = Option.orElse(maybeRowError, () =>
     episode.job._tag === "Failed" ? Option.some(episode.job.reason) : Option.none(),
@@ -62,7 +65,7 @@ const row = (model: Model, episode: Episode, h: HtmlBuilder<Message>): Html => {
       h.Class(
         cx(
           "group relative flex min-h-14 items-center gap-3 rounded-xl px-2 py-2 transition-colors duration-150",
-          isPlayable && "hover:bg-accent",
+          isActionable && "hover:bg-accent",
           isCurrent && "bg-accent",
         ),
       ),
@@ -71,9 +74,9 @@ const row = (model: Model, episode: Episode, h: HtmlBuilder<Message>): Html => {
       h.button(
         [
           h.Type("button"),
-          h.Disabled(!isPlayable),
-          h.OnClick(Message.ClickedPlayEpisode({ episodeId: episode.id })),
-          h.AriaLabel(isPlaying ? `Pause ${episode.title}` : `Play ${episode.title}`),
+          h.Disabled(!isActionable),
+          h.OnClick(isReview ? openReviewMessage(episode.id) : Message.ClickedPlayEpisode({ episodeId: episode.id })),
+          h.AriaLabel(isReview ? `Review ${episode.title}` : isPlaying ? `Pause ${episode.title}` : `Play ${episode.title}`),
           h.Class(
             "flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left outline-none disabled:cursor-default before:absolute before:inset-0 before:rounded-xl focus-visible:before:ring-2 focus-visible:before:ring-ring",
           ),
@@ -191,7 +194,7 @@ const jobStatus = (episode: Episode, h: HtmlBuilder<Message>): Html => {
     case "Queued":
       return h.span([h.Class("shrink-0 animate-pulse text-[13px] text-muted-foreground")], ["Queued"])
     case "Review":
-      return h.span([h.Class("shrink-0 text-[13px] text-muted-foreground")], ["Review"])
+      return reviewBadge(h)
     case "Running": {
       const fraction = job.total > 0 ? Math.min(1, job.done / job.total) : 0
       const detail =

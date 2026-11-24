@@ -6,6 +6,7 @@ import { formatRate } from "~/lib/format"
 import { Message } from "~/message"
 import { ACCEPT, type BatchFile, isSending } from "~/batch"
 import { type Model, selectedVoice, toDraft } from "~/model"
+import { reviewSwitch } from "~/review/view"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -136,6 +137,7 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
             triggerContent: [Icon.gauge(), h.span([h.Class("tabular-nums")], [formatRate(model.speed)])],
             checkedIndex: pickerCheckedIndex(model, "VoiceSpeed"),
           }),
+          reviewSwitch(model, h),
           ...Option.match(model.maybeAddError, {
             onNone: () => [],
             onSome: (error) => [

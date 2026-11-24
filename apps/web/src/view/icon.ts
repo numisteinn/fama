@@ -39,11 +39,16 @@ export const settings = icon("settings", [
   ],
   ["circle", "12", "12", "3"],
 ])
+export const arrowLeft = icon("arrow-left", [
+  ["path", "m12 19-7-7 7-7"],
+  ["path", "M19 12H5"],
+])
 export const arrowUp = icon("arrow-up", [
   ["path", "m5 12 7-7 7 7"],
   ["path", "M12 19V5"],
 ])
 export const chevronDown = icon("chevron-down", [["path", "m6 9 6 6 6-6"]])
+export const chevronRight = icon("chevron-right", [["path", "m9 18 6-6-6-6"]])
 export const fileText = icon("file-text", [
   [
     "path",
