@@ -30,8 +30,8 @@ export const listed = (text: ReaderText | null, episode: Listed): ReaderText => 
   const before = text?.episodeId === episode.id ? text.chapters : []
   const chapters = episode.chapters.map((chapter, index): ChapterText => {
     const key = timingKey(chapter)
-    if (key === null) return { _tag: "Absent" }
     const old = before[index]
+    if (key === null) return old?._tag === "Absent" ? old : { _tag: "Absent" }
     return old && old._tag !== "Absent" && old.key === key ? old : { _tag: "Idle", key }
   })
   const same = text?.episodeId === episode.id && chapters.length === before.length && chapters.every((c, i) => c === before[i])

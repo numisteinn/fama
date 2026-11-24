@@ -47,6 +47,7 @@ describe("chapter text state", () => {
   test("a chapter without a timing file is Absent, the others wait to load", () => {
     const text = listed(null, { id: "e1", chapters: [spring, chapter(1, "Old", 5_000, false)] })
     expect(text.chapters.map((c) => c._tag)).toEqual(["Idle", "Absent"])
+    expect(listed(text, { id: "e1", chapters: [spring, chapter(1, "Old", 5_000, false)] })).toBe(text)
   })
 
   test("the entry point needs at least one timing file", () => {
