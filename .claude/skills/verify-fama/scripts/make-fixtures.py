@@ -1,4 +1,5 @@
-"""Write the verification fixtures into ../fixtures. Short on purpose: each narrates in seconds.
+"""Write the verification fixtures into ../fixtures. Short on purpose: each narrates in seconds, except
+`harbour-year.epub`, which narrates for about a minute so a job shows its time left.
 
 Run from the repo root: uv run --project worker python .claude/skills/verify-fama/scripts/make-fixtures.py
 """
@@ -40,19 +41,22 @@ def article(path: Path, lang: str, title: str, paragraphs: list[str]) -> None:
     )
 
 
-def epub(path: Path) -> None:
-    chapter = lambda anchor, title, text: f'<h2 id="{anchor}">{title}</h2><p>{text}</p>'
+def epub(path: Path, title: str, chapters: list[tuple[str, list[str]]]) -> None:
+    anchors = [(f"c{i}", name, paragraphs) for i, (name, paragraphs) in enumerate(chapters, start=1)]
+    toc = "".join(f'<li><a href="text.xhtml#{anchor}">{name}</a></li>' for anchor, name, _ in anchors)
+    body = "".join(f'<h2 id="{anchor}">{name}</h2>' + "".join(f"<p>{p}</p>" for p in paragraphs)
+                   for anchor, name, paragraphs in anchors)
     files = {
         "mimetype": "application/epub+zip",
         "META-INF/container.xml": '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
-        "OEBPS/content.opf": """<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
-<metadata><dc:title>Harbour Days</dc:title><dc:creator>Fama Fixtures</dc:creator><dc:language>en</dc:language></metadata>
+        "OEBPS/content.opf": f"""<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<metadata><dc:title>{title}</dc:title><dc:creator>Fama Fixtures</dc:creator><dc:language>en</dc:language></metadata>
 <manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
 <item id="body" href="text.xhtml" media-type="application/xhtml+xml"/></manifest>
 <spine><itemref idref="body"/></spine></package>""",
-        "OEBPS/nav.xhtml": """<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>
-<li><a href="text.xhtml#c1">Morning</a></li><li><a href="text.xhtml#c2">Evening</a></li></ol></nav></body></html>""",
-        "OEBPS/text.xhtml": f"<html><body>{chapter('c1', 'Morning', EN[0] + ' ' + EN[1])}{chapter('c2', 'Evening', EN[2] + ' ' + EN[0])}</body></html>",
+        "OEBPS/nav.xhtml": '<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol>'
+        f"{toc}</ol></nav></body></html>",
+        "OEBPS/text.xhtml": f"<html><body>{body}</body></html>",
     }
     with zipfile.ZipFile(path, "w") as archive:
         for name, data in files.items():
@@ -83,7 +87,13 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     article(OUT / "article.html", "en", "The Quiet Harbour", EN)
     article(OUT / "grein.html", "is", "Höfnin hljóða", IS)
-    epub(OUT / "harbour-days.epub")
+    epub(OUT / "harbour-days.epub", "Harbour Days",
+         [("Morning", [EN[0] + " " + EN[1]]), ("Evening", [EN[2] + " " + EN[0]])])
+    # Each paragraph starts with its own day, so no chunk repeats and none comes from the chunk cache.
+    seasons = ["Spring", "Summer", "Autumn", "Winter"]
+    epub(OUT / "harbour-year.epub", "Harbour Year",
+         [(season, [f"{season}, day {day}. {EN[(day + i) % 3]}" for day in range(1, 16)])
+          for i, season in enumerate(seasons)])
     pdf(OUT / "harbour-notes.pdf")
     (OUT / "harbour.md").write_text("# Harbour Note\n\n" + EN[1] + "\n", encoding="utf-8")
     print("\n".join(sorted(p.name for p in OUT.iterdir())))

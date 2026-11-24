@@ -11,6 +11,7 @@ import {
   type VoiceRef,
 } from "@fama/contracts"
 import { Schema } from "effect"
+import { File } from "expo-file-system"
 
 export type Connection = { readonly serverUrl: string; readonly token: string }
 
@@ -91,8 +92,9 @@ export function createApi(connection: Connection) {
       json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed }))),
     uploadEpisode: (file: PickedFile, voice: VoiceRef | null, speed: number): Promise<Episode> => {
       const form = new FormData()
-      // React Native's FormData takes a { uri, name, type } object for files.
-      form.append("file", { uri: file.uri, name: file.name, type: file.mimeType ?? "application/octet-stream" } as never)
+      // Expo's fetch sends a file part that has `bytes()`. It refuses React Native's `{ uri }` part.
+      const part = { name: file.name, type: file.mimeType ?? "application/octet-stream", bytes: () => new File(file.uri).bytes() }
+      form.append("file", part as never)
       if (voice !== null) form.append("voice", voice)
       form.append("speed", String(speed))
       return json(Episode, "/api/episodes/upload", { method: "POST", body: form })

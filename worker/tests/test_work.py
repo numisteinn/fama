@@ -1,6 +1,7 @@
 """`fama work` against a fake API that follows docs/api.md."""
 
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -22,7 +23,10 @@ class FakeApi:
         self.leases: list[tuple[str, str | None]] = []  # (path, lease token sent) of every job call
         self.calls: list[tuple[str, str]] = []
         self.chapters: dict[int, dict] = {}
+        self.timings: dict[int, dict] = {}
         self.book: bytes | None = None
+        self.document: dict | None = None  # the stored Document
+        self.cover: bytes | None = None  # the stored cover, a PNG
         self.state = "Queued"
         self.steal_after_chapter: int | None = None
         self.progress: list[dict] = []
@@ -41,18 +45,28 @@ class FakeApi:
                 return 204, b""
             self.claims += 1
             self.lease, self.state = f"lease-{self.claims}", "Running"
-            return 200, json.dumps({"job": {**self.job, "leaseToken": self.lease}}).encode()
+            base = f"/api/worker/jobs/{self.job['episodeId']}"
+            stored = {"documentPath": f"{base}/document" if self.document else None,
+                      "coverPath": f"{base}/cover" if self.cover else None}
+            return 200, json.dumps({"job": {**self.job, **stored, "leaseToken": self.lease}}).encode()
         lease = query.get("leaseToken") if request.command in ("GET", "PUT") else json.loads(body).get("leaseToken")
         self.leases.append((url.path, lease))
         if lease != self.lease or self.state != "Running":
             return 409, b""
         if request.command == "GET" and parts[-1] == "source":
             return 200, TEXT.encode()
+        if request.command == "GET" and parts[-1] == "document":
+            return 200, json.dumps(self.document).encode()
+        if request.command == "GET" and parts[-1] == "cover":
+            return 200, self.cover or b""
         if request.command == "PUT":
             assert length is not None and int(length) == len(body) > 0
         kind = parts[4]
         if kind == "progress":
             self.progress.append(json.loads(body))
+        elif kind == "chapters" and parts[-1] == "timing":
+            assert request.headers.get("Content-Type") == "application/json"
+            self.timings[int(parts[5])] = json.loads(body)
         elif kind == "chapters":
             index = int(parts[5])
             self.chapters[index] = {"title": query["title"], "durationMs": int(query["durationMs"]), "bytes": len(body)}
@@ -60,6 +74,10 @@ class FakeApi:
                 self.lease = "another-workers-lease"
         elif kind == "book":
             self.book = body
+        elif kind == "document":
+            self.document = json.loads(body)
+        elif kind == "cover":
+            self.cover = body
         elif kind == "complete":
             self.state = "Ready"
         elif kind == "fail":
@@ -79,6 +97,8 @@ def server():
                 status, payload = fake.handle(self)
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(payload)))
+                if self.command == "GET" and self.path.split("?")[0].endswith("/cover"):
+                    self.send_header("Content-Type", "image/png")
                 self.end_headers()
                 self.wfile.write(payload)
 
@@ -114,6 +134,12 @@ def test_claim_progress_chapters_book_complete(tone, server, tmp_path):
     assert sorted(fake.chapters) == [0, 1, 2]
     assert [c["title"] for c in fake.chapters.values()] == ["Chapter 1", "Chapter 2", "Chapter 3"]
     assert all(c["durationMs"] > 0 and c["bytes"] > 0 for c in fake.chapters.values())
+    for index, chapter in fake.chapters.items():
+        segments = fake.timings[index]["segments"]
+        assert f"Chapter {index + 1}" in [s["text"] for s in segments]
+        assert abs(segments[-1]["endMs"] - chapter["durationMs"]) <= 50
+    uploads = [path for method, path in fake.calls if method == "PUT" and "/chapters/" in path]
+    assert uploads[:2] == ["/api/worker/jobs/ep1/chapters/0/timing", "/api/worker/jobs/ep1/chapters/0"]
     assert fake.book and fake.book[4:8] == b"ftyp"
     stages = [p["stage"] for p in fake.progress]
     assert stages[0] == "extracting" and "synthesizing" in stages and "uploading" in stages
@@ -138,7 +164,7 @@ def test_409_drops_the_job_without_failing_it(tone, server, tmp_path):
 def test_resume_skips_completed_chapters(tone, server, tmp_path):
     fake, url = server(_job(completed=[0, 1]))
     _run(url, tmp_path)
-    assert sorted(fake.chapters) == [2]
+    assert sorted(fake.chapters) == sorted(fake.timings) == [2]
     assert fake.book is not None and fake.state == "Ready"
 
 
@@ -181,3 +207,25 @@ def test_drain_makes_a_job_claimed_elsewhere_under_the_same_worker_id(tone, serv
                      headers={"Authorization": f"Bearer {TOKEN}"}).json()["job"]
     work.run(url, TOKEN, "modal-1", out_dir=tmp_path / "work", drain=True, first_job=ClaimedJob.parse(raw))
     assert fake.state == "Ready" and sorted(fake.chapters) == [0, 1, 2]
+
+
+def test_progress_carries_a_falling_time_left_while_narrating(tone, server, tmp_path, monkeypatch):
+    synthesize = tone.synthesize
+
+    def slow(text, voice_id, speed):
+        threading.Event().wait(0.06)
+        return synthesize(text, voice_id, speed)
+
+    monkeypatch.setattr(tone, "synthesize", slow)
+    monkeypatch.setattr(work, "PROGRESS_THROTTLE_S", 0)
+    # Each sentence is its own Segment, and a repeated sentence comes from the cache, which the estimate ignores.
+    story = "\n\n".join(f"CHAPTER {i}\n\n" + " ".join(f"Sentence {n} of part {i} of the story." for n in range(1, 21))
+                        for i in range(1, 4))
+    monkeypatch.setattr(sys.modules[__name__], "TEXT", story)
+    fake, url = server(_job())
+    _run(url, tmp_path)
+    assert fake.state == "Ready"
+    assert all(p["remainingMs"] is None for p in fake.progress if p["stage"] != "synthesizing")
+    left = [p["remainingMs"] for p in fake.progress if p["stage"] == "synthesizing" and p["remainingMs"] is not None]
+    assert len(left) >= 5
+    assert all(later <= earlier for earlier, later in zip(left, left[1:]))

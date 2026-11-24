@@ -52,8 +52,8 @@ export const harbourDays: Episode = {
   speed: 1,
   durationMs: 46525,
   chapters: [
-    { index: 0, title: "Morning", durationMs: 26825, url: "/media/t/episodes/harbour-days/chapters/000.m4a" },
-    { index: 1, title: "Evening", durationMs: 19700, url: "/media/t/episodes/harbour-days/chapters/001.m4a" },
+    { index: 0, title: "Morning", durationMs: 26825, url: "/media/t/episodes/harbour-days/chapters/000.m4a", timingUrl: null },
+    { index: 1, title: "Evening", durationMs: 19700, url: "/media/t/episodes/harbour-days/chapters/001.m4a", timingUrl: null },
   ],
   bookUrl: "/media/t/episodes/harbour-days/book.m4b",
   coverUrl: null,
@@ -84,5 +84,5 @@ export const runningHarbourDays: Episode = {
   durationMs: null,
   bookUrl: null,
   chapters: [harbourDays.chapters[0]!],
-  job: { _tag: "Running", workerId: "w" as never, stage: "synthesizing", done: 3, total: 6, heartbeatAt: at },
+  job: { _tag: "Running", workerId: "w" as never, stage: "synthesizing", done: 3, total: 6, heartbeatAt: at, remainingMs: null },
 }

@@ -9,15 +9,15 @@ const newer = at(40_000, "2026-11-23T11:00:00.000Z")
 const NOW = "2026-11-23T12:00:00.000Z"
 
 const chapters = [
-  { index: 0, title: "Morning", durationMs: 26_825, url: "/000.m4a" },
-  { index: 1, title: "Evening", durationMs: 19_700, url: "/001.m4a" },
+  { index: 0, title: "Morning", durationMs: 26_825, url: "/000.m4a", timingUrl: null },
+  { index: 1, title: "Evening", durationMs: 19_700, url: "/001.m4a", timingUrl: null },
 ]
 /** The job still narrates: one chapter so far. */
 const running = {
   id: "e1",
   title: "Harbour Days",
   chapters: [chapters[0]!],
-  job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x" },
+  job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x", remainingMs: null },
   progress: older,
 } as unknown as Episode
 const grown = { ...running, chapters } as Episode

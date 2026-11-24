@@ -4,13 +4,13 @@ import { Layer } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { getPlatformProxy } from "wrangler"
-import migration from "../migrations/0001_init.sql?raw"
 import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import { sha256Hex } from "./secrets.ts"
+import { migrations } from "./test-app.ts"
 import * as Wake from "./wake.ts"
 
 const WORKER_TOKEN = "test-worker-token"
@@ -88,9 +88,9 @@ beforeEach(async () => {
   pendingWakes = []
   wakeAnswer = async () => new Response(null, { status: 202 })
   waitUntilThrows = false
-  const tables = ["progress", "chapters", "episodes", "tokens", "users", "voices"]
+  const tables = ["timings", "progress", "chapters", "episodes", "tokens", "users", "voices"]
   await env.DB.batch(tables.map((table) => env.DB.prepare(`DROP TABLE IF EXISTS ${table}`)))
-  await env.DB.batch(statements(migration).map((statement) => env.DB.prepare(statement)))
+  await env.DB.batch(statements(migrations).map((statement) => env.DB.prepare(statement)))
   for (const user of Object.values(users)) {
     await env.DB.batch([
       env.DB.prepare("INSERT INTO users (id, feed_token, created_at) VALUES (?, ?, ?)").bind(
@@ -337,6 +337,26 @@ describe("leases", () => {
   })
 })
 
+describe("time left", () => {
+  it("shows the worker's estimate on the running job, and takes a worker that sends none", async () => {
+    const createBody = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
+    const created = (await (await alice("POST", "/api/episodes", { json: createBody })).json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const report = (extra: Record<string, unknown>) =>
+      asWorker("POST", `/api/worker/jobs/${created.id}/progress`, {
+        json: { workerId: "w1", leaseToken: job.leaseToken, stage: "synthesizing", done: 4, total: 9, title: null, author: null, language: null, voice: null, ...extra },
+      })
+    const jobOf = async () => ((await (await alice("GET", `/api/episodes/${created.id}`)).json()) as { job: unknown }).job
+
+    expect((await report({ remainingMs: 95_000 })).status).toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", stage: "synthesizing", done: 4, total: 9, remainingMs: 95_000 })
+    expect((await report({})).status, "an older worker").toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", remainingMs: null })
+    expect((await report({ remainingMs: -1 })).status).toBe(400)
+  })
+})
+
 describe("progress", () => {
   type Progress = { positionMs: number; updatedAt: string }
   const putProgress = (client: typeof alice, id: string, body: unknown) =>
@@ -565,5 +585,89 @@ describe("worker wake", () => {
     setWake(WAKE_URL, WAKE_SECRET)
     waitUntilThrows = true
     expect((await createText()).status).toBe(201)
+  })
+})
+
+describe("timing files", () => {
+  const timing = {
+    segments: [
+      { text: "Harbour", startMs: 0, endMs: 600, endsParagraph: true },
+      { text: "The harbour has 3 boats.", startMs: 1500, endMs: 3200, endsParagraph: true },
+    ],
+  }
+
+  const claimed = async () => {
+    const created = await alice("POST", "/api/episodes", {
+      json: { source: { _tag: "Text", title: "Harbour", text: "The harbour has 3 boats." }, voice: null, speed: 1 },
+    })
+    const { id } = (await created.json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [voice] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    return { id, lease: job.leaseToken }
+  }
+  const putTiming = (id: string, lease: string, json: unknown, token: string | null = WORKER_TOKEN) =>
+    call(token, "PUT", `/api/worker/jobs/${id}/chapters/0/timing?workerId=w1&leaseToken=${lease}`, { json })
+  const putChapter = (id: string, lease: string) =>
+    asWorker("PUT", `/api/worker/jobs/${id}/chapters/0?workerId=w1&leaseToken=${lease}&title=One&durationMs=3200`, {
+      body: bytes("chapter"),
+      headers: { "content-type": "audio/mp4", "content-length": "7" },
+    })
+  const chaptersOf = async (id: string) =>
+    ((await (await alice("GET", `/api/episodes/${id}`)).json()) as { chapters: Array<{ timingUrl: string | null }> }).chapters
+
+  it("a chapter lists the timing file the worker uploaded before it, and the media route serves it", async () => {
+    const { id, lease } = await claimed()
+    expect((await putTiming(id, lease, timing)).status).toBe(204)
+    expect(await chaptersOf(id), "no chapter before its audio").toEqual([])
+    expect((await putChapter(id, lease)).status).toBe(204)
+    const [chapter] = await chaptersOf(id)
+    expect(chapter!.timingUrl).toBe(`/media/${users.alice.feed}/episodes/${id}/chapters/000.json`)
+    const listed = (await (await alice("GET", "/api/episodes")).json()) as {
+      episodes: Array<{ chapters: Array<{ timingUrl: string | null }> }>
+    }
+    expect(listed.episodes[0]!.chapters[0]!.timingUrl).toBe(chapter!.timingUrl)
+    const served = await call(null, "GET", chapter!.timingUrl!)
+    expect(served.status).toBe(200)
+    expect(served.headers.get("content-type")).toBe("application/json")
+    expect(await served.json()).toEqual(timing)
+    expect(await allKeys()).toContain(`users/${users.alice.id}/episodes/${id}/chapters/000.json`)
+  })
+
+  it("a chapter without a timing file has timingUrl null", async () => {
+    const episode = await readyEpisode()
+    expect(await chaptersOf(episode.id)).toMatchObject([{ timingUrl: null }])
+  })
+
+  it("an upload again replaces the file", async () => {
+    const { id, lease } = await claimed()
+    await putTiming(id, lease, timing)
+    await putChapter(id, lease)
+    const shorter = { segments: [timing.segments[0]] }
+    expect((await putTiming(id, lease, shorter)).status).toBe(204)
+    const [chapter] = await chaptersOf(id)
+    expect(await (await call(null, "GET", chapter!.timingUrl!)).json()).toEqual(shorter)
+  })
+
+  it("refuses a wrong lease, a client token, and a body that is not a timing file", async () => {
+    const { id, lease } = await claimed()
+    expect((await putTiming(id, "not-the-lease", timing)).status).toBe(409)
+    expect((await putTiming(id, lease, timing, users.alice.client)).status).toBe(401)
+    const overlap = { segments: [timing.segments[1], timing.segments[0]] }
+    const fraction = { segments: [{ ...timing.segments[0], endMs: 600.5 }] }
+    for (const body of [overlap, fraction, { segments: [{ text: "x" }] }, []]) {
+      expect((await putTiming(id, lease, body)).status, JSON.stringify(body)).toBe(400)
+    }
+    await putChapter(id, lease)
+    expect(await chaptersOf(id)).toMatchObject([{ timingUrl: null }])
+    expect(await allKeys()).toEqual([`users/${users.alice.id}/episodes/${id}/chapters/000.m4a`])
+  })
+
+  it("deleting the episode deletes its timing files", async () => {
+    const { id, lease } = await claimed()
+    await putTiming(id, lease, timing)
+    await putChapter(id, lease)
+    expect((await alice("DELETE", `/api/episodes/${id}`)).status).toBe(204)
+    expect(await allKeys()).toEqual([])
+    expect((await env.DB.prepare("SELECT * FROM timings").all()).results).toEqual([])
   })
 })

@@ -2,6 +2,7 @@ import {
   type Episode,
   type EpisodeId,
   type EpisodeProgress,
+  type SourceInput,
   type VoiceRef,
   awaitedAfter,
   mergeProgress,
@@ -10,9 +11,10 @@ import {
 import { Dialog } from "@foldkit/ui"
 import { Option, Record, Redacted } from "effect"
 import type { HttpClient } from "effect/http"
-import { Update } from "foldkit"
+import { type File, Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
 import { type Connection, apiToken, isSameConnection } from "~/api"
+import * as Batch from "~/batch"
 import { type AudioPlayer, LoadChapter, PauseAudio, PlayAudio, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
 import {
   CopyFeedUrl,
@@ -40,7 +42,6 @@ import {
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
 import {
-  Draft,
   Feed,
   type Flags,
   type Listening,
@@ -85,7 +86,8 @@ export const init = (flags: Flags): UpdateReturn => {
     maybeLibraryFailure: Option.none(),
     voices: [],
     addText: "",
-    maybeAttachedFile: Option.none(),
+    batch: [],
+    batchKeys: 0,
     isAdding: false,
     maybeAddError: Option.none(),
     maybeVoice: Option.fromNullishOr(flags.voice),
@@ -253,21 +255,50 @@ const setRowError = (episodeId: EpisodeId, message: string): Step => (model) => 
 
 // ADD BAR
 
+/** Starts the next pending upload of the batch, when none uploads. */
+const startNextUpload: Step = (model) => {
+  const { batch, maybeStarted } = Batch.startNext(model.batch)
+  return {
+    model: modifyFields(model, { batch: () => batch }),
+    commands: Option.match(maybeStarted, {
+      onNone: () => [],
+      onSome: ({ key, file, state }) =>
+        state._tag === "Uploading"
+          ? [UploadEpisode({ connection: model.connection, key, file, voice: state.voice, speed: state.speed })]
+          : [],
+    }),
+  }
+}
+
+/** The batch changed. When it emptied, the text box returns and takes focus. */
+const withBatch =
+  (toBatch: (batch: Batch.Batch) => Batch.Batch): Step =>
+  (model) => {
+    const batch = toBatch(model.batch)
+    const next = modifyFields(model, { batch: () => batch })
+    return model.batch.length > 0 && batch.length === 0 ? { model: next, commands: [FocusAddText()] } : { model: next }
+  }
+
+const attachFiles =
+  (files: ReadonlyArray<File.File>): Step =>
+  (model) =>
+    files.length === 0
+      ? { model }
+      : withBatch((batch) => Batch.attach(batch, files, model.batchKeys))(
+          modifyFields(model, { batchKeys: (keys) => keys + files.length, maybeAddError: () => Option.none() }),
+        )
+
 const submitAdd: Step = (model) => {
   const draft = toDraft(model)
   if (draft._tag === "Empty" || model.isAdding) return { model }
   const { connection, speed } = model
   const voice = Option.getOrNull(model.maybeVoice)
-  const command = Draft.match(draft, {
-    Empty: () => undefined,
-    Url: ({ url }) => CreateEpisodeFromSource({ connection, input: { source: { _tag: "Url", url }, voice, speed } }),
-    Text: ({ text }) =>
-      CreateEpisodeFromSource({ connection, input: { source: { _tag: "Text", title: null, text }, voice, speed } }),
-    File: ({ file }) => UploadEpisode({ connection, file, voice, speed }),
-  })
+  if (draft._tag === "Files") return Update.combine(model, [withBatch((batch) => Batch.send(batch, voice, speed)), startNextUpload])
+  const source: SourceInput =
+    draft._tag === "Url" ? { _tag: "Url", url: draft.url } : { _tag: "Text", title: null, text: draft.text }
   return {
     model: modifyFields(model, { isAdding: () => true, maybeAddError: () => Option.none() }),
-    commands: command ? [command] : [],
+    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed } })],
   }
 }
 
@@ -988,32 +1019,17 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     }),
     PressedEnterInAddText: () => submitAdd(model),
     SubmittedAddForm: () => submitAdd(model),
-    ChangedFileInput: ({ files }) =>
-      Option.match(Option.fromNullishOr(files[0]), {
-        onNone: () => ({ model }),
-        onSome: (file) => ({ model: modifyFields(model, { maybeAttachedFile: () => Option.some(file) }) }),
-      }),
-    ClickedRemoveFile: () => ({
-      model: modifyFields(model, { maybeAttachedFile: () => Option.none() }),
-      commands: [FocusAddText()],
-    }),
+    ChangedFileInput: ({ files }) => attachFiles(files)(model),
+    ClickedRemoveFile: ({ key }) => withBatch((batch) => Batch.remove(batch, key))(model),
+    ClickedRetryFile: ({ key }) =>
+      Update.combine(model, [withBatch((batch) => Batch.retry(batch, key)), startNextUpload]),
     EnteredFileDrag: () => ({ model: modifyFields(model, { fileDragDepth: (depth) => depth + 1 }) }),
     LeftFileDrag: () => ({ model: modifyFields(model, { fileDragDepth: (depth) => Math.max(0, depth - 1) }) }),
-    DroppedFile: ({ file }) => ({
-      model: modifyFields(model, {
-        fileDragDepth: () => 0,
-        maybeAttachedFile: () => Option.some(file),
-        maybeAddError: () => Option.none(),
-      }),
-    }),
+    DroppedFiles: ({ files }) => attachFiles(files)(modifyFields(model, { fileDragDepth: () => 0 })),
     SucceededCreateEpisode: ({ episode }) =>
       Update.combine(model, [
         (stepModel) => ({
-          model: modifyFields(stepModel, {
-            addText: () => "",
-            maybeAttachedFile: () => Option.none(),
-            isAdding: () => false,
-          }),
+          model: modifyFields(stepModel, { addText: () => "", isAdding: () => false }),
           commands: [FocusAddText()],
         }),
         withEpisodes((list) => [episode, ...list.filter((item) => item.id !== episode.id)]),
@@ -1021,6 +1037,14 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     FailedCreateEpisode: ({ failure }) => ({
       model: modifyFields(model, { isAdding: () => false, maybeAddError: () => Option.some(failure.message) }),
     }),
+    SucceededUploadFile: ({ key, episode }) =>
+      Update.combine(model, [
+        withBatch((batch) => Batch.succeed(batch, key)),
+        withEpisodes((list) => [episode, ...list.filter((item) => item.id !== episode.id)]),
+        startNextUpload,
+      ]),
+    FailedUploadFile: ({ key, failure }) =>
+      Update.combine(model, [withBatch((batch) => Batch.fail(batch, key, failure.message)), startNextUpload]),
     CompletedMountFilePickerKeys: () => ({ model }),
     CompletedFocusAddText: () => ({ model }),
 

@@ -116,6 +116,7 @@ try {
   check((await work("POST", "/api/worker/claim", { json: { workerId: workerB, voices: [] } })).status === 204, "worker B claim -> 204 (leases are live)")
   const progressBody = (workerId: string, leaseToken: string, done: number) => ({
     workerId, leaseToken, stage: "synthesizing", done, total: 2, title: "Smoke Text", author: "Smoke Author", language: "en", voice: voice.id,
+    remainingMs: 90_000,
   })
   await expectStatus(await work("POST", `/api/worker/jobs/${text.id}/progress`, { json: progressBody(workerB, "wrong", 1) }), 409, "progress with a wrong lease")
   await expectStatus(
@@ -139,7 +140,7 @@ try {
   }
   const running = await expectStatus(await call("GET", `/api/episodes/${text.id}`), 200, "GET episode while Running")
   check(
-    running.job._tag === "Running" && running.job.stage === "synthesizing" && running.title === "Smoke Text" && running.author === "Smoke Author" && running.chapters.length === 2,
+    running.job._tag === "Running" && running.job.stage === "synthesizing" && running.job.remainingMs === 90_000 && running.title === "Smoke Text" && running.author === "Smoke Author" && running.chapters.length === 2,
     "Running episode shows progress, metadata and chapters",
     running,
   )

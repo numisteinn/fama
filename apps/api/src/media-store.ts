@@ -14,9 +14,12 @@ export const keys = {
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
   chapter: (userId: string, episodeId: string, index: number) =>
     `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.m4a`,
+  timing: (userId: string, episodeId: string, index: number) =>
+    `${userPrefix(userId)}episodes/${episodeId}/chapters/${String(index).padStart(3, "0")}.json`,
   book: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/book.m4b`,
   cover: (userId: string, episodeId: string, ext: string) =>
     `${userPrefix(userId)}episodes/${episodeId}/cover.${ext}`,
+  document: (userId: string, episodeId: string) => `${userPrefix(userId)}episodes/${episodeId}/document.json`,
 }
 
 /**
