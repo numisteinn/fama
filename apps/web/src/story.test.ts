@@ -18,6 +18,7 @@ import {
   SaveProgress,
   StoreProgress,
   StoreSetting,
+  UploadEpisode,
   WaitBeforeDisarmDelete,
   ScrollPickerItem,
   WaitBeforeResetCopied,
@@ -25,7 +26,7 @@ import {
 } from "~/command"
 import { Message } from "~/message"
 import { apiToken } from "~/api"
-import { Feed, Picker, Playback } from "~/model"
+import { Feed, type Model, Picker, Playback } from "~/model"
 import type { EpisodeId, Voice, VoiceRef } from "@fama/contracts"
 import {
   baseModel,
@@ -469,6 +470,66 @@ describe("add bar", () => {
 
   test("an empty box does not submit", () => {
     story(update, given(baseModel()), message(Message.SubmittedAddForm()), Command.expectNone())
+  })
+
+  test("a batch sends one file at a time with the voice and speed of its Add, and a failed file goes again", () => {
+    const epub = new File(["book"], "harbour-days.epub")
+    const pdf = new File(["pdf"], "harbour-notes.pdf")
+    const png = new File(["png"], "cover.png")
+    const notes = { ...queuedArticle, id: "notes" as EpisodeId }
+    const serverFailed = { status: 500, message: "The server failed" }
+    const fileStates = (next: Model) => next.batch.map((item) => `${item.file.name} ${item.state._tag}`)
+    story(
+      update,
+      given({ ...baseModel(), speed: 1.2 }),
+      message(Message.ChangedFileInput({ files: [epub, pdf, png] })),
+      model((next) =>
+        expect(fileStates(next)).toEqual(["harbour-days.epub Attached", "harbour-notes.pdf Attached", "cover.png Refused"]),
+      ),
+      message(Message.SubmittedAddForm()),
+      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2 })),
+      Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: serverFailed })),
+      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice: null, speed: 1.2 })),
+      Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: notes })),
+      model((next) => {
+        expect(fileStates(next)).toEqual(["harbour-days.epub Failed", "cover.png Refused"])
+        expect(next.batch[0]?.state).toEqual({ _tag: "Failed", reason: "The server failed", voice: null, speed: 1.2 })
+        expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([notes])
+      }),
+      message(Message.ClickedRetryFile({ key: 0 })),
+      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2 })),
+      Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
+      model((next) => expect(fileStates(next)).toEqual(["cover.png Refused"])),
+      message(Message.ClickedRemoveFile({ key: 2 })),
+      model((next) => expect(next.batch).toEqual([])),
+      Command.expectExact(FocusAddText),
+      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+    )
+  })
+
+  test("a voice or speed picked while a batch runs does not change the files of that batch", () => {
+    const voice = "kokoro:af_heart" as VoiceRef
+    const epub = new File(["book"], "harbour-days.epub")
+    const pdf = new File(["pdf"], "harbour-notes.pdf")
+    const sent = { voice, speed: 1.2 }
+    story(
+      update,
+      given({
+        ...baseModel(),
+        maybeVoice: Option.none(),
+        speed: 0.8,
+        batchKeys: 2,
+        batch: [
+          { key: 0, file: epub, state: { _tag: "Uploading", ...sent } },
+          { key: 1, file: pdf, state: { _tag: "Pending", ...sent } },
+        ],
+      }),
+      message(Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
+      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice, speed: 1.2 })),
+      Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: queuedArticle })),
+      model((next) => expect(next.batch).toEqual([])),
+      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+    )
   })
 
   test("a failed add shows the message and keeps the text", () => {

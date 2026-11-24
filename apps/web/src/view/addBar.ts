@@ -4,7 +4,8 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { ADD_TEXT_ID, FILE_INPUT_ID } from "~/command"
 import { formatRate } from "~/lib/format"
 import { Message } from "~/message"
-import { ACCEPT, type Model, selectedVoice, toDraft } from "~/model"
+import { ACCEPT, type BatchFile, isSending } from "~/batch"
+import { type Model, selectedVoice, toDraft } from "~/model"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
@@ -32,48 +33,60 @@ export const OpenFilePickerOnKey = Mount.define("OpenFilePickerOnKey", {
     ).pipe(Effect.as(Message.CompletedMountFilePickerKeys())),
 })
 
-/** Paste a link or text, or attach a file, then add it. */
+/** One file of the batch: its name, where it is, and why it failed. */
+const fileRow = ({ key, file, state }: BatchFile, h: HtmlBuilder<Message>): Html => {
+  const reason = state._tag === "Failed" ? state.reason : state._tag === "Refused" ? "Unsupported type" : undefined
+  const icon =
+    state._tag === "Uploading"
+      ? Icon.loaderCircle("size-5 shrink-0 animate-spin text-muted-foreground")
+      : state._tag === "Done"
+        ? Icon.check("size-5 shrink-0 text-muted-foreground")
+        : Icon.fileText(cx("size-5 shrink-0", reason ? "text-destructive" : "text-muted-foreground"))
+  const button = (label: string, message: Message, content: Html) =>
+    h.button(
+      [h.Type("button"), h.AriaLabel(label), h.OnClick(message), h.Class(buttonClass({ size: "icon-sm" }))],
+      [content],
+    )
+  return h.li(
+    [h.Class("flex min-h-10 items-center gap-3 pl-2")],
+    [
+      icon,
+      h.span([h.Class(cx("min-w-0 flex-1 truncate text-[15px]", state._tag === "Pending" && "text-muted-foreground"))], [file.name]),
+      ...(reason ? [h.span([h.Role("alert"), h.Class("max-w-1/2 truncate text-[13px] text-destructive")], [reason])] : []),
+      ...(state._tag === "Failed" ? [button(`Retry ${file.name}`, Message.ClickedRetryFile({ key }), Icon.rotateCcw())] : []),
+      ...(state._tag === "Uploading" || state._tag === "Done"
+        ? []
+        : [button(`Remove ${file.name}`, Message.ClickedRemoveFile({ key }), Icon.x())]),
+    ],
+  )
+}
+
+/** Paste a link or text, or attach files, then add them. */
 export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Html> => {
   const draft = toDraft(model)
   const voiceName = Option.match(selectedVoice(model), { onNone: () => "Auto", onSome: (voice) => voice.name })
   const isDragging = model.fileDragDepth > 0
 
-  const input = Option.match(model.maybeAttachedFile, {
-    onSome: (file) =>
-      h.div(
-        [h.Class("flex items-center gap-3 px-4 pt-4 pb-2")],
-        [
-          Icon.fileText("size-5 shrink-0 text-muted-foreground"),
-          h.span([h.Class("min-w-0 flex-1 truncate text-[15px]")], [file.name]),
-          h.button(
-            [
-              h.Type("button"),
-              h.AriaLabel("Remove file"),
-              h.OnClick(Message.ClickedRemoveFile()),
-              h.Class(buttonClass({ size: "icon-sm" })),
-            ],
-            [Icon.x()],
-          ),
-        ],
-      ),
-    onNone: () =>
-      h.textarea(
-        [
-          h.Id(ADD_TEXT_ID),
-          h.Value(model.addText),
-          h.OnInput((value) => Message.UpdatedAddText({ value })),
-          h.OnKeyDownPreventDefault((key, modifiers) =>
-            key === "Enter" && !modifiers.shiftKey ? Option.some(Message.PressedEnterInAddText()) : Option.none(),
-          ),
-          h.Placeholder("Paste a link or text"),
-          h.AriaLabel("Link or text"),
-          h.Rows(1),
-          h.Class(
-            "field-sizing-content block max-h-60 min-h-14 w-full resize-none bg-transparent px-4 pt-4 pb-2 text-base outline-none placeholder:text-muted-foreground sm:text-[15px]",
-          ),
-        ],
-      ),
-  })
+  const input =
+    model.batch.length > 0
+      ? h.ul([h.Class("max-h-60 overflow-y-auto px-2 pt-2")], model.batch.map((item) => fileRow(item, h)))
+      : h.textarea(
+          [
+            h.Id(ADD_TEXT_ID),
+            h.Value(model.addText),
+            h.OnInput((value) => Message.UpdatedAddText({ value })),
+            h.OnKeyDownPreventDefault((key, modifiers) =>
+              key === "Enter" && !modifiers.shiftKey ? Option.some(Message.PressedEnterInAddText()) : Option.none(),
+            ),
+            h.Placeholder("Paste a link or text"),
+            h.AriaLabel("Link or text"),
+            h.Rows(1),
+            h.Class(
+              "field-sizing-content block max-h-60 min-h-14 w-full resize-none bg-transparent px-4 pt-4 pb-2 text-base outline-none placeholder:text-muted-foreground sm:text-[15px]",
+            ),
+          ],
+        )
+  const isBusy = model.isAdding || isSending(model.batch)
 
   const form = h.form(
     [
@@ -105,6 +118,7 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
             h.Id(FILE_INPUT_ID),
             h.Type("file"),
             h.Accept(ACCEPT),
+            h.Multiple(true),
             h.Hidden(true),
             h.OnFileChange((files) => Message.ChangedFileInput({ files })),
           ]),
@@ -135,7 +149,7 @@ export const addBar = (model: Model, h: HtmlBuilder<Message>): ReadonlyArray<Htm
               h.Disabled(draft._tag === "Empty" || model.isAdding),
               h.Class(buttonClass({ variant: "primary", size: "icon-sm" }, "ml-auto rounded-full")),
             ],
-            [model.isAdding ? Icon.loaderCircle("animate-spin") : Icon.arrowUp()],
+            [isBusy ? Icon.loaderCircle("animate-spin") : Icon.arrowUp()],
           ),
         ],
       ),
