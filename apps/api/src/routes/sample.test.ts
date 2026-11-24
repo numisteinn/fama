@@ -60,6 +60,8 @@ it("lists only the owner's Samples and requests each registered Voice of the Doc
   expect((await app.alice("POST", url, { json: { voices: [english.id] } })).status).toBe(400)
   expect((await app.alice("POST", url, { json: { voices: ["piper:../x"] } })).status).toBe(400)
   const asked = await listed(await app.alice("POST", url))
+  // A client that sends an empty body, not no body, asks for the same thing.
+  expect((await app.alice("POST", url, { body: "" })).status).toBe(200)
   expect(asked).toEqual([voice, secondVoice].map(({ id }) => ({ voice: id, state: { _tag: "Requested" } })))
   expect(await listed(await app.alice("POST", url, { json: {} }))).toEqual(asked)
 

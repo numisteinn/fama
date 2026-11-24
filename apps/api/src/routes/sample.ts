@@ -26,7 +26,9 @@ export const sampleRoutes = HttpRouter.addAll([
     const episodes = yield* EpisodeRepo
     yield* episodes.get(userId, id)
     const request = yield* webRequest
-    const body = request.body === null ? { voices: null } : yield* HttpServerRequest.schemaBodyJson(SamplesRequest)
+    // A POST with no body arrives with an empty stream, not always with `body === null`.
+    const text = request.body === null ? "" : yield* Effect.tryPromise(() => request.clone().text())
+    const body = text.trim() === "" ? { voices: null } : yield* HttpServerRequest.schemaBodyJson(SamplesRequest)
     const key = yield* episodes.documentKey(userId, id)
     const object = key === null ? null : yield* (yield* MediaStore).get(key, null)
     if (object === null) return yield* new NotStored({ message: "This episode has no Document." })
