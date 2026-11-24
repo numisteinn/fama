@@ -399,7 +399,7 @@ const publicRoutes = HttpRouter.addAll([
           title: "Fama",
           author: "Fama",
           link: origin,
-          imageUrl: `${origin}/feed/${feedToken}/cover.jpg`,
+          imageUrl: `${origin}/feed/${feedToken}/cover.jpg?v=ribbon-fan`,
           items,
         })
         return HttpServerResponse.text(xml, { contentType: "application/rss+xml; charset=utf-8" })

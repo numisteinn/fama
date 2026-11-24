@@ -7,6 +7,7 @@ A user copies the private feed URL from Settings and adds it to a podcast app. T
 - `feed-url-web` shows the feed URL in the web Settings dialog and copies it (`Copy feed URL`, then `Copied`).
 - `feed-url-ios` copies the feed URL on the iPhone (`Copy feed URL`, alert `Feed URL copied`) or opens Podcasts (`Add to Podcasts`).
 - `feed-items` lists one item for each Ready episode and leaves out Queued, Running and Failed episodes.
+- `feed-cover` shows open Ribbon + Fan Pan as the channel artwork.
 - `feed-enclosure` serves each enclosure with `206` for a Range request, type `audio/x-m4a`, and a length that matches the bytes.
 - `feed-private` refuses a wrong feed token, while the right token needs no header. The feed token gets `401` on `/api/*`, and a media path under `uploads/` gets `404`.
 - `feed-rotate` (`POST /api/feed/rotate`, no UI yet) gives a new feed URL, and the old feed and media URLs get `401`.
@@ -28,6 +29,7 @@ Preconditions:
 - **URL from the API.** Run `fama-verify feed`. It prints the same URL.
 - **Items.** Run `curl -s "$(fama-verify feed)" > $EVIDENCE/feed/feed.xml` and `grep -oE '<title>[^<]*</title>|<enclosure [^>]*>' $EVIDENCE/feed/feed.xml`. The channel title is `Fama`. There is one item for each Ready episode, newest first, each with an `<enclosure ... type="audio/x-m4a"/>`. No item exists for the episode that is not Ready.
 - **XML is valid.** Run `python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse(sys.argv[1])" $EVIDENCE/feed/feed.xml`. Exit code `0`.
+- **Cover.** Read the channel's `itunes:image` URL from the RSS. Fetch that URL. It returns `200` and `image/jpeg`. Check for the 1400 × 1400 image of open Pan on spruce. The URL ends in `cover.jpg?v=ribbon-fan` so podcast apps can request the new artwork.
 - **Enclosure streams.** For one enclosure URL, run `curl -s -D - -o /dev/null -H 'Range: bytes=0-99' <url>`. Status `206`, `Content-Range: bytes 0-99/<length>`, and `<length>` equals the enclosure `length` attribute.
 - **Private.** Run `curl -s -o /dev/null -w '%{http_code}' http://localhost:8788/feed/wrong-token/rss.xml`. The status is `401`. Run `curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer dev-feed-token' http://localhost:8788/api/episodes`. The status is `401`.
 - **Rotate.** Do this last: it changes the feed token for the rest of the run. Run `fama-verify api POST /api/feed/rotate`. It prints a new URL. The old URL and an old enclosure URL now get `401`, the new URL gets `200`, and `fama-verify api GET /api/episodes` shows media URLs with the new token. The web Settings dialog shows the new URL after it opens again.

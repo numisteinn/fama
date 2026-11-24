@@ -230,7 +230,7 @@ def lobe_env(L, u):
     return np.where(u > u0, np.abs(np.sin(PI * n * ph)) ** .55, 1.0)
 
 
-def sheet(name, spine, L, mirror, ydep, M, nu=150, nv=34):
+def sheet(name, spine, L, mirror, ydep, M, nu=150, nv=34, *, sculpt=None):
     Lt = spine.length
     s0 = L.get("s0", 0) * Lt
     ln = L["len"] * Lt
@@ -260,10 +260,12 @@ def sheet(name, spine, L, mirror, ydep, M, nu=150, nv=34):
         cc = np.tile(lin3(L["solid"]), (len(gl), 1))
     else:
         cc = lerp3(L["cols"][0], L["cols"][1], smooth(gl, *L["grad"]))
+    front, pigment = sculpt(U, V, h, cc) if sculpt else (h, cc)
     for sg in (1, -1):
-        p = pos + N * tt + B * (ydep + L.get("y", 0) + sg * h[..., None]) - B * cup * tt ** 2
+        depth = front if sg == 1 else -h
+        p = pos + N * tt + B * (ydep + L.get("y", 0) + depth[..., None]) - B * cup * tt ** 2
         verts.append(p.reshape(-1, 3))
-        cols.append(cc)
+        cols.append(pigment if sg == 1 else cc)
     nf = U.size
     faces = []
     for i in range(nu):
@@ -367,26 +369,32 @@ FOLD = dict(
 )
 
 
-def wing(pose, side, M):
+def wing_path(pose, side):
     """side +1 right (screen), -1 left (mirrored)."""
     spec = FOLD
     if pose == "open":
         pts = spec["open"]
-        ydep = 0
     else:
         pts = [list(p) for p in spec["wrapped"]["R"]]
         pts[3][0] = spec["wrapped"]["cross"]      # both tips cross the centre line, right wing in front
-        ydep = 0
         if side > 0:
             pts[3][1] -= .3
             pts[2][1] -= .15
-    sp = Spine(pts, flip=(pose == "wrapped"))
+    return pts
+
+
+def wing(pose, side, M):
+    wing_geometry(wing_path(pose, side), side, M, folded=(pose == "wrapped"))
+
+
+def wing_geometry(pts, side, M, *, folded=False):
+    sp = Spine(pts, flip=folded)
     mirror = side < 0
-    for L in spec["layers"]:
-        sheet("Wing layer", sp, L, mirror, ydep, M)
-    base = dict(spec["base"], cols=COL_RIM)
-    rim(sp, base, ydep, M, mirror)
-    concha(sp, spec["concha"], ydep, M, mirror)
+    for L in FOLD["layers"]:
+        sheet("Wing layer", sp, L, mirror, 0, M)
+    base = dict(FOLD["base"], cols=COL_RIM)
+    rim(sp, base, 0, M, mirror)
+    concha(sp, FOLD["concha"], 0, M, mirror)
 
 
 # ------------------------------------------------------------------ scene
@@ -424,24 +432,22 @@ def bbox_xz():
     return lo, hi
 
 
-def render(pose, path, resolution, fill):
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    M = dict(
+def materials():
+    return dict(
         vc=mat("Ear-wing clay", vcol=True, rough=.78, sheen=.08),
         skin=mat("Honey", "E39A74"), cheek=mat("Cheek", "DE8F78"), ink=mat("Umber", "2A1E1C", rough=.5),
         sage=mat("Eucalyptus", "6F9080"),
         band=mat("Deep sage", "4F6B5E"),
     )
-    head(M, closed_eyes=(pose == "wrapped"))
-    wing(pose, 1, M)
-    wing(pose, -1, M)
-    # whole figure tilts a little when asleep
+
+
+def render_scene(path, resolution, fill, *, tilt=0, rim_strength=1.0, samples=64):
     rig = bpy.data.objects.new("Rig", None)
     bpy.context.collection.objects.link(rig)
     for o in list(bpy.context.scene.objects):
         if o is not rig and o.type in {"MESH", "CURVE"}:
             o.parent = rig
-    rig.rotation_euler.y = math.radians(-7 if pose == "wrapped" else 0)
+    rig.rotation_euler.y = math.radians(tilt)
     bpy.context.view_layer.update()
     lo, hi = bbox_xz()
     ctr = (lo + hi) / 2
@@ -459,7 +465,6 @@ def render(pose, path, resolution, fill):
     light("Fill", (ctr[0] + 3.8, -3, ctr[1] + 3), tgt, 260, 4)
     light("Top", (ctr[0] - 1, -.4, ctr[1] + 6), tgt, 260, 2.8)
     # Warm rims define the silhouette on dark surfaces.
-    rim_strength = .50 if pose == "wrapped" else 1.0
     light("Rim L", (ctr[0] - 4.6, 1.6, ctr[1] + 1.2), tgt, rim_strength * 3000, 2.5, (1.0, .82, .68))
     light("Rim R", (ctr[0] + 4.6, 1.6, ctr[1] + 1.2), tgt, rim_strength * 3000, 2.5, (1.0, .9, .8))
     light("Rim Top", (ctr[0], 1.6, ctr[1] + 4.8), tgt, rim_strength * 2200, 3, (1.0, .88, .76))
@@ -469,7 +474,7 @@ def render(pose, path, resolution, fill):
     sky.inputs[0].default_value = (.84, .80, .75, 1)
     sky.inputs[1].default_value = .12
     sc.render.engine = "CYCLES"
-    sc.cycles.samples = 64
+    sc.cycles.samples = samples
     sc.cycles.use_denoising = True
     sc.view_settings.view_transform = "AgX"
     sc.view_settings.exposure = .05
@@ -479,6 +484,17 @@ def render(pose, path, resolution, fill):
     sc.render.image_settings.color_mode = "RGBA"
     sc.render.filepath = str(path)
     bpy.ops.render.render(write_still=True)
+
+
+def render(pose, path, resolution, fill):
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    M = materials()
+    sleeping = pose == "wrapped"
+    head(M, closed_eyes=sleeping)
+    wing(pose, 1, M)
+    wing(pose, -1, M)
+    render_scene(path, resolution, fill, tilt=-7 if sleeping else 0,
+                 rim_strength=.50 if sleeping else 1.0)
 
 
 if __name__ == "__main__":

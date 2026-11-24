@@ -33,6 +33,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 
 - [Add a link](./add-link.md): paste a web article link on the web or the iPhone, and get a narrated episode with the real title, the detected language and the default voice.
 - [Add a file](./add-file.md): attach a PDF, EPUB, Markdown or text file, and get one chapter for each table-of-contents entry.
+- [Empty Library](./empty-library.md): see folded Pan when the Library has no Episodes.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
