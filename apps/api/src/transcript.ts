@@ -32,7 +32,7 @@ export const cueText = (text: string) =>
 /**
  * The WebVTT transcript of an episode: one cue for each Segment, in order. A cue's times are the Segment's times plus
  * the durations of the chapters before it, the offsets of the chapter marks in the book file. A cue ends at the end
- * of its chapter at the latest, so cues never overlap, and it lasts at least 1 ms. A Segment with no text has no cue.
+ * of its chapter at the latest, so cues never overlap, and it lasts at least 1 ms.
  */
 export const renderTranscript = (chapters: ReadonlyArray<TranscriptChapter>) => {
   const lines = ["WEBVTT", ""]
@@ -40,7 +40,6 @@ export const renderTranscript = (chapters: ReadonlyArray<TranscriptChapter>) => 
   for (const chapter of chapters) {
     for (const segment of chapter.segments) {
       const text = cueText(segment.text)
-      if (text === "") continue
       const start = offsetMs + segment.startMs
       const end = Math.max(start + 1, offsetMs + Math.min(segment.endMs, chapter.durationMs))
       lines.push(`${vttTime(start)} --> ${vttTime(end)}`, text, "")

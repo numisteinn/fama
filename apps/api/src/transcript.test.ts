@@ -50,9 +50,9 @@ describe("renderTranscript", () => {
     expect(vtt).toContain("00:00:02.000 --> 00:00:02.500\nNext.")
   })
 
-  it("gives an empty-length Segment 1 ms and leaves out a Segment with no text", () => {
+  it("gives an empty-length Segment 1 ms and keeps the cue for a Segment with no text", () => {
     const vtt = renderTranscript([{ durationMs: 2_000, segments: [segment("Now.", 700, 700), segment("  \n ", 800, 900)] }])
-    expect(vtt).toBe("WEBVTT\n\n00:00:00.700 --> 00:00:00.701\nNow.\n")
+    expect(vtt).toBe("WEBVTT\n\n00:00:00.700 --> 00:00:00.701\nNow.\n\n00:00:00.800 --> 00:00:00.900\n\n")
   })
 
   it("is only the header for an episode with no Segments", () => {

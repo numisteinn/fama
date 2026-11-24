@@ -90,7 +90,7 @@ An item has `<podcast:transcript url="<origin>/media/<feedToken>/episodes/<episo
 
 - One cue for each Segment, in reading order. The spoken title Segments are cues too, because they are in the audio.
 - A cue is on the episode timeline, the timeline of the book file: the Segment's `startMs` and `endMs` plus the durations of the chapters before it. These sums are the chapter marks of the book file. A cue ends at the end of its chapter at the latest.
-- The cue text is the Segment `text` on one line: white space runs become one space, and `&`, `<`, `>` are escaped (`&amp;`, `&lt;`, `&gt;`). A Segment with no text has no cue.
+- The cue text is the Segment `text` on one line: white space runs become one space, and `&`, `<`, `>` are escaped (`&amp;`, `&lt;`, `&gt;`). A Segment with empty text keeps its cue time.
 - The API makes the file on the first request after a `Ready` and stores it. Later requests read the stored file.
 
 ## Listening progress
