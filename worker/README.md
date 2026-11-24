@@ -34,7 +34,7 @@ out/<slug>/cover.jpg        (when the source has one)
 out/<slug>/episode.json     (title, language, voice, chapter durations)
 ```
 
-`fama work` loops: claim a job (with the worker token, `FAMA_WORKER_TOKEN` on the API), send its lease token on every job call, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. Chapters listed in `completedChapters` are not uploaded again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
+`fama work` loops: claim a job (with the worker token, `FAMA_WORKER_TOKEN` on the API), send its lease token on every job call, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. Chapters listed in `completedChapters` are not uploaded again. The first attempt extracts the source and uploads the Document. A claim with `documentPath` has a stored Document: the worker reads it (and the cover at `coverPath`) and does not extract again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
 
 Settings:
 
@@ -140,7 +140,7 @@ The `wall` figures show the cost of a warm container alone. The gap between them
 uv run pytest
 ```
 
-The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, chunking, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a resume with `completedChapters`, a failed job, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
+The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, chunking, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a resume with `completedChapters`, a failed job, a retry from the stored Document, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
 
 ## Bakeoff
 
