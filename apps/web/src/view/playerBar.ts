@@ -4,6 +4,7 @@ import type { Html, HtmlBuilder } from "foldkit/html"
 import { formatClock, formatRate } from "~/lib/format"
 import { Message } from "~/message"
 import { type LoadedPlayback, type Model, SKIP_BACK_MS, SKIP_FORWARD_MS, current, isPlayPending } from "~/model"
+import { followButton, textButton } from "~/reader/view"
 import { chapterStartMs, SCRUB_STEP_MS, scrubMaxMs, totalMs } from "~/timeline"
 import { pickerCheckedIndex } from "~/update"
 import { buttonClass } from "~/view/button"
@@ -25,6 +26,7 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
       // The blur sits on its own layer. A backdrop filter on the footer itself would make the footer the
       // containing block of the menus' fixed backdrop and popup, so a click on the library would go through.
       h.div([h.AriaHidden(true), h.Class("absolute inset-0 -z-10 bg-background/90 backdrop-blur-xl")], []),
+      ...followButton(model, h),
       h.div(
         [
           h.Class(
@@ -60,6 +62,7 @@ const bar = (model: Model, playback: LoadedPlayback, episode: Episode, h: HtmlBu
               h.div(
                 [h.Class("flex items-center justify-end gap-1")],
                 [
+                  ...textButton(model, h),
                   ...(episode.chapters.length > 1
                     ? picker(model, h, {
                         pickerId: "Chapters",
