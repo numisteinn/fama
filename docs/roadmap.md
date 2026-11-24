@@ -131,7 +131,6 @@ Pick many files, or a folder, and get one episode for each.
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
 
-- **X1. Replace PyMuPDF** (AGPL) with `pypdfium2`. Needed before we charge for a managed service. It goes first, because OCR builds on the PDF code.
 - **X2. OCR for scanned PDFs.** A scanned PDF has no text to extract. On the Mac, Apple Vision OCR works offline. Check its Icelandic support first. Seen in: abogen (on its roadmap).
 - **X3. LLM pass to fix text, for Icelandic only.** This fixes Icelandic numbers ("3 bækur" must be read as "þrjár bækur"), which the rules in `normalize.py` do not handle. Optional, with a local model or an API model. Seen in: abogen.
 
@@ -194,6 +193,5 @@ Each has a default. A unit follows the default unless the owner says no.
 
 ## Before charging for a managed service
 
-- `X1`: replace PyMuPDF (AGPL) or change the license.
 - Measure the GPU cost per hour of audio on Modal. The price depends on it.
 - Design: [design/two-paths.md](design/two-paths.md).
