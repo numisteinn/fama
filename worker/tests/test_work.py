@@ -22,6 +22,7 @@ class FakeApi:
         self.leases: list[tuple[str, str | None]] = []  # (path, lease token sent) of every job call
         self.calls: list[tuple[str, str]] = []
         self.chapters: dict[int, dict] = {}
+        self.timings: dict[int, dict] = {}
         self.book: bytes | None = None
         self.state = "Queued"
         self.steal_after_chapter: int | None = None
@@ -53,6 +54,9 @@ class FakeApi:
         kind = parts[4]
         if kind == "progress":
             self.progress.append(json.loads(body))
+        elif kind == "chapters" and parts[-1] == "timing":
+            assert request.headers.get("Content-Type") == "application/json"
+            self.timings[int(parts[5])] = json.loads(body)
         elif kind == "chapters":
             index = int(parts[5])
             self.chapters[index] = {"title": query["title"], "durationMs": int(query["durationMs"]), "bytes": len(body)}
@@ -114,6 +118,12 @@ def test_claim_progress_chapters_book_complete(tone, server, tmp_path):
     assert sorted(fake.chapters) == [0, 1, 2]
     assert [c["title"] for c in fake.chapters.values()] == ["Chapter 1", "Chapter 2", "Chapter 3"]
     assert all(c["durationMs"] > 0 and c["bytes"] > 0 for c in fake.chapters.values())
+    for index, chapter in fake.chapters.items():
+        segments = fake.timings[index]["segments"]
+        assert f"Chapter {index + 1}" in [s["text"] for s in segments]
+        assert abs(segments[-1]["endMs"] - chapter["durationMs"]) <= 50
+    uploads = [path for method, path in fake.calls if method == "PUT" and "/chapters/" in path]
+    assert uploads[:2] == ["/api/worker/jobs/ep1/chapters/0/timing", "/api/worker/jobs/ep1/chapters/0"]
     assert fake.book and fake.book[4:8] == b"ftyp"
     stages = [p["stage"] for p in fake.progress]
     assert stages[0] == "extracting" and "synthesizing" in stages and "uploading" in stages
@@ -138,7 +148,7 @@ def test_409_drops_the_job_without_failing_it(tone, server, tmp_path):
 def test_resume_skips_completed_chapters(tone, server, tmp_path):
     fake, url = server(_job(completed=[0, 1]))
     _run(url, tmp_path)
-    assert sorted(fake.chapters) == [2]
+    assert sorted(fake.chapters) == sorted(fake.timings) == [2]
     assert fake.book is not None and fake.state == "Ready"
 
 

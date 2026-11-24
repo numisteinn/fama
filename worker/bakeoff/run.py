@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from fama_worker import audio
-from fama_worker.chunk import chunk_text
+from fama_worker.chunk import segments
 from fama_worker.model import Audio
 from fama_worker.normalize import normalize
 
@@ -144,8 +144,8 @@ CANDIDATES = [
 
 def render(synth: Callable[[str], Audio], text: str) -> Audio:
     parts, rate = [], None
-    for chunk in chunk_text(text, CHUNK_CHARS):
-        result = synth(chunk.text)
+    for segment in segments(text, CHUNK_CHARS, speak=lambda piece: piece):
+        result = synth(segment.spoken)
         rate = result.sample_rate
         parts += [result.samples, np.zeros(int(GAP_S * rate), dtype=np.float32)]
     return Audio(np.concatenate(parts[:-1]), rate)

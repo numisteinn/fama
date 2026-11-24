@@ -1,8 +1,10 @@
 """Document -> chapter audio files -> book file.
 
-Stages are plain functions: plan (normalize and chunk), synthesize (through the chunk
-cache), encode each chapter, assemble the book. A reporter hears about progress and
-about each chapter as soon as its file exists, so `fama work` can upload it right away.
+Stages are plain functions: plan (split into Segments and normalize each), synthesize
+(through the chunk cache), encode each chapter, assemble the book. Each chapter also gets
+a timing file: when each Segment starts and ends in the chapter audio. A reporter hears
+about progress and about each chapter as soon as its files exist, so `fama work` can
+upload them right away.
 """
 
 from __future__ import annotations
@@ -19,12 +21,12 @@ import numpy as np
 
 from fama_worker import audio
 from fama_worker.cache import ChunkCache, chunk_key
-from fama_worker.chunk import Chunk, chunk_text
+from fama_worker.chunk import Segment, segments
 from fama_worker.engines import Engine, get_engine
 from fama_worker.model import Audio, Document, VoiceRef
 from fama_worker.normalize import normalize
 
-CHUNK_GAP_S = 0.12
+SEGMENT_GAP_S = 0.12
 PARAGRAPH_GAP_S = 0.45
 TITLE_GAP_S = 0.9
 
@@ -35,8 +37,8 @@ Stage = Literal["extracting", "synthesizing", "encoding", "uploading"]
 class ChapterPlan:
     index: int
     title: str
-    intro: tuple[Chunk, ...]  # spoken titles, followed by a longer pause
-    chunks: tuple[Chunk, ...]
+    intro: tuple[Segment, ...]  # spoken titles, followed by a longer pause
+    body: tuple[Segment, ...]
 
 
 @dataclass(frozen=True)
@@ -47,8 +49,17 @@ class Plan:
     chapters: tuple[ChapterPlan, ...]
 
     @property
-    def total_chunks(self) -> int:
-        return sum(len(c.intro) + len(c.chunks) for c in self.chapters)
+    def total_segments(self) -> int:
+        return sum(len(c.intro) + len(c.body) for c in self.chapters)
+
+
+@dataclass(frozen=True)
+class Timed:
+    """A Segment on the timeline of its chapter. The silence after it belongs to no Segment."""
+
+    segment: Segment
+    start_ms: int
+    end_ms: int
 
 
 @dataclass(frozen=True)
@@ -57,6 +68,7 @@ class ChapterFile:
     title: str
     path: Path
     duration_ms: int
+    timing: Path  # the timing file, next to the audio
 
 
 @dataclass(frozen=True)
@@ -99,52 +111,70 @@ def _sentence(text: str) -> str:
 
 
 def plan(document: Document, voice: VoiceRef, speed: float, engine: Engine) -> Plan:
-    language = document.language
+    def speak(text: str) -> str:
+        return normalize(text, document.language)
+
     chapters = []
     for index, chapter in enumerate(document.chapters):
-        text = normalize(chapter.text, language)
-        spoken: list[str] = []
-        if index == 0 and not _key(text).startswith(_key(document.title)):
-            spoken.append(document.title)
+        body = tuple(segments(chapter.text, engine.max_chars, speak))
+        start = _key(" ".join(s.spoken for s in body))
+        lines: list[str] = []
+        if index == 0 and not start.startswith(_key(document.title)):
+            lines.append(document.title)
             if document.author:
-                spoken.append(document.author)
-        if _key(chapter.title) != _key(document.title) and not _key(text).startswith(_key(chapter.title)):
-            spoken.append(chapter.title)
+                lines.append(document.author)
+        if _key(chapter.title) != _key(document.title) and not start.startswith(_key(chapter.title)):
+            lines.append(chapter.title)
         intro = tuple(
-            Chunk(c.text, ends_paragraph=True)
-            for line in spoken
-            for c in chunk_text(_sentence(normalize(line, language)), engine.max_chars)
+            Segment(s.text, _sentence(s.spoken), ends_paragraph=True)
+            for line in lines
+            for s in segments(line, engine.max_chars, speak)
         )
-        chapters.append(ChapterPlan(index, chapter.title, intro, tuple(chunk_text(text, engine.max_chars))))
+        chapters.append(ChapterPlan(index, chapter.title, intro, body))
     return Plan(document, voice, speed, tuple(chapters))
 
 
-def _synthesize(chunk: Chunk, plan: Plan, engine: Engine, cache: ChunkCache) -> Audio:
-    key = chunk_key(chunk.text, plan.voice, engine.model_version, plan.speed)
+def _synthesize(segment: Segment, plan: Plan, engine: Engine, cache: ChunkCache) -> Audio:
+    key = chunk_key(segment.spoken, plan.voice, engine.model_version, plan.speed)
     cached = cache.get(key)
     if cached is not None:
         return cached
-    result = engine.synthesize(chunk.text, plan.voice.voice_id, plan.speed)
+    result = engine.synthesize(segment.spoken, plan.voice.voice_id, plan.speed)
     cache.put(key, result)
     return result
 
 
 def render_chapter(chapter: ChapterPlan, plan: Plan, engine: Engine, cache: ChunkCache,
-                   on_chunk=lambda: None) -> Audio:
+                   on_segment=lambda: None) -> tuple[Audio, tuple[Timed, ...]]:
+    """The chapter audio, and where each Segment is in it."""
     parts: list[np.ndarray] = []
+    spans: list[tuple[Segment, int, int]] = []  # in samples
     rate: int | None = None
-    pieces = [(c, TITLE_GAP_S if i == len(chapter.intro) - 1 else PARAGRAPH_GAP_S) for i, c in enumerate(chapter.intro)]
-    pieces += [(c, PARAGRAPH_GAP_S if c.ends_paragraph else CHUNK_GAP_S) for c in chapter.chunks]
-    for chunk, gap in pieces:
-        result = _synthesize(chunk, plan, engine, cache)
+    position = 0
+    pieces = [(s, TITLE_GAP_S if i == len(chapter.intro) - 1 else PARAGRAPH_GAP_S) for i, s in enumerate(chapter.intro)]
+    pieces += [(s, PARAGRAPH_GAP_S if s.ends_paragraph else SEGMENT_GAP_S) for s in chapter.body]
+    for segment, gap in pieces:
+        result = _synthesize(segment, plan, engine, cache)
         if rate is not None and result.sample_rate != rate:
             raise RuntimeError("Engine changed its sample rate inside one chapter.")
         rate = result.sample_rate
-        parts += [result.samples, np.zeros(int(gap * rate), dtype=np.float32)]
-        on_chunk()
+        silence = np.zeros(int(gap * rate), dtype=np.float32)
+        spans.append((segment, position, position + len(result.samples)))
+        position += len(result.samples) + len(silence)
+        parts += [result.samples, silence]
+        on_segment()
     if rate is None:
         raise ValueError(f"Chapter {chapter.index} has no text.")
-    return Audio(audio.level(np.concatenate(parts[:-1])), rate)
+    timed = tuple(Timed(s, round(start * 1000 / rate), round(end * 1000 / rate)) for s, start, end in spans)
+    return Audio(audio.level(np.concatenate(parts[:-1])), rate), timed
+
+
+def write_timing(timed: tuple[Timed, ...], path: Path) -> None:
+    """The timing file of one chapter, in the shape of `Timing` in packages/contracts."""
+    path.write_text(json.dumps({"segments": [
+        {"text": t.segment.text, "startMs": t.start_ms, "endMs": t.end_ms, "endsParagraph": t.segment.ends_paragraph}
+        for t in timed
+    ]}, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def narrate(document: Document, voice: VoiceRef, speed: float, out_dir: Path, *,
@@ -160,7 +190,7 @@ def narrate(document: Document, voice: VoiceRef, speed: float, out_dir: Path, *,
     cover = audio.write_cover(document.cover, directory) if document.cover else None
 
     done = 0
-    total = the_plan.total_chunks
+    total = the_plan.total_segments
 
     def tick() -> None:
         nonlocal done
@@ -170,11 +200,12 @@ def narrate(document: Document, voice: VoiceRef, speed: float, out_dir: Path, *,
     reporter.stage("synthesizing", 0, total)
     files = []
     for chapter in the_plan.chapters:
-        rendered = render_chapter(chapter, the_plan, engine, cache, tick)
+        rendered, timed = render_chapter(chapter, the_plan, engine, cache, tick)
         path = directory / "chapters" / f"{chapter.index:03d}.m4a"
         audio.encode_chapter(rendered, path, title=chapter.title, album=document.title, artist=document.author,
                              track=chapter.index + 1)
-        file = ChapterFile(chapter.index, chapter.title, path, audio.duration_ms(path))
+        write_timing(timed, path.with_suffix(".json"))
+        file = ChapterFile(chapter.index, chapter.title, path, audio.duration_ms(path), path.with_suffix(".json"))
         files.append(file)
         if chapter.index not in skip:
             reporter.chapter_ready(file)
