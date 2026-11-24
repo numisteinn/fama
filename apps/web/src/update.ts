@@ -42,6 +42,7 @@ import {
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
 import type { ReaderMessage } from "~/reader/message"
+import type { ReviewMessage } from "~/review/message"
 import {
   Feed,
   type Flags,
@@ -68,6 +69,8 @@ import {
 } from "~/model"
 import { initReader } from "~/reader/model"
 import * as Reader from "~/reader/update"
+import { initReview } from "~/review/model"
+import * as Review from "~/review/update"
 import { chapterStartMs, locate, scrubTargetMs, totalMs } from "~/timeline"
 
 export type Services = AudioPlayer | HttpClient.HttpClient
@@ -95,6 +98,7 @@ export const init = (flags: Flags): UpdateReturn => {
     maybeAddError: Option.none(),
     maybeVoice: Option.fromNullishOr(flags.voice),
     speed: flags.speed,
+    isReviewOn: false,
     fileDragDepth: 0,
     armedDeletes: [],
     rowErrors: {},
@@ -108,6 +112,7 @@ export const init = (flags: Flags): UpdateReturn => {
     feedUrlCopies: 0,
     playback: Playback.Stopped(),
     reader: initReader,
+    review: initReview,
     maybeListening: Option.none(),
     playIntents: 0,
     maybePendingPlay: Option.none(),
@@ -268,7 +273,16 @@ const startNextUpload: Step = (model) => {
       onNone: () => [],
       onSome: ({ key, file, state }) =>
         state._tag === "Uploading"
-          ? [UploadEpisode({ connection: model.connection, key, file, voice: state.voice, speed: state.speed })]
+          ? [
+              UploadEpisode({
+                connection: model.connection,
+                key,
+                file,
+                voice: state.voice,
+                speed: state.speed,
+                review: state.review,
+              }),
+            ]
           : [],
     }),
   }
@@ -295,14 +309,15 @@ const attachFiles =
 const submitAdd: Step = (model) => {
   const draft = toDraft(model)
   if (draft._tag === "Empty" || model.isAdding) return { model }
-  const { connection, speed } = model
+  const { connection, isReviewOn, speed } = model
   const voice = Option.getOrNull(model.maybeVoice)
-  if (draft._tag === "Files") return Update.combine(model, [withBatch((batch) => Batch.send(batch, voice, speed)), startNextUpload])
+  if (draft._tag === "Files")
+    return Update.combine(model, [withBatch((batch) => Batch.send(batch, voice, speed, isReviewOn)), startNextUpload])
   const source: SourceInput =
     draft._tag === "Url" ? { _tag: "Url", url: draft.url } : { _tag: "Text", title: null, text: draft.text }
   return {
     model: modifyFields(model, { isAdding: () => true, maybeAddError: () => Option.none() }),
-    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed, review: false } })],
+    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed, review: isReviewOn } })],
   }
 }
 
@@ -792,6 +807,17 @@ const readerStep = (message: ReaderMessage): Step => (model) => {
   ])
 }
 
+/** A message of the review screen. Starting narration updates the episode in the library. */
+const reviewStep = (message: ReviewMessage): Step => (model) => {
+  const { model: next, commands, outMessage } = Review.update(model, message)
+  return Update.combine(next, [
+    (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
+    outMessage
+      ? withEpisodes((list) => list.map((item) => (item.id === outMessage.episode.id ? outMessage.episode : item)))
+      : unchanged,
+  ])
+}
+
 /** The element stopped though the tab did not tell it to: that is a Pause of the listener. */
 const takeOwnPause: Step = (model) =>
   model.playback._tag === "Loaded" && model.playback.isPlaying
@@ -1026,6 +1052,7 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     }),
     PressedEnterInAddText: () => submitAdd(model),
     SubmittedAddForm: () => submitAdd(model),
+    ToggledAddReview: () => ({ model: modifyFields(model, { isReviewOn: (on) => !on }) }),
     ChangedFileInput: ({ files }) => attachFiles(files)(model),
     ClickedRemoveFile: ({ key }) => withBatch((batch) => Batch.remove(batch, key))(model),
     ClickedRetryFile: ({ key }) =>
@@ -1098,6 +1125,7 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     CompletedFocusDeleteConfirm: () => ({ model }),
 
     GotReaderMessage: ({ message: readerMessage }) => readerStep(readerMessage)(model),
+    GotReviewMessage: ({ message: reviewMessage }) => reviewStep(reviewMessage)(model),
 
     ClickedSettings: () => openSettings(model),
     GotSettingsDialogMessage: ({ message: dialogMessage }) => foldSettingsDialog(model, dialogMessage),
@@ -1174,4 +1202,4 @@ const handle = (model: Model, message: Message): UpdateReturn =>
  * reader's `reconcile` loads text and keeps the mark in sight.
  */
 export const update = (model: Model, message: Message): UpdateReturn =>
-  Update.combine(model, [(start) => handle(start, message), reconcile, Reader.reconcile])
+  Update.combine(model, [(start) => handle(start, message), reconcile, Reader.reconcile, Review.reconcile])

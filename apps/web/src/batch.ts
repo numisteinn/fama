@@ -12,8 +12,8 @@ export const isAccepted = (name: string): boolean => {
   return EXTENSIONS.some((extension) => lower.endsWith(extension))
 }
 
-/** The voice and speed a file is sent with: the add bar's choice when the user chose Add. */
-const Sent = { voice: Schema.NullOr(VoiceRef), speed: Schema.Number }
+/** The voice, speed and review flag a file is sent with: the add bar's choice when the user chose Add. */
+const Sent = { voice: Schema.NullOr(VoiceRef), speed: Schema.Number, review: Schema.Boolean }
 
 /**
  * Where one file of the add bar is. `Attached` waits for Add. `Refused` is a type the API does not narrate, and
@@ -51,15 +51,15 @@ export const hasAttached = (batch: Batch): boolean => batch.some((item) => item.
 export const isSending = (batch: Batch): boolean =>
   batch.some((item) => item.state._tag === "Pending" || item.state._tag === "Uploading")
 
-/** Add: each attached file waits to upload with this voice and speed. */
-export const send = (batch: Batch, voice: VoiceRef | null, speed: number): Batch =>
-  batch.map((item) => (item.state._tag === "Attached" ? { ...item, state: FileState.Pending({ voice, speed }) } : item))
+/** Add: each attached file waits to upload with this voice, speed and review choice. */
+export const send = (batch: Batch, voice: VoiceRef | null, speed: number, review: boolean): Batch =>
+  batch.map((item) => (item.state._tag === "Attached" ? { ...item, state: FileState.Pending({ voice, speed, review }) } : item))
 
-/** A failed file waits to upload again, with the voice and speed it had. */
+/** A failed file waits to upload again, with the voice, speed and review choice it had. */
 export const retry = (batch: Batch, key: number): Batch =>
   batch.map((item) =>
     item.state._tag === "Failed" && item.key === key
-      ? { ...item, state: FileState.Pending({ voice: item.state.voice, speed: item.state.speed }) }
+      ? { ...item, state: FileState.Pending({ voice: item.state.voice, speed: item.state.speed, review: item.state.review }) }
       : item,
   )
 
@@ -72,7 +72,10 @@ export const startNext = (batch: Batch): { batch: Batch; maybeStarted: Option.Op
   if (batch.some((item) => item.state._tag === "Uploading")) return { batch, maybeStarted: Option.none() }
   const next = batch.find((item) => item.state._tag === "Pending")
   if (!next || next.state._tag !== "Pending") return { batch, maybeStarted: Option.none() }
-  const started = { ...next, state: FileState.Uploading({ voice: next.state.voice, speed: next.state.speed }) }
+  const started = {
+    ...next,
+    state: FileState.Uploading({ voice: next.state.voice, speed: next.state.speed, review: next.state.review }),
+  }
   return { batch: setState(batch, next.key, started.state), maybeStarted: Option.some(started) }
 }
 
@@ -86,7 +89,15 @@ export const fail = (batch: Batch, key: number, reason: string): Batch =>
   settle(
     batch.map((item) =>
       item.key === key && item.state._tag === "Uploading"
-        ? { ...item, state: FileState.Failed({ reason, voice: item.state.voice, speed: item.state.speed }) }
+        ? {
+            ...item,
+            state: FileState.Failed({
+              reason,
+              voice: item.state.voice,
+              speed: item.state.speed,
+              review: item.state.review,
+            }),
+          }
         : item,
     ),
   )

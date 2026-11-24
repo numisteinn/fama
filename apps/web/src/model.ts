@@ -6,6 +6,7 @@ import { ApiFailure, ApiToken, Connection } from "~/api"
 import { BatchFile, hasAttached } from "~/batch"
 import { formatRate } from "~/lib/format"
 import { Reader } from "~/reader/model"
+import { Review } from "~/review/model"
 
 // CONSTANTS
 
@@ -144,6 +145,8 @@ export const Model = Schema.Struct({
   /** `None` is Auto. */
   maybeVoice: Schema.Option(VoiceRef),
   speed: Schema.Number,
+  /** Stop in Review after extraction for sources added now. Off by default. */
+  isReviewOn: Schema.Boolean,
   /** Depth of file drags over the window. Above 0 shows the drop overlay. */
   fileDragDepth: Schema.Number,
 
@@ -169,6 +172,8 @@ export const Model = Schema.Struct({
   playback: Playback,
   /** The text of the episode that plays, and whether it shows. */
   reader: Reader,
+  /** Review of an episode waiting before narration. */
+  review: Review,
   /** Intent: the episode the listener plays or paused. `None`: nothing is loaded. */
   maybeListening: Schema.Option(Listening),
   /**

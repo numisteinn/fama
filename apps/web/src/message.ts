@@ -6,6 +6,7 @@ import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { PickerId, StoredProgress } from "~/model"
 import { ReaderMessage } from "~/reader/message"
+import { ReviewMessage } from "~/review/message"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
 export type PlayerShortcut = typeof PlayerShortcut.Type
@@ -26,6 +27,7 @@ export const Message = defineMessageUnion({
   UpdatedAddText: { value: Schema.String },
   PressedEnterInAddText: {},
   SubmittedAddForm: {},
+  ToggledAddReview: {},
   ChangedFileInput: { files: Schema.Array(File.File) },
   ClickedRemoveFile: { key: Schema.Number },
   ClickedRetryFile: { key: Schema.Number },
@@ -66,6 +68,9 @@ export const Message = defineMessageUnion({
 
   // Reader
   GotReaderMessage: { message: ReaderMessage },
+
+  // Review
+  GotReviewMessage: { message: ReviewMessage },
 
   // Settings
   ClickedSettings: {},

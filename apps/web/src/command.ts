@@ -69,13 +69,15 @@ export const UploadEpisode = Command.define("UploadEpisode", {
     file: File.File,
     voice: Schema.NullOr(VoiceRef),
     speed: Schema.Number,
+    review: Schema.Boolean,
   },
   messages: [Message.SucceededUploadFile, Message.FailedUploadFile],
-  execute: ({ connection, key, file, voice, speed }) => {
+  execute: ({ connection, key, file, voice, speed, review }) => {
     const form = new FormData()
     form.set("file", file)
     if (voice) form.set("voice", voice)
     form.set("speed", String(speed))
+    form.set("review", String(review))
     return sendJson(Episode, connection, "POST", "/api/episodes/upload", (request) =>
       HttpClientRequest.bodyFormData(request, form),
     ).pipe(
