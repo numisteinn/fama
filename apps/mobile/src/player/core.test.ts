@@ -445,3 +445,10 @@ describe("the device's progress", () => {
     expect(device.calls).toEqual(["Seek 40000"])
   })
 })
+
+test("a Segment tap seeks before it starts a paused Episode", () => {
+  const device = paused()
+  device.calls.length = 0
+  device.send({ _tag: "Seek", positionMs: 30_000, play: true })
+  expect(device.calls).toEqual(["Seek 30000", "Play"])
+})

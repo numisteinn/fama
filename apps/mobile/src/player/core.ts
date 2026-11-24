@@ -115,7 +115,7 @@ export type PlayerEvent =
   | { readonly _tag: "Restore"; readonly episodeId: string }
   /** The Play or Pause button. */
   | { readonly _tag: "Toggle" }
-  | { readonly _tag: "Seek"; readonly positionMs: number }
+  | { readonly _tag: "Seek"; readonly positionMs: number; readonly play?: boolean }
   | { readonly _tag: "Skip"; readonly deltaMs: number }
   /** The listener deleted an episode. */
   | { readonly _tag: "Forget"; readonly episodeId: string }
@@ -292,7 +292,7 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
     }
     // A move takes a held Play back. The listener chose the place, so it is their own.
     case "Seek":
-      return { core: { ...core, held: null, shortOfMs: null, move: { _tag: "Seek", positionMs: event.positionMs } }, effects: [] }
+      return { core: { ...core, ask: event.play ? "Play" : core.ask, held: null, shortOfMs: null, move: { _tag: "Seek", positionMs: event.positionMs } }, effects: [] }
     case "Skip":
       return { core: { ...core, held: null, shortOfMs: null, move: { _tag: "Skip", deltaMs: event.deltaMs } }, effects: [] }
     case "Forget": {
@@ -401,7 +401,7 @@ export const plan = (core: Core, now: string): Outcome => {
   let { landingMs, shortOfMs } = core
   /** The player moves to its entry: to news, or on to an entry it rested short of, now that the list has its audio. */
   const isMoved =
-    episode !== undefined && entry !== undefined && (shortOfMs !== null ? hasNews || hasNewTracks : hasNews && !isOn)
+    !(isPlay && core.move) && episode !== undefined && entry !== undefined && (shortOfMs !== null ? hasNews || hasNewTracks : hasNews && !isOn)
 
   if (isMoved && episode !== undefined && entry !== undefined) {
     // A Play that is on or asked for starts from the entry.

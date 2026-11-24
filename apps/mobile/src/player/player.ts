@@ -161,8 +161,8 @@ export const player = {
     dispatch({ _tag: "Skip", deltaMs: delta * 1000 })
   },
   /** Episode seconds. */
-  seek(position: number) {
-    dispatch({ _tag: "Seek", positionMs: position * 1000 })
+  seek(position: number, play = false) {
+    dispatch({ _tag: "Seek", positionMs: position * 1000, play })
   },
   async setRate(rate: number) {
     prefs = { ...prefs, rate }

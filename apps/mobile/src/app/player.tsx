@@ -1,7 +1,7 @@
 import type { Episode } from "@fama/contracts"
 import * as Haptics from "expo-haptics"
 import { useRouter } from "expo-router"
-import { useState } from "react"
+import { memo, useState } from "react"
 import { ActionSheetIOS, ActivityIndicator, Alert, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 import { Artwork } from "../components/Artwork"
@@ -12,6 +12,8 @@ import { clock, jobLabel, speed } from "../lib/format"
 import { useEpisode } from "../lib/library"
 import { RouteButton } from "../player/native"
 import { isWaiting, player, usePlayerStatus } from "../player/player"
+import { Reader } from "../reader/Reader"
+import { hasText } from "../reader/text"
 import { colors, fonts, radius, space, SPEEDS } from "../theme"
 
 export default function PlayerScreen() {
@@ -20,7 +22,9 @@ export default function PlayerScreen() {
   const { width } = useWindowDimensions()
   const status = usePlayerStatus()
   const episode = useEpisode(status.episodeId)
-  const [showChapters, setShowChapters] = useState(false)
+  const [panel, setPanel] = useState<"art" | "reader" | "chapters">("art")
+  const reading = panel === "reader"
+  const showChapters = panel === "chapters"
   const [stageHeight, setStageHeight] = useState(0)
 
   if (!episode) {
@@ -33,6 +37,7 @@ export default function PlayerScreen() {
     )
   }
 
+  const canRead = hasText(episode)
   const chapter = episode.chapters[status.index]
   const marks = chapterStarts(episode).slice(1)
   // The artwork takes what the controls leave, up to the screen width.
@@ -44,19 +49,27 @@ export default function PlayerScreen() {
         <Tap style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Close player" onPress={() => router.back()}>
           <Icon name="chevron.down" size={24} />
         </Tap>
+        {canRead && (
+          <Tap style={styles.iconButton} accessibilityRole="button" accessibilityLabel={reading ? "Close reader" : "Read along"}
+            accessibilityState={{ selected: reading }} onPress={() => setPanel(reading ? "art" : "reader")}>
+            <Icon name="book" color={reading ? colors.accent : colors.text} />
+          </Tap>
+        )}
         <Tap
           style={[styles.iconButton, showChapters && styles.iconButtonOn]}
           accessibilityRole="button"
           accessibilityLabel={showChapters ? "Hide chapters" : "Chapters"}
           accessibilityState={{ selected: showChapters }}
-          onPress={() => setShowChapters((on) => !on)}
+          onPress={() => setPanel(showChapters ? "art" : "chapters")}
         >
           <Icon name="list.bullet" size={22} color={showChapters ? colors.onAccent : colors.text} />
         </Tap>
       </View>
 
       <View style={styles.stage} onLayout={(event) => setStageHeight(event.nativeEvent.layout.height)}>
-        {showChapters ? (
+        {reading && canRead ? (
+          <Reader key={episode.id} episode={episode} status={status} />
+        ) : showChapters ? (
           <Chapters episode={episode} current={status.index} onPick={(start) => void player.seek(start)} />
         ) : (
           art > 0 ? <Artwork episode={episode} size={art} rounded={radius.lg} /> : null
@@ -170,7 +183,7 @@ function SpeedButton({ rate }: { rate: number }) {
   )
 }
 
-function DownloadButton({ episode }: { episode: Episode }) {
+const DownloadButton = memo(function DownloadButton({ episode }: { episode: Episode }) {
   const downloads = useDownloads()
   const state = downloads.state(episode)
   const ready = episode.job._tag === "Ready"
@@ -204,7 +217,7 @@ function DownloadButton({ episode }: { episode: Episode }) {
       )}
     </Tap>
   )
-}
+})
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.background, paddingHorizontal: space.xl },

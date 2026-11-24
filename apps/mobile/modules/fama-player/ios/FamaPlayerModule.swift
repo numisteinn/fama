@@ -59,6 +59,7 @@ public class FamaPlayerModule: Module {
     AsyncFunction("seek") { (position: Double) in self.player.seek(to: position) }.runOnQueue(.main)
     AsyncFunction("skip") { (delta: Double) in self.player.skip(by: delta) }.runOnQueue(.main)
     AsyncFunction("setRate") { (rate: Double) in self.player.setRate(Float(rate)) }.runOnQueue(.main)
+    AsyncFunction("setStatusInterval") { (seconds: Double) in self.player.setStatusInterval(seconds) }.runOnQueue(.main)
     AsyncFunction("unload") { self.player.unload() }.runOnQueue(.main)
     AsyncFunction("getStatus") { () -> [String: Any] in self.player.status }.runOnQueue(.main)
 

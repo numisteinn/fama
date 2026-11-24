@@ -45,6 +45,8 @@ declare class FamaPlayerModule extends NativeModule<{ onStatus: (status: NativeS
   seek(position: number): Promise<void>
   skip(delta: number): Promise<void>
   setRate(rate: number): Promise<void>
+  /** Seconds between statuses while time moves (0.5 by default). Older dev clients lack it. */
+  setStatusInterval?(seconds: number): Promise<void>
   unload(): Promise<void>
   getStatus(): Promise<NativeStatus>
 }
