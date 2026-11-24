@@ -75,7 +75,25 @@ Kokoro backend, same text, warm, best of three (`af_heart`):
 | mlx-audio | 32.0x real time | 30.6x real time |
 | torch `kokoro` on CPU | | 12.9x real time |
 
-Torch on MPS is faster in both shapes, and it is the code path that runs on CUDA (Modal) too, so the worker keeps one Kokoro backend. The CPU number shows the MPS run used the GPU. One call per paragraph beats one per sentence, so the chunker packs sentences up to the engine limit.
+Torch on MPS is faster in both shapes, and it is the code path that runs on CUDA (Modal) too, so the worker keeps one Kokoro backend. The CPU number shows the MPS run used the GPU. One call per paragraph beats one per sentence. The worker makes one call for each sentence all the same, because read-along needs the start time of each sentence. The next section has the cost.
+
+## One call for each sentence
+
+Measured on 2026-11-24 on an Apple M5 Pro, with `bakeoff/sentence_cost.py`. Read-along needs the time each sentence starts, so the worker makes one synthesis call for each sentence (a Segment). Before, it packed the sentences of a paragraph into one call of up to 400 characters. This is what the change costs. "x" is audio seconds per wall second inside `engine.synthesize`.
+
+| Engine and voice | Text | Calls | Packed | By sentence | Slower |
+|---|---|---|---|---|---|
+| Kokoro `af_heart` (torch, MPS) | Hallgrímskirkja article, 717 words | 21 to 41 | 31.0x | 26.6x | 14% |
+| Kokoro `af_heart` (torch, MPS) | Alice in Wonderland, chapter 1, 2,157 words | 49 to 73 | 31.0x | 27.4x | 12% |
+| Piper `is_IS-steinn-medium` (ONNX, CPU) | Reykjavík article, 1,947 words | 57 to 141 | 69.7x | 69.5x | 0%, inside the noise |
+
+- **Method.** No chunk cache. Each run is a new process: it loads the model, reads a warm-up text, then reads the text once. The runs alternate between the two shapes, and the table has the median of 7 runs for each shape (5 for Alice and for Piper). Both shapes read the same words. Wall time of the runs: Kokoro article 10.0 to 14.6 s packed and 11.9 to 14.3 s by sentence, Alice 21.6 to 22.0 s and 24.2 to 26.7 s, Piper 14.5 to 15.5 s and 14.7 to 15.9 s. Other agents used the machine at the same time, which gives the outliers.
+- **Why a new process.** On MPS the first Kokoro call with a new input length is slower than a repeat of it. A second read of the same text in the same process took 9.3 s packed and 10.5 s by sentence, which hides part of the cost. An episode is all new text, so the first read is the number that counts.
+- **What limits Kokoro.** A fixed cost for each call: 89 ms on the article and 120 ms on Alice, on new text. That is as much as 3 to 4 s of audio costs. It is inside model inference. G2P takes 0.1 s of the 12 s. So the cost follows the number of extra calls. Long paragraphs of short sentences cost most. Dialogue with one line for each paragraph costs nothing, because a call never crossed a paragraph. English text with sentences as short as in the Reykjavík article (141 calls in place of 57) would be about 20% slower (computed from the fixed cost, not measured).
+- **What limits Piper.** Nothing changes for it. Piper splits its input into sentences and synthesizes each one alone, so its work is the same in both shapes.
+- **Sound.** Kokoro opens each call with 0.31 s of silence and closes it with 0.51 s (median of 40 calls). Its own pause between two sentences inside one call is 0.53 s on Alice and 0.67 s on the article (median). With one call for each sentence, each sentence pause would be 0.3 s longer. So the worker drops the opening silence of a Segment that continues a paragraph and puts 0.2 s after the closing silence. The whole article is then 323.6 s by sentence and 321.9 s packed. Piper opens with 0.04 s (median) and sometimes with 1 s, the likely source of the 1.5 s pauses in the Piper table above. Those are gone inside a paragraph. The Reykjavík article is 1050.4 s by sentence and 1063.2 s packed.
+- **Listen.** `~/Developer/fama-samples/read-along/<text>/<voice>-packed.wav` and `<voice>-sentence.wav` hold the first four paragraphs in both shapes. Whisper scores the sentence version the same or better (CER: Alice 0.0% for both, Reykjavík 1.4% by sentence and 3.3% packed, Hallgrímskirkja 3.9% by sentence; the packed Hallgrímskirkja file made Whisper repeat one line at its end, so that score says nothing). Somebody should still listen.
+- **Decision.** Both engines stay under the roadmap limit of 20%, so both use one call for each sentence. The other path, sentence times from Kokoro's token timestamps inside packed calls, was not needed. It also exists only for the English voices: `KPipeline` returns tokens for `lang_code` `a` and `b` only. If Kokoro gets too slow on a kind of text, raise `MIN_CHARS` in `chunk.py`: sentences under that length share a call, and a mark.
 
 ## End to end
 

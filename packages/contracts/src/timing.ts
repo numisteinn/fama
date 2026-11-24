@@ -4,8 +4,9 @@ import { Schema } from "effect"
 const Millis = Schema.Number.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)))
 
 /**
- * The text of one synthesis call, and where the voice reads it in the chapter audio. `text` is as the Document has
- * it ("3 bækur"), not as the engine reads it. Times are from the start of the chapter. The silence between two
+ * The text of one synthesis call, and where it is in the chapter audio. `text` is as the Document has it
+ * ("3 bækur"), not as the engine reads it. Times are from the start of the chapter. `startMs` is where the voice
+ * starts the text. `endMs` is where the audio of the call ends: the voice has stopped by then. The pause between two
  * Segments is on the timeline, and belongs to neither.
  */
 export const Segment = Schema.Struct({
