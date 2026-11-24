@@ -12,7 +12,7 @@ import { colors, fonts, space } from "../../../theme"
 
 export default function LibraryScreen() {
   const router = useRouter()
-  const { api } = useSettings()
+  const { api, account, accountError } = useSettings()
   const library = useLibrary()
   const downloads = useDownloads()
   const source = useTrackSource()
@@ -40,6 +40,15 @@ export default function LibraryScreen() {
     )
   }
 
+  // The Library loads only for a known account. Without one, say why and where to fix it.
+  if (!account && accountError) {
+    return (
+      <Empty title={accountError}>
+        <Button title="Open Settings" onPress={() => router.navigate("/settings")} />
+      </Empty>
+    )
+  }
+
   return (
     <FlatList
       data={library.episodes}
@@ -48,9 +57,13 @@ export default function LibraryScreen() {
       style={styles.list}
       refreshControl={<RefreshControl refreshing={library.refreshing} onRefresh={() => void library.refresh()} tintColor={colors.textSecondary} />}
       ItemSeparatorComponent={Separator}
-      ListHeaderComponent={library.error ? <ErrorBanner message={library.error} /> : undefined}
+      ListHeaderComponent={library.error && library.episodes.length > 0 ? <ErrorBanner message={library.error} /> : undefined}
       ListEmptyComponent={
-        library.loaded ? (
+        library.error ? (
+          <Empty title={library.error}>
+            <Button title="Try again" onPress={() => void library.refresh()} />
+          </Empty>
+        ) : library.loaded ? (
           <Empty title="Nothing to listen to yet">
             <Button title="Add" icon="plus" onPress={() => router.navigate("/add")} />
           </Empty>
