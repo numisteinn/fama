@@ -29,10 +29,14 @@ The Icelandic voices are trained on the **Talrómur** speech corpus, CLARIN-IS, 
 
 ## Dependency licenses to know
 
-The worker is MIT. Some of its runtime dependencies are copyleft:
+The worker is MIT. Permissive PDF dependencies:
+
+- `pypdfium2` is Apache-2.0 / BSD-3-Clause (bundles PDFium under BSD-3-Clause / Apache-2.0 and its permissive third-party build libraries).
+- `reportlab` (dev-only, used to build PDF test and verification fixtures) is BSD-3-Clause; its dependencies are `pillow` (MIT-CMU) and `charset-normalizer` (MIT).
+
+Some of the worker's runtime dependencies are copyleft:
 
 - `piper-tts` is GPL-3.0-or-later and bundles espeak-ng (GPL-3.0).
-- `PyMuPDF` is AGPL-3.0 (or a commercial license from Artifex).
 - `num2words` is LGPL-2.1.
 - `misaki` (Kokoro's G2P) loads espeak-ng through `espeakng-loader`.
 

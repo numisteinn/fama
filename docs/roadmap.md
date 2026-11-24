@@ -23,7 +23,6 @@ now ──┬─ V2 Review web ─────┬─ S2 Sample web
       ├─ S1 Sample core ─────────── S2 and S3 also need this
       ├─ R2 Reader web
       ├─ R3 Reader iPhone
-      ├─ R4 Feed transcript
       └─ X  Extraction (OCR, PDF library)
 ```
 
@@ -56,7 +55,7 @@ Units:
 
 - **R2. Reader on the web.**
 - **R3. Reader on the iPhone.**
-- **R4. Transcript in the feed.** The API builds one WebVTT file for the book file from the timing files and the chapter durations, and the feed item gets a `podcast:transcript` tag.
+- Built: **R4, the transcript in the feed.** `docs/api.md` ("Feed and transcript").
 
 ### V. Review
 
@@ -104,7 +103,6 @@ Units: **N1** core (it extends the Review route and the claim), then **N2** web 
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
 
-- **X1. Replace PyMuPDF** (AGPL) with `pypdfium2`. Needed before we charge for a managed service. It goes first, because OCR builds on the PDF code.
 - **X2. OCR for scanned PDFs.** A scanned PDF has no text to extract. On the Mac, Apple Vision OCR works offline. Check its Icelandic support first. Seen in: abogen (on its roadmap).
 - **X3. LLM pass to fix text, for Icelandic only.** This fixes Icelandic numbers ("3 bækur" must be read as "þrjár bækur"), which the rules in `normalize.py` do not handle. Optional, with a local model or an API model. Seen in: abogen.
 
@@ -116,7 +114,6 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 |---|---|---|
 | R2 | `apps/web/src/reader/` | |
 | R3 | `apps/mobile/src/reader/` | |
-| R4 | `apps/api/src/feed.ts`, `apps/api/src/transcript.ts` | |
 | V2, V3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
 | S1 | `contracts/src/sample.ts`, `apps/api/src/routes/sample.ts`, `apps/api/src/sample-repo.ts`, `worker/.../sample.py` | `0005_samples.sql` |
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
@@ -165,6 +162,5 @@ Each has a default. A unit follows the default unless the owner says no.
 
 ## Before charging for a managed service
 
-- `X1`: replace PyMuPDF (AGPL) or change the license.
 - Measure the GPU cost per hour of audio on Modal. The price depends on it.
 - Design: [design/two-paths.md](design/two-paths.md).

@@ -22,6 +22,7 @@ import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
 import { timingRoutes } from "./routes/timing.ts"
+import { transcriptRoutes } from "./routes/transcript.ts"
 import { documentRoutes } from "./routes/document.ts"
 import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, TooLarge, webRequest, worker } from "./routes/kit.ts"
 import { reviewRoutes } from "./routes/review.ts"
@@ -414,6 +415,7 @@ export const routes = Layer.mergeAll(
   documentRoutes,
   reviewRoutes,
   timingRoutes,
+  transcriptRoutes,
   publicRoutes,
   HttpRouter.addAll([notFound]),
   HttpRouter.cors({

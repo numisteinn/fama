@@ -20,6 +20,7 @@ import type { FeedItem } from "./feed.ts"
 import * as Job from "./job.ts"
 import { keys, mediaPath } from "./media-store.ts"
 import { randomToken, sha256Hex } from "./secrets.ts"
+import { hasTranscript } from "./transcript.ts"
 
 export { DatabaseError } from "./db.ts"
 
@@ -566,6 +567,17 @@ export const layer = Layer.effect(
          ORDER BY e.finished_at DESC`,
         userId,
       ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
+      const chapters = yield* all(
+        "chapters.ofFeed",
+        `${selectChapters} JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ? AND e.job_state = 'Ready'`,
+        userId,
+      ).pipe(Effect.flatMap(decodeRows(ChapterRow)))
+      const timed = new Map<string, Array<{ hasTiming: boolean }>>()
+      for (const chapter of chapters) {
+        const list = timed.get(chapter.episode_id) ?? []
+        list.push({ hasTiming: chapter.has_timing === 1 })
+        timed.set(chapter.episode_id, list)
+      }
       return rows.flatMap((row): ReadonlyArray<FeedItem> =>
         row.finished_at === null || row.book_size === null
           ? []
@@ -579,6 +591,10 @@ export const layer = Layer.effect(
                 bookUrl: origin + media(row, keys.book(row.user_id, row.id)),
                 bookSize: row.book_size,
                 coverUrl: row.cover_key === null ? null : origin + media(row, row.cover_key),
+                language: row.language,
+                transcriptUrl: hasTranscript(timed.get(row.id) ?? [])
+                  ? origin + media(row, keys.transcript(row.user_id, row.id))
+                  : null,
               },
             ],
       )
