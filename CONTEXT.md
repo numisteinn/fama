@@ -11,6 +11,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Segment** | The text of one synthesis call, with the time its voice starts and the time its audio ends in the chapter audio. One sentence, or a few short ones. It keeps the text as the Document has it, not as the engine reads it. |
 | **Timing file** | The Segments of one chapter, in reading order. The worker uploads it next to the chapter audio. Read-along marks text from it. |
 | **Book file** | One `.m4b` of the whole episode with chapter marks, for download and the feed. |
+| **Transcript** | One WebVTT file of an episode for podcast apps: a cue for each Segment, on the timeline of the book file. Only an episode whose chapters all have a timing file has one. |
 | **Job** | The state of the work that makes an episode: `Queued`, `Running`, `Ready`, `Failed`. Stored on the episode. |
 | **Worker** | A process that pulls jobs from the API and makes the audio. Runs on the Mac (local) or Modal (cloud). Same Python package. |
 | **Engine** | A TTS model family a worker can run: `kokoro`, `piper`, ... |
