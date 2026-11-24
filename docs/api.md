@@ -76,7 +76,7 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 - A Segment is the text of one synthesis call: one sentence, or a few short ones. `text` is the Document text, not the text the engine reads ("3 bækur", not "þrjár bækur").
 - `startMs` and `endMs` are whole milliseconds from the start of the chapter audio. Add the durations of the chapters before it to get a position on the episode timeline.
 - `startMs` is where the voice starts the text, so a seek to it starts on the first word. `endMs` is where the audio of the Segment ends: the voice has stopped, and the short silence the engine closes a call with is inside.
-- Segments are in reading order and do not overlap. The pause between two Segments is on the timeline and belongs to neither. So the Segment at a position is the last one whose `startMs` is at or before it. The first `startMs` of a chapter can be a few hundred ms after 0.
+- Segments are in reading order and do not overlap. The pause between two Segments is on the timeline and belongs to neither. So the Segment at a position is the last one whose `startMs` is at or before it. `segmentIndexAt` in the contract is that rule, and both readers use it. The first `startMs` of a chapter can be a few hundred ms after 0.
 - `endsParagraph` is `true` on the last Segment of a paragraph. The spoken title, author and chapter title come first, each as its own paragraph. The Document text does not have them.
 - The last `endMs` is the chapter's `durationMs`, within 50 ms.
 

@@ -30,3 +30,22 @@ export const Timing = Schema.Struct({
   ),
 })
 export interface Timing extends Schema.Schema.Type<typeof Timing> {}
+
+/**
+ * The Segment the voice reads at `positionMs` of the chapter audio: the index of the last Segment whose `startMs`
+ * is at or before the position. The pause after a Segment still belongs to it, so the mark does not flicker between
+ * sentences. `null` before the first Segment starts. The one rule the readers share.
+ */
+export const segmentIndexAt = (
+  segments: ReadonlyArray<{ readonly startMs: number }>,
+  positionMs: number,
+): number | null => {
+  let low = 0
+  let high = segments.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (segments[middle]!.startMs <= positionMs) low = middle + 1
+    else high = middle
+  }
+  return low === 0 ? null : low - 1
+}
