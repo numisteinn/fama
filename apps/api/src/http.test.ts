@@ -337,6 +337,26 @@ describe("leases", () => {
   })
 })
 
+describe("time left", () => {
+  it("shows the worker's estimate on the running job, and takes a worker that sends none", async () => {
+    const createBody = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
+    const created = (await (await alice("POST", "/api/episodes", { json: createBody })).json()) as { id: string }
+    const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
+    const { job } = (await claim.json()) as { job: { leaseToken: string } }
+    const report = (extra: Record<string, unknown>) =>
+      asWorker("POST", `/api/worker/jobs/${created.id}/progress`, {
+        json: { workerId: "w1", leaseToken: job.leaseToken, stage: "synthesizing", done: 4, total: 9, title: null, author: null, language: null, voice: null, ...extra },
+      })
+    const jobOf = async () => ((await (await alice("GET", `/api/episodes/${created.id}`)).json()) as { job: unknown }).job
+
+    expect((await report({ remainingMs: 95_000 })).status).toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", stage: "synthesizing", done: 4, total: 9, remainingMs: 95_000 })
+    expect((await report({})).status, "an older worker").toBe(204)
+    expect(await jobOf()).toMatchObject({ _tag: "Running", remainingMs: null })
+    expect((await report({ remainingMs: -1 })).status).toBe(400)
+  })
+})
+
 describe("progress", () => {
   type Progress = { positionMs: number; updatedAt: string }
   const putProgress = (client: typeof alice, id: string, body: unknown) =>

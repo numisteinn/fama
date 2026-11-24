@@ -51,6 +51,7 @@ const EpisodeRow = Schema.Struct({
   done: Schema.NullOr(Schema.Number),
   total: Schema.NullOr(Schema.Number),
   heartbeat_at: Schema.NullOr(Schema.String),
+  remaining_ms: Schema.NullOr(Schema.Number),
   finished_at: Schema.NullOr(Schema.String),
   fail_reason: Schema.NullOr(Schema.String),
   failed_at: Schema.NullOr(Schema.String),
@@ -82,6 +83,7 @@ const jobOf = (row: EpisodeRow) => {
         done: row.done,
         total: row.total,
         heartbeatAt: row.heartbeat_at,
+        remainingMs: row.remaining_ms,
       }
     case "Ready":
       return { _tag: "Ready", finishedAt: row.finished_at }
@@ -97,6 +99,7 @@ const jobColumns = (job: JobState) => {
     done: null,
     total: null,
     heartbeat_at: null,
+    remaining_ms: null,
     finished_at: null,
     fail_reason: null,
     failed_at: null,
@@ -112,6 +115,7 @@ const jobColumns = (job: JobState) => {
       done: s.done,
       total: s.total,
       heartbeat_at: s.heartbeatAt,
+      remaining_ms: s.remainingMs,
     }),
     Ready: (s) => ({ ...none, job_state: "Ready", finished_at: s.finishedAt }),
     Failed: (s) => ({ ...none, job_state: "Failed", fail_reason: s.reason, failed_at: s.failedAt }),

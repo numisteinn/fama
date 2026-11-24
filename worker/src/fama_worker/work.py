@@ -19,6 +19,7 @@ from pathlib import Path
 from fama_worker import audio
 from fama_worker.api import MAX_UPLOAD_BYTES, Api, ApiError, ClaimedJob, FileRef, LeaseLost
 from fama_worker.engines import all_voices, default_voice
+from fama_worker.eta import Eta
 from fama_worker.extract import extract
 from fama_worker.model import Document, FileSource, Source
 from fama_worker.pipeline import Book, ChapterFile, narrate
@@ -45,11 +46,12 @@ class Progress:
 
 
 class Heartbeat:
-    """Holds the latest progress and sends it on change (throttled) and every HEARTBEAT_S."""
+    """Holds the latest progress and sends it on change (throttled) and every HEARTBEAT_S, with the time left."""
 
     def __init__(self, api: Api, job: ClaimedJob, interval: float = HEARTBEAT_S) -> None:
         self.api, self.job, self.interval = api, job, interval
         self.progress = Progress()
+        self.eta = Eta()
         self.lost = threading.Event()
         self._stop = threading.Event()
         self._lock = threading.Lock()
@@ -70,6 +72,7 @@ class Heartbeat:
         if self.lost.is_set():
             raise LeaseLost("lease lost")
         self.progress = replace(self.progress, **changes)
+        self.eta.observe(self.progress.stage, self.progress.done, self.progress.total, time.monotonic())
         if self.progress.stage != self._sent_stage or time.monotonic() - self._sent_at >= PROGRESS_THROTTLE_S:
             self.send()
 
@@ -80,7 +83,8 @@ class Heartbeat:
         with self._lock:
             try:
                 self.api.progress(self.job, p.stage, p.done, p.total, title=p.title, author=p.author,
-                                  language=p.language, voice=p.voice)
+                                  language=p.language, voice=p.voice,
+                                  remaining_ms=self.eta.remaining_ms(time.monotonic()))
             except LeaseLost:
                 self.lost.set()
                 raise

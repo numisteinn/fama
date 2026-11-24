@@ -192,11 +192,16 @@ const jobStatus = (episode: Episode, h: HtmlBuilder<Message>): Html => {
       return h.span([h.Class("shrink-0 animate-pulse text-[13px] text-muted-foreground")], ["Queued"])
     case "Running": {
       const fraction = job.total > 0 ? Math.min(1, job.done / job.total) : 0
-      const count = job.stage === "synthesizing" && job.total > 0 ? ` ${job.done}/${job.total}` : ""
+      const detail =
+        job.remainingMs !== null
+          ? ` · ${formatDuration(job.remainingMs)} left`
+          : job.stage === "synthesizing" && job.total > 0
+            ? ` ${job.done}/${job.total}`
+            : ""
       return h.span(
-        [h.Class("flex w-28 shrink-0 flex-col items-end gap-1.5 text-[13px] text-muted-foreground tabular-nums")],
+        [h.Class("flex min-w-28 shrink-0 flex-col items-end gap-1.5 text-[13px] text-muted-foreground tabular-nums")],
         [
-          h.span([], [STAGE[job.stage] + count]),
+          h.span([h.Class("whitespace-nowrap")], [STAGE[job.stage] + detail]),
           h.span(
             [h.Class("h-0.5 w-full overflow-hidden rounded-full bg-faint"), h.AriaHidden(true)],
             [

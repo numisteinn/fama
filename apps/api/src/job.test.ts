@@ -15,6 +15,7 @@ const runningFor = (workerId: WorkerId, heartbeatAt: number) =>
     done: 1,
     total: 3,
     heartbeatAt: new Date(heartbeatAt).toISOString(),
+    remainingMs: 60_000,
   })
 const ready = JobState.cases.Ready.make({ finishedAt: "2026-11-18T12:30:00.000Z" })
 const failed = JobState.cases.Failed.make({ reason: "boom", failedAt: "2026-11-18T12:30:00.000Z" })
@@ -37,6 +38,7 @@ describe("claim", () => {
         done: 0,
         total: 0,
         heartbeatAt: "2026-11-18T12:00:00.000Z",
+        remainingMs: null,
       }),
     )
   })
@@ -57,9 +59,9 @@ describe("claim", () => {
 })
 
 describe("progress", () => {
-  const step = (held: boolean) => ({ held, workerId: a, stage: "encoding" as const, done: 3, total: 3 })
+  const step = (held: boolean) => ({ held, workerId: a, stage: "encoding" as const, done: 3, total: 3, remainingMs: null })
 
-  it("moves the stage and the heartbeat for the lease holder", () => {
+  it("moves the stage, the time left and the heartbeat for the lease holder", () => {
     const next = ok(Job.progress(runningFor(a, t0), { ...step(true), now: t0 + 5000 }))
     expect(next).toEqual(
       JobState.cases.Running.make({
@@ -68,6 +70,7 @@ describe("progress", () => {
         done: 3,
         total: 3,
         heartbeatAt: "2026-11-18T12:00:05.000Z",
+        remainingMs: null,
       }),
     )
   })

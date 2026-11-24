@@ -23,11 +23,10 @@ now ──┬─ F   Stored Document ──┬─ V1 Review core ──┬─ V2
       ├─ R1  Timing file ──┬─ R2 Reader web
       │                    ├─ R3 Reader iPhone
       │                    └─ R4 Feed transcript
-      ├─ E   Time left
       └─ X   Extraction (OCR, PDF library)
 ```
 
-Four units can start now: `F`, `R1`, `E`, `X`. After `F` and `R1` land, five more can run: `V1`, `S1`, `R2`, `R3`, `R4`.
+Three units can start now: `F`, `R1`, `X`. After `F` and `R1` land, five more can run: `V1`, `S1`, `R2`, `R3`, `R4`.
 
 ## Rules for parallel work
 
@@ -97,12 +96,6 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 
 Units: **N1** core after `V1` (it extends the same route and the claim), then **N2** web and **N3** iPhone.
 
-### E. Time left
-
-The episode row shows the time left while the job runs, not only `Narrating n/m`.
-
-- The worker knows the characters left and its speed. `ProgressRequest` and `JobState.Running` gain `remainingMs: number | null`.
-- One unit: worker, API, contract, the row on the web and on the iPhone.
 
 ### X. Extraction
 
@@ -128,15 +121,12 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 | S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
 | N1 | `contracts/src/stale.ts`, `apps/api/src/routes/review.ts`, `worker/.../pipeline.py` (the skip rule) | `0006_input_hash.sql` |
 | N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
-| E | `worker/.../work.py` (`Progress`), `apps/web/src/view/library.ts`, `apps/mobile/src/components/EpisodeRow.tsx` | `0007_remaining.sql` |
 | X | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 Known shared points, and who goes first:
 
-- `worker/.../work.py`: `F` and `E`. `E` touches only `Progress` and the heartbeat. `F` touches only `process`.
 - `worker/.../pipeline.py`: `R1` (the plan and the render), then `N1` (the skip rule). `N1` starts after `R1` is on `main`.
 - `claim` in `job.ts` and `episode-repo.ts`: `F`, then `V1` and `S1`, then `N1`. `V1` and `S1` each add their own branch to the claim. The second one to merge rebases.
-- `JobState.Running`: `E` adds a field, `V1` adds a state next to it. Either order works.
 
 ## Open choices
 

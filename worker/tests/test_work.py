@@ -196,3 +196,21 @@ def test_drain_makes_a_job_claimed_elsewhere_under_the_same_worker_id(tone, serv
                      headers={"Authorization": f"Bearer {TOKEN}"}).json()["job"]
     work.run(url, TOKEN, "modal-1", out_dir=tmp_path / "work", drain=True, first_job=ClaimedJob.parse(raw))
     assert fake.state == "Ready" and sorted(fake.chapters) == [0, 1, 2]
+
+
+def test_progress_carries_a_falling_time_left_while_narrating(tone, server, tmp_path, monkeypatch):
+    synthesize = tone.synthesize
+
+    def slow(text, voice_id, speed):
+        threading.Event().wait(0.06)
+        return synthesize(text, voice_id, speed)
+
+    monkeypatch.setattr(tone, "synthesize", slow)
+    monkeypatch.setattr(work, "PROGRESS_THROTTLE_S", 0)
+    fake, url = server(_job())
+    _run(url, tmp_path)
+    assert fake.state == "Ready"
+    assert all(p["remainingMs"] is None for p in fake.progress if p["stage"] != "synthesizing")
+    left = [p["remainingMs"] for p in fake.progress if p["stage"] == "synthesizing" and p["remainingMs"] is not None]
+    assert len(left) >= 5
+    assert all(later <= earlier for earlier, later in zip(left, left[1:]))
