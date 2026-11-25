@@ -34,6 +34,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Add a link](./add-link.md): paste a web article link on the web or the iPhone, and get a narrated episode with the real title, the detected language and the default voice.
 - [Add a file](./add-file.md): attach one or many PDF, EPUB, Markdown or text files, or drop a folder, and get one episode for each, with one chapter for each table-of-contents entry.
 - [Empty Library](./empty-library.md): see folded Pan when the Library has no Episodes.
+- [Narrate again](./narrate-again.md) checks Chapter reuse, new timing and Book files, and the feed transcript through the API.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
 - [Read along on iPhone](./reader-ios.md) covers the mark, sentence taps, scrolling and offline text.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
@@ -42,6 +43,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Timing file](./timing-file.md): each chapter has a `timingUrl` that serves its Segments as JSON, and each start time is where the voice starts that sentence in the real audio.
 - [Review before narration](./review.md) lets the owner edit the Document and choose the chapters to narrate.
 - [Web review](./review-web.md) adds the Review switch and chapter editor in the web app.
+- [Review on iPhone](./review-ios.md) covers chapter selection, text edits and Start from the Library.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
 - [Voice Samples](./voice-samples.md): request and play clips from the first paragraph of a stored Document.
 - [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.

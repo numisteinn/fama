@@ -111,10 +111,10 @@ class JobReporter:
         self.heartbeat.update(stage=stage, done=done, total=total)
 
     def chapter_ready(self, chapter: ChapterFile) -> None:
-        # The timing file goes first: the API lists a chapter when its audio arrives, and a stop between the two
-        # uploads leaves no chapter, so the next attempt sends both again.
-        self.api.put_timing(self.job, chapter.index, chapter.timing)
-        self.api.put_chapter(self.job, chapter.index, chapter.title, chapter.duration_ms, chapter.path)
+        # Only the audio upload publishes the pair. A stop after timing leaves the previous chapter in place.
+        assert chapter.timing is not None
+        self.api.put_timing(self.job, chapter.index, chapter.input_hash, chapter.timing)
+        self.api.put_chapter(self.job, chapter.index, chapter.title, chapter.duration_ms, chapter.input_hash, chapter.path)
         log(f"{self.job.episode_id}: uploaded chapter {chapter.index} ({chapter.duration_ms / 1000:.0f}s)")
 
 
@@ -158,8 +158,12 @@ def narrate_document(api: Api, job: ClaimedJob, document: Document, heartbeat: H
     voice = job.voice or default_voice(document.language)
     heartbeat.update(stage="extracting", done=1, total=1, title=document.title, author=document.author,
                      language=document.language, voice=str(voice))
+    def reuse(index: int, path: Path) -> None:
+        api.chapter(job, index, path)
+        log(f"{job.episode_id}: reused chapter {index}")
+
     book = narrate(document, voice, job.speed, workdir, reporter=JobReporter(api, job, heartbeat),
-                   skip=job.completed_chapters)
+                   stored_hashes=job.chapters, fetch_chapter=reuse)
     heartbeat.update(stage="uploading", done=0, total=1)
     _upload_book(api, job, book.path)
     heartbeat.update(stage="uploading", done=1, total=1)
@@ -173,7 +177,7 @@ def process(api: Api, job: ClaimedJob, out_dir: Path) -> int | None:
     started = time.monotonic()
     workdir = out_dir / episode
     workdir.mkdir(parents=True, exist_ok=True)
-    log(f"{episode}: claimed, skipping chapters {sorted(job.completed_chapters)}")
+    log(f"{episode}: claimed")
     try:
         with Heartbeat(api, job) as heartbeat:
             document = stored_document(api, job) if job.document_path else extract_document(api, job, workdir)

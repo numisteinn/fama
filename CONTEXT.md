@@ -8,6 +8,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Document** | The clean text the worker extracts from a source: title, author, language, chapters. The worker uploads it after the first extraction, and the API stores it with the episode. |
 | **Episode** | One narrated source in the library. The unit the user sees, plays, downloads, and finds in the feed. |
 | **Chapter** | One audio file of an episode (AAC `.m4a`). Chapters upload one by one, so playback can start before the episode is done. A Document has chapters too: a title and its text. |
+| **`inputHash`** | The SHA-256 the Worker computes from the inputs that make a Chapter. It includes the stored text, Voice, speed, engine model version, and Document fields the Worker uses for narration and audio tags. A match lets the Worker reuse the Chapter. |
 | **Segment** | The text of one synthesis call, with the time its voice starts and the time its audio ends in the chapter audio. One sentence, or a few short ones. It keeps the text as the Document has it, not as the engine reads it. |
 | **Sample** | One Voice reading the start of an Episode’s stored Document at the Episode’s speed. Each Episode and Voice pair has one Sample. Its state is `Requested`, `Ready` with a clip URL, or `Failed` with a reason. Like the Episode, the Sample belongs to the User. |
 | **Timing file** | The Segments of one chapter, in reading order. The worker uploads it next to the chapter audio. Read-along marks text from it. |

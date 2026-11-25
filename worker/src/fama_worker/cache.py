@@ -22,7 +22,7 @@ def default_cache_dir() -> Path:
 
 
 def chunk_key(text: str, voice: VoiceRef, model_version: str, speed: float) -> str:
-    payload = json.dumps([text, voice.engine, voice.voice_id, model_version, round(speed, 3)], ensure_ascii=False)
+    payload = json.dumps([text, voice.engine, voice.voice_id, model_version, float(speed)], ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
