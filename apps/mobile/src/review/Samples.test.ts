@@ -1,11 +1,12 @@
 import type { Sample, Voice, VoiceRef } from "@fama/contracts"
 import { expect, test, vi } from "vitest"
-import { applySampleStatus, hasPending, voiceLabel } from "./Samples"
+import { applySampleStatus, hasPending, sampleTapAction, voiceLabel } from "./Samples"
 
 // The helpers are pure; the UI around them needs React Native, which Vitest does not load.
 vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
   ActivityIndicator: () => null,
+  AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
   StyleSheet: { create: (styles: unknown) => styles },
   Text: () => null,
   View: () => null,
@@ -42,4 +43,13 @@ test("applySampleStatus keeps the clip that plays and clears it when it stops", 
   expect(applySampleStatus(first, { url: second, playing: false })).toBe(first)
   // A clip that fails to play clears its button too.
   expect(applySampleStatus(first, { url: first, playing: false, error: "Playback failed" })).toBeNull()
+})
+
+test("sampleTapAction compares absolute native URL against resolved mediaUrl so Pause actually pauses", () => {
+  const mediaUrl = (path: string) => `http://localhost:8788${path}`
+  const relative = "/media/t/episodes/e/samples/piper%3Ais_IS-salka-medium.m4a"
+  const absolute = mediaUrl(relative)
+  expect(sampleTapAction(null, relative, mediaUrl)).toEqual({ action: "play", url: absolute })
+  expect(sampleTapAction(absolute, relative, mediaUrl)).toEqual({ action: "pause" })
+  expect(sampleTapAction("http://localhost:8788/other.m4a", relative, mediaUrl)).toEqual({ action: "play", url: absolute })
 })

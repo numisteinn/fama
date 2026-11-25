@@ -21,14 +21,15 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
   const router = useRouter()
   const library = useLibrary()
   const episode = useEpisode(id)
-  // The voice the user picked by ear. Undefined until then: the episode's own voice applies.
-  const [picked, setPicked] = useState<VoiceRef | null | undefined>(undefined)
-  const selected = picked !== undefined ? picked : episode?.voice ?? null
+  const [picked, setPicked] = useState<VoiceRef | undefined>(undefined)
+  const selected = picked ?? episode?.voice ?? null
   const [review, setReview] = useState<Review | null>(null)
   const [error, setError] = useState("")
   const [attempt, setAttempt] = useState(0)
   const [editor, setEditor] = useState<number | null>(null)
   const locked = useRef(false)
+  const voiceSaveChain = useRef<Promise<void>>(Promise.resolve())
+  const latestPicked = useRef<VoiceRef | undefined>(undefined)
   useEffect(() => {
     let current = true
     setError("")
@@ -62,10 +63,26 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
     setReview({ ...review, loaded: doc, edited: doc })
     setEditor(null)
   })
+  const chooseVoice = (voice: VoiceRef) => {
+    if (busy || voice === selected) return
+    setPicked(voice)
+    latestPicked.current = voice
+    const speed = episode?.speed ?? 1
+    voiceSaveChain.current = voiceSaveChain.current.then(async () => {
+      if (latestPicked.current !== voice) return
+      try {
+        await library.saveReviewVoice(id, voice, speed)
+      } catch (cause) {
+        if (latestPicked.current === voice) {
+          Alert.alert("Voice", cause instanceof Error ? cause.message : "Could not save voice.")
+        }
+      }
+    })
+  }
   const start = () => run("starting", async () => {
     const doc = startDocument(review)
     if (!doc) return
-    await library.start(id, doc, selected)
+    await library.start(id, doc, picked ?? null)
     router.dismissTo("/library")
   })
   const remove = () => Alert.alert("Delete episode?", review.edited.title, [
@@ -104,7 +121,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
         </View>
       }}
       ListFooterComponent={<View style={styles.section}>
-        <Samples id={id} api={api} selected={selected} onSelect={setPicked} />
+        <Samples id={id} api={api} selected={selected} onSelect={chooseVoice} />
         <Button title={`Start · ${count} ${count === 1 ? "chapter" : "chapters"}`} disabled={busy || count === 0} busy={review.operation === "starting"} onPress={start} />
         <Button variant="danger" title="Delete" disabled={busy} onPress={remove} />
       </View>}

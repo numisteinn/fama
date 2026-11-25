@@ -1,4 +1,5 @@
 import {
+  ChangeVoice,
   CreateEpisode,
   Document,
   Episode,
@@ -100,6 +101,12 @@ export function createApi(connection: Connection) {
     mediaUrl: (path: string) => `${base}${path}`,
     me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
+    changeVoice: async (id: string, voice: VoiceRef, speed: number): Promise<void> => {
+      await send(`/api/episodes/${encodeURIComponent(id)}/voice`, {
+        ...jsonBody(Schema.encodeSync(ChangeVoice)({ voice, speed })),
+        method: "PUT",
+      })
+    },
     createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number, review = false): Promise<Episode> => {
       const create = () => json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review })))
       if (source._tag !== "Url") return create()

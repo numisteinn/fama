@@ -20,8 +20,10 @@ struct EpisodeInfo {
 final class EpisodePlayer: NSObject {
   private let player = AVQueuePlayer()
   private let emit: ([String: Any]) -> Void
+  private let onWillPlay: (() -> Void)?
 
   private var episode: EpisodeInfo?
+  var isLoaded: Bool { episode != nil }
   private var tracks: [Track] = []
   private var starts: [Double] = []
   private var itemIndex: [ObjectIdentifier: Int] = [:]
@@ -39,7 +41,8 @@ final class EpisodePlayer: NSObject {
   private var observations: [NSKeyValueObservation] = []
   private var itemStatusObservation: NSKeyValueObservation?
 
-  init(emit: @escaping ([String: Any]) -> Void) {
+  init(onWillPlay: (() -> Void)? = nil, emit: @escaping ([String: Any]) -> Void) {
+    self.onWillPlay = onWillPlay
     self.emit = emit
     super.init()
     player.actionAtItemEnd = .advance
@@ -107,6 +110,7 @@ final class EpisodePlayer: NSObject {
 
   func play() {
     guard episode != nil else { return }
+    onWillPlay?()
     activateSession()
     wantsPlay = true
     if player.currentItem == nil {
