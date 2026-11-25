@@ -12,6 +12,8 @@ import { useLibrary } from "../../../lib/library"
 import { useSettings } from "../../../lib/settings"
 import { colors, fonts, radius, space } from "../../../theme"
 
+import { ReviewSwitch } from "../../../review/ReviewSwitch"
+
 type Mode = "Link" | "Text" | "File"
 const MODES: ReadonlyArray<Mode> = ["Link", "Text", "File"]
 
@@ -31,6 +33,7 @@ export default function AddScreen() {
   const nextKey = useRef(0)
   const [voice, setVoice] = useState<VoiceRef | null>(null)
   const [speed, setSpeed] = useState(1)
+  const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const sending = Batch.isSending(files)
@@ -41,7 +44,7 @@ export default function AddScreen() {
     const { batch, started } = Batch.startNext(files)
     if (!started) return
     setFiles(batch)
-    library.upload(started.file, started.state.voice, started.state.speed).then(
+    library.upload(started.file, started.state.voice, started.state.speed, started.state.review).then(
       () => setFiles((current) => Batch.succeed(current, started.key)),
       (error: unknown) =>
         setFiles((current) => Batch.fail(current, started.key, error instanceof Error ? error.message : "Could not add")),
@@ -60,14 +63,14 @@ export default function AddScreen() {
 
   const create = async () => {
     if (mode === "File") {
-      setFiles((current) => Batch.send(current, voice, speed))
+      setFiles((current) => Batch.send(current, voice, speed, review))
       return
     }
     setBusy(true)
     try {
       const source: SourceInput =
         mode === "Link" ? { _tag: "Url", url: link.trim() } : { _tag: "Text", title: title.trim() || null, text: text.trim() }
-      await library.create(source, voice, speed)
+      await library.create(source, voice, speed, review)
       if (mode === "Link") setLink("")
       else {
         setTitle("")
@@ -196,6 +199,7 @@ export default function AddScreen() {
         )
       ) : null}
 
+      <ReviewSwitch value={review} onChange={setReview} />
       <EpisodeOptions voice={voice} speed={speed} onVoice={setVoice} onSpeed={setSpeed} />
 
       <Button title="Create" icon="waveform" busy={busy || (mode === "File" && sending)} disabled={!ready || !api} onPress={() => void create()} style={styles.create} />

@@ -1,4 +1,4 @@
-import { EpisodeList, type Episode, type SourceInput, type VoiceRef } from "@fama/contracts"
+import { EpisodeList, type Episode, type Document, type SourceInput, type VoiceRef } from "@fama/contracts"
 import { Schema } from "effect"
 import { createContext, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { AppState } from "react-native"
@@ -17,9 +17,10 @@ type Library = {
   readonly refreshing: boolean
   readonly error: string | null
   refresh(): Promise<void>
-  create(source: SourceInput, voice: VoiceRef | null, speed: number): Promise<Episode>
-  upload(file: PickedFile, voice: VoiceRef | null, speed: number): Promise<Episode>
+  create(source: SourceInput, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
+  upload(file: PickedFile, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
   remove(id: string): Promise<void>
+  start(id: string, document: Document): Promise<void>
   retry(id: string): Promise<void>
 }
 
@@ -133,13 +134,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         await load()
         setRefreshing(false)
       },
-      async create(source, voice, speed) {
-        const episode = await requireApi().createEpisode(source, voice, speed)
+      async create(source, voice, speed, review) {
+        const episode = await requireApi().createEpisode(source, voice, speed, review)
         prepend(episode)
         return episode
       },
-      async upload(file, voice, speed) {
-        const episode = await requireApi().uploadEpisode(file, voice, speed)
+      async upload(file, voice, speed, review) {
+        const episode = await requireApi().uploadEpisode(file, voice, speed, review)
         prepend(episode)
         return episode
       },
@@ -152,6 +153,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           setEpisodes(before)
           throw cause
         }
+      },
+      async start(id, document) {
+        const episode = await requireApi().start(id, document)
+        setEpisodes((list) => list.map((e) => (e.id === id ? episode : e)))
       },
       async retry(id) {
         const episode = await requireApi().retryEpisode(id)
