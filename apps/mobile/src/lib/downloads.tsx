@@ -1,16 +1,17 @@
 import type { Episode } from "@fama/contracts"
 import { Directory, File, Paths } from "expo-file-system"
 import { createContext, use, useMemo, useState, type ReactNode } from "react"
+import { audioFileName, isEpisodeDownloaded, staleFileNames, timingFileName } from "./downloadFiles"
 import { useSettings } from "./settings"
 
 export type DownloadState = { readonly _tag: "None" } | { readonly _tag: "Downloading"; readonly done: number; readonly total: number } | { readonly _tag: "Done" }
 
 type Downloads = {
   state(episode: Episode): DownloadState
-  /** The local file of a chapter, or null when it is not on the device. */
-  localUri(episodeId: string, index: number): string | null
-  /** The local timing file of a chapter, or null when it is not on the device. */
-  localTimingUri(episodeId: string, index: number): string | null
+  /** The local file of a chapter's current URL, or null when that revision is not on the device. */
+  localUri(episodeId: string, index: number, url: string): string | null
+  /** The local timing file of a chapter's current timingUrl, or null when that revision is not on the device. */
+  localTimingUri(episodeId: string, index: number, timingUrl: string): string | null
   download(episode: Episode): Promise<void>
   remove(episodeId: string): void
 }
@@ -19,10 +20,10 @@ const DownloadsContext = createContext<Downloads | null>(null)
 
 // Downloads live per account (server and user), so two accounts on one server never share files.
 const episodeDir = (accountKey: string, id: string) => new Directory(Paths.document, "accounts", accountKey, "episodes", id)
-const chapterFile = (accountKey: string, id: string, index: number) =>
-  new File(episodeDir(accountKey, id), `${String(index).padStart(3, "0")}.m4a`)
-const timingFile = (accountKey: string, id: string, index: number) =>
-  new File(episodeDir(accountKey, id), `${String(index).padStart(3, "0")}.json`)
+const chapterFile = (accountKey: string, id: string, index: number, url: string) =>
+  new File(episodeDir(accountKey, id), audioFileName(index, url))
+const timingFile = (accountKey: string, id: string, index: number, timingUrl: string) =>
+  new File(episodeDir(accountKey, id), timingFileName(index, timingUrl))
 
 /** Downloads beside the target, then moves, so a cut download never looks complete. */
 async function fetchFile(url: string, dir: Directory, target: File) {
@@ -43,11 +44,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
   const value = useMemo<Downloads>(() => {
     const isComplete = (episode: Episode) =>
       accountKey !== undefined &&
-      episode.job._tag === "Ready" &&
-      episode.chapters.length > 0 &&
-      episode.chapters.every(
-        (c) => chapterFile(accountKey, episode.id, c.index).exists && (c.timingUrl === null || timingFile(accountKey, episode.id, c.index).exists),
-      )
+      isEpisodeDownloaded(episode, (name) => new File(episodeDir(accountKey, episode.id), name).exists)
     const setProgress = (id: string, progress: { done: number; total: number } | null) =>
       setActive((map) => {
         const next = new Map(map)
@@ -61,14 +58,14 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         if (progress) return { _tag: "Downloading", ...progress }
         return isComplete(episode) ? { _tag: "Done" } : { _tag: "None" }
       },
-      localUri(episodeId, index) {
+      localUri(episodeId, index, url) {
         if (accountKey === undefined) return null
-        const file = chapterFile(accountKey, episodeId, index)
+        const file = chapterFile(accountKey, episodeId, index, url)
         return file.exists ? file.uri : null
       },
-      localTimingUri(episodeId, index) {
+      localTimingUri(episodeId, index, timingUrl) {
         if (accountKey === undefined) return null
-        const file = timingFile(accountKey, episodeId, index)
+        const file = timingFile(accountKey, episodeId, index, timingUrl)
         return file.exists ? file.uri : null
       },
       async download(episode) {
@@ -80,9 +77,15 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         try {
           for (const [done, chapter] of episode.chapters.entries()) {
             // The text too, so the reader works offline.
-            if (chapter.timingUrl !== null) await fetchFile(api.mediaUrl(chapter.timingUrl), dir, timingFile(accountKey, episode.id, chapter.index))
-            await fetchFile(api.mediaUrl(chapter.url), dir, chapterFile(accountKey, episode.id, chapter.index))
+            if (chapter.timingUrl !== null) {
+              await fetchFile(api.mediaUrl(chapter.timingUrl), dir, timingFile(accountKey, episode.id, chapter.index, chapter.timingUrl))
+            }
+            await fetchFile(api.mediaUrl(chapter.url), dir, chapterFile(accountKey, episode.id, chapter.index, chapter.url))
             setProgress(episode.id, { done: done + 1, total })
+          }
+          const stale = new Set(staleFileNames(dir.list().map((entry) => entry.name), episode.chapters))
+          for (const entry of dir.list()) {
+            if (stale.has(entry.name)) entry.delete()
           }
         } finally {
           setProgress(episode.id, null)

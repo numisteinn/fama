@@ -452,3 +452,27 @@ test("a Segment tap seeks before it starts a paused Episode", () => {
   device.send({ _tag: "Seek", positionMs: 30_000, play: true })
   expect(device.calls).toEqual(["Seek 30000", "Play"])
 })
+
+describe("re-narrated chapters with replaced URLs", () => {
+  test("a paused player reloads the queue when a chapter URL changes without a progress restamp", () => {
+    const device = paused()
+    const renarrated: Episode = {
+      ...ready,
+      chapters: [chapters[0]!, { ...chapters[1]!, url: "/rev2/001.m4a", durationMs: 14_000 }],
+    }
+    device.library([renarrated])
+    expect(device.calls).toEqual(["Load e1, 2 chapters, at 10000, paused"])
+  })
+
+  test("a paused player reloads with both the new chapter URLs and remapped server progress", () => {
+    const device = paused()
+    const remapped = at(32_000, newer.updatedAt)
+    const renarrated: Episode = {
+      ...ready,
+      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 18_825 }, chapters[1]!],
+      progress: remapped,
+    }
+    device.library([renarrated])
+    expect(device.calls).toEqual(["Load e1, 2 chapters, at 32000, paused"])
+  })
+})

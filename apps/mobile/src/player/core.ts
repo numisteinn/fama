@@ -23,10 +23,10 @@ export const IDLE_STATUS: NativeStatus = {
   error: null,
 }
 
-/** What the native player was told of an episode: its track list and whether the job makes more chapters. */
+/** What the native player was told of an episode: its chapter URLs and whether the job makes more chapters. */
 export interface Told {
   readonly episodeId: string
-  readonly chapters: number
+  readonly urls: ReadonlyArray<string>
   readonly expectsMore: boolean
 }
 
@@ -374,7 +374,7 @@ export const plan = (core: Core, now: string): Outcome => {
       core: {
         ...saved.core,
         ...done,
-        told: { episodeId: episode.id, chapters: episode.chapters.length, expectsMore: isActive(episode.job) },
+        told: { episodeId: episode.id, urls: episode.chapters.map((chapter) => chapter.url), expectsMore: isActive(episode.job) },
         wantsPlay: isPlay,
         awaitingPause: false,
         followedAt: entry?.updatedAt ?? null,
@@ -391,8 +391,20 @@ export const plan = (core: Core, now: string): Outcome => {
   // The native player has the episode. A late list may no longer have it: then only the listener's asks go on.
   const effects: Array<NativeCall> = []
   const expectsMore = episode ? isActive(episode.job) : told.expectsMore
-  const hasNewTracks = episode !== undefined && (episode.chapters.length > told.chapters || expectsMore !== told.expectsMore)
-  const nextTold = episode ? { ...told, chapters: Math.max(told.chapters, episode.chapters.length), expectsMore } : told
+  const urlsReplaced =
+    episode !== undefined &&
+    episode.chapters.length > 0 &&
+    (episode.chapters.length < told.urls.length ||
+      told.urls.some((url, index) => episode.chapters[index]?.url !== url))
+  const hasNewTracks =
+    episode !== undefined && (urlsReplaced || episode.chapters.length > told.urls.length || expectsMore !== told.expectsMore)
+  const nextTold = episode
+    ? {
+        ...told,
+        urls: urlsReplaced || episode.chapters.length >= told.urls.length ? episode.chapters.map((c) => c.url) : told.urls,
+        expectsMore,
+      }
+    : told
   const entry = core.entries[told.episodeId]
   const hasNews = entry !== undefined && entry.updatedAt !== core.followedAt
   /** Audio plays, as far as the phone knows. */
@@ -416,6 +428,19 @@ export const plan = (core: Core, now: string): Outcome => {
       if (isPlay) effects.push({ _tag: "Play" })
       if (core.ask === "Pause") effects.push({ _tag: "Pause" })
     }
+  } else if (urlsReplaced && episode !== undefined) {
+    // A re-narrated chapter got a new URL: UpdateTracks keeps existing items, so reload the queue with the new tracks.
+    const here = positionMs(core.status)
+    const targetMs =
+      core.move?._tag === "Seek"
+        ? core.move.positionMs
+        : core.move?._tag === "Skip"
+          ? Math.max(0, Math.min(lengthMs(episode), here + core.move.deltaMs))
+          : isPlay
+            ? playStart(here, episode.chapters, episode.job).positionMs
+            : Math.min(here, lengthMs(episode))
+    landingMs = Math.min(targetMs, lengthMs(episode))
+    effects.push({ _tag: "Load", episode, positionMs: targetMs, autoplay: wantsPlay })
   } else {
     if (hasNewTracks && episode) effects.push({ _tag: "UpdateTracks", episode })
     if (core.move) effects.push(core.move)

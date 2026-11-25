@@ -90,6 +90,23 @@ describe("chapter text state", () => {
     expect(renarrated.chapters.map((c) => c._tag)).toEqual(["Idle", "Loaded"])
   })
 
+  test("a new url or timingUrl with the same duration loads again while reused chapters stay Loaded", () => {
+    const text = loadedText()
+    const renarrated = listed(text, {
+      id: "e1",
+      chapters: [
+        {
+          ...spring,
+          url: "/media/t/episodes/e1/chapters/rev2/000.m4a",
+          timingUrl: "/media/t/episodes/e1/chapters/rev2/000.json",
+        },
+        summer,
+      ],
+    })
+    expect(renarrated.chapters.map((c) => c._tag)).toEqual(["Idle", "Loaded"])
+    expect(renarrated.chapters[1]).toBe(text.chapters[1])
+  })
+
   test("an answer for a timing file the chapter no longer has changes nothing", () => {
     const text = listed(null, episode)
     const old = (text.chapters[0] as { key: string }).key

@@ -69,7 +69,7 @@ export default function LibraryScreen() {
           </Empty>
         ) : undefined
       }
-      renderItem={({ item }) => <EpisodeRow episode={item} onReview={(episode) => router.push({ pathname: "/library/review", params: { id: episode.id } })} onPlay={play} onRetry={retry} onDelete={remove} />}
+      renderItem={({ item }) => <EpisodeRow episode={item} onNarrateAgain={(episode) => router.push({ pathname: "/library/narrate-again", params: { id: episode.id } })} onReview={(episode) => router.push({ pathname: "/library/review", params: { id: episode.id } })} onPlay={play} onRetry={retry} onDelete={remove} />}
     />
   )
 }
