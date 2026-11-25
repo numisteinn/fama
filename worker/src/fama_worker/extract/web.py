@@ -47,8 +47,8 @@ def _cover(url: str | None) -> Cover | None:
     return Cover(response.content, ext)
 
 
-def from_html(html: str, url: str | None, fallback_title: str) -> tuple[Document, str]:
-    """Return the document (language unset) and its plain text for language detection."""
+def from_html(html: str, url: str | None, fallback_title: str, *, fetch_cover: bool = True) -> tuple[Document, str]:
+    """Return the document (language unset) and the declared language."""
     import trafilatura
 
     markdown = trafilatura.extract(html, url=url, output_format="markdown", include_formatting=True,
@@ -64,10 +64,15 @@ def from_html(html: str, url: str | None, fallback_title: str) -> tuple[Document
         author=_author(meta.author if meta else None),
         language="",
         chapters=tuple(chapters),
-        cover=_cover(meta.image if meta else None),
+        cover=_cover(meta.image) if fetch_cover and meta else None,
     )
     declared = re.search(r"<html[^>]*\blang=[\"']?([a-zA-Z]{2,3})", html[:5000])
     return document, (meta.language if meta and meta.language else None) or (declared[1].lower() if declared else "")
+
+
+def from_uploaded_html(data: bytes, content_type: str, url: str) -> tuple[Document, str]:
+    response = httpx.Response(200, content=data, headers={"content-type": content_type})
+    return from_html(response.text, url, url_title(url), fetch_cover=False)
 
 
 def url_title(url: str) -> str:

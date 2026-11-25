@@ -4,7 +4,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 
 | Term | Meaning |
 |---|---|
-| **Source** | What the user submits: a `Url`, a `Text`, or a `File` (PDF, EPUB). |
+| **Source** | What the user submits: a `Url`, a `Text`, or a `File` (PDF, EPUB). A `Url` can include bytes the iPhone fetched. The link is still the Source. |
 | **Document** | The clean text the worker extracts from a source: title, author, language, chapters. The worker uploads it after the first extraction, and the API stores it with the episode. |
 | **Episode** | One narrated source in the library. The unit the user sees, plays, downloads, and finds in the feed. |
 | **Chapter** | One audio file of an episode (AAC `.m4a`). Chapters upload one by one, so playback can start before the episode is done. A Document has chapters too: a title and its text. |

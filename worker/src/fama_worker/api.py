@@ -121,10 +121,10 @@ class Api:
         response = self._send("POST", "/api/worker/claim", json={"workerId": self.worker_id, "voices": voices})
         return None if response.status_code == 204 else parse_work(response.json()["work"])
 
-    def source(self, job: ClaimedJob) -> bytes:
+    def source(self, job: ClaimedJob) -> httpx.Response:
         if not job.source_path:
-            raise ApiError("File job has no sourcePath")
-        return self._send("GET", job.source_path, params={"leaseToken": job.lease_token}).content
+            raise ApiError("Job has no sourcePath")
+        return self._send("GET", job.source_path, params={"leaseToken": job.lease_token})
 
     def document(self, job: ClaimedJob) -> Document:
         """The stored Document, with the stored cover when the episode has one."""

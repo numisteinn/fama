@@ -27,7 +27,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 |---|---|---|
 | `GET /api/me` | | `Me` `{ userId, apiVersion }`. Clients key caches, downloads and pending writes by server and `userId` |
 | `POST /api/episodes` | `CreateEpisode` `{ source: {_tag:"Url", url} \| {_tag:"Text", title, text}, voice, speed, review? }` | `201 Episode` |
-| `POST /api/episodes/upload` | multipart form: `file` (PDF, EPUB, TXT, MD, HTML), optional `voice`, optional `speed`, optional `review` (`true` or `false`) | `201 Episode` |
+| `POST /api/episodes/upload` | multipart form: `file` (PDF, EPUB, TXT, MD, HTML), optional `url`, optional `voice`, optional `speed`, optional `review` (`true` or `false`) | `201 Episode` |
 | `GET /api/episodes` | | `{ episodes: Episode[] }`, newest first |
 | `GET /api/episodes/:id` | | `Episode` or `404` |
 | `DELETE /api/episodes/:id` | | `204`, also deletes its media |
@@ -73,6 +73,7 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 
 ## Review
 
+- With an HTTP(S) `url`, the upload creates a `Url` Source. The file part must be HTML (`text/html` or `application/xhtml+xml`), PDF, or EPUB. Its Content-Type is stored with the bytes. Without `url`, the upload creates a `File` Source.
 - The `review` flag is available for every Source and defaults to `false`. JSON requests take a boolean. Multipart requests take the text `true` or `false`.
 - With Review on, the worker stores the Document and the extracted title, author, language and voice before the job stops in `Review`. There is no active lease, audio chapter or book file at that point.
 - Only the owner can edit the Document or start narration. Another user's episode gets `404`. Both writes need a Document with at least one chapter or they return `400`.
@@ -159,7 +160,7 @@ A worker loops: claim, process, report. All calls are idempotent. A crash at any
 | `GET /api/worker/samples/:id/document?voice=<urlenc>&leaseToken=<urlenc>` | | `200 Document` |
 | `PUT /api/worker/samples/:id/clip?voice=<urlenc>&leaseToken=<urlenc>` | AAC `.m4a` bytes | `204`, Sample `Ready` |
 | `POST /api/worker/samples/:id/fail` | `{ voice, leaseToken, reason }` | `204`, Sample `Failed` |
-| `GET /api/worker/jobs/:id/source?leaseToken=<urlenc>` | | the uploaded file bytes (File sources only) |
+| `GET /api/worker/jobs/:id/source?leaseToken=<urlenc>` | | the uploaded bytes and their Content-Type (File sources and Url sources with an upload) |
 | `POST /api/worker/jobs/:id/progress` | `{ workerId, leaseToken, stage, done, total, title, author, language, voice, remainingMs }` | `204`. Also the heartbeat |
 | `GET /api/worker/jobs/:id/chapters/:index?leaseToken=<urlenc>` | | The published Chapter audio for reuse, or `404` (`NotStored`) |
 | `PUT /api/worker/jobs/:id/chapters/:index?workerId=<urlenc>&leaseToken=<urlenc>&title=<urlenc>&durationMs=<int>&inputHash=<hex>` | `audio/mp4` bytes (`.m4a`) | `204`. Publishes audio and any staged Timing for that lease and input hash |
@@ -178,6 +179,7 @@ Rules:
 - `Work` is `{ _tag: "Sample", ...ClaimedSample }` or `{ _tag: "Narrate", ...ClaimedJob }`. The API gives the oldest claimable Sample first. Then it searches for the oldest `Queued` Job or a `Running` Job with a heartbeat at least 10 minutes old.
 - `ClaimedSample` is `{ episodeId, voice, leaseToken, documentPath, speed }`. Sample work uses a separate lease that expires after two minutes and has no heartbeat. A call with an expired or replaced lease gets `409`. Repeating a successful clip upload or failure report with the same lease gets `204`. A Worker that lacks the selected Voice fails that Sample and continues to the next claim.
 - `ClaimedJob` is `{ episodeId, leaseToken, source, sourcePath, documentPath, coverPath, voice, speed, chapters: [{ index, inputHash }] }`. The list covers Chapters with a known hash. The worker downloads the published audio for matching hashes, then narrates any missing or stale Chapters.
+- `sourcePath` is set for a File or a Url with uploaded bytes. For an uploaded Url, the worker extracts the bytes by Content-Type and uses the URL as the HTML base URL. It makes no web requests for the page or its cover. For a Url without uploaded bytes, `sourcePath` is `null` and the worker fetches the page.
 - The Worker computes `inputHash` as lowercase SHA-256 hex of the UTF-8 JSON array `["chapter-v1", index, chapterTitle, chapterText, documentTitle, author, language, voice, speed, modelVersion]`, serialized with Python `json.dumps` and a float speed. Titles, author, and language are used in narration or audio tags. `chapterText` is the text in the stored Document before normalization. The API stores and returns the hash. The Worker owns the engine model version.
 - `documentPath` is the path of `GET .../document`, or `null` when the episode has no stored Document. With `null`, the worker extracts the source, uploads the cover (if the source has one), and then uploads the Document. With a path, the worker reads the stored Document and does not extract. `coverPath` is the path of `GET .../cover`, or `null` when the episode has no cover. The worker reads the cover back to put it in the book file.
 - The worker uploads the cover before the Document and sends its selected voice in the optional `voice` query field on the Document upload. The API saves the metadata with the Document. The worker takes its next claim when the upload returns `next: "Review"`. It continues on the same lease for `next: "Narrate"`.

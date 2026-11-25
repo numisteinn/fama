@@ -15,6 +15,7 @@ const chaptersPrefix = (userId: string, episodeId: string, revision: string | nu
 export const keys = {
   upload: (userId: string, episodeId: string, fileName: string) =>
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
+  linkedUpload: (userId: string, episodeId: string) => keys.upload(userId, episodeId, "page"),
   chapter: (userId: string, episodeId: string, index: number, revision: string | null = null) =>
     `${chaptersPrefix(userId, episodeId, revision)}${String(index).padStart(3, "0")}.m4a`,
   sample: (userId: string, episodeId: string, voice: string) =>

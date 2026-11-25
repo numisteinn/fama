@@ -18,6 +18,8 @@ TEXT = "\n\n".join(f"CHAPTER {i}\n\n" + "Words in this part of the story. " * 20
 class FakeApi:
     def __init__(self, job: dict):
         self.job = job
+        self.source = TEXT.encode()
+        self.source_type = "text/plain"
         self.lease: str | None = None  # the lease token of the current claim
         self.claims = 0
         self.leases: list[tuple[str, str | None]] = []  # (path, lease token sent) of every job call
@@ -59,7 +61,7 @@ class FakeApi:
         if lease != self.lease or self.state != "Running":
             return 409, b""
         if request.command == "GET" and parts[-1] == "source":
-            return 200, TEXT.encode()
+            return 200, self.source
         if request.command == "GET" and parts[-1] == "document":
             return 200, json.dumps(self.document).encode()
         if request.command == "GET" and parts[-1] == "cover":
@@ -110,6 +112,8 @@ def server():
                 status, payload = fake.handle(self)
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(payload)))
+                if self.command == "GET" and self.path.split("?")[0].endswith("/source"):
+                    self.send_header("Content-Type", fake.source_type)
                 if self.command == "GET" and self.path.split("?")[0].endswith("/cover"):
                     self.send_header("Content-Type", "image/png")
                 self.end_headers()
@@ -161,6 +165,32 @@ def test_claim_progress_chapters_book_complete(tone, server, tmp_path):
     assert not (tmp_path / "work" / "ep1").exists()
     assert ("/api/worker/jobs/ep1/source", "lease-1") in fake.leases
     assert {lease for _, lease in fake.leases} == {"lease-1"}
+
+
+@pytest.mark.parametrize(("filename", "content_type", "title"), [
+    ("article.html", "text/html; charset=utf-8", "The Quiet Harbour"),
+    ("harbour-notes.pdf", "application/pdf", "Harbour Notes"),
+    ("harbour-days.epub", "application/epub+zip", "Harbour Days"),
+])
+def test_uploaded_url_extracts_without_requesting_the_page_or_cover(tone, server, tmp_path, filename, content_type, title):
+    job = _job()
+    fake, api_url = server(job)
+    job["source"] = {"_tag": "Url", "url": f"{api_url}/article"}
+    fixtures = Path(__file__).resolve().parents[2] / ".claude/skills/verify-fama/fixtures"
+    fake.source = (fixtures / filename).read_bytes()
+    if filename == "article.html":
+        image = f'<meta property="og:image" content="{api_url}/image.jpg">'.encode()
+        fake.source = fake.source.replace(b"</head>", image + b"</head>")
+    fake.source_type = content_type
+    fake.review = True
+
+    _run(api_url, tmp_path)
+
+    assert fake.state == "Review"
+    assert fake.document["title"] == title
+    assert fake.document["language"] == "en"
+    assert ("GET", job["sourcePath"]) in fake.calls
+    assert all(path.startswith("/api/worker/") for _, path in fake.calls)
 
 
 def test_review_stops_and_the_next_claim_narrates_the_edited_document(tone, server, tmp_path):

@@ -21,7 +21,7 @@ from fama_worker.api import MAX_UPLOAD_BYTES, Api, ApiError, ClaimedJob, Claimed
 from fama_worker.engines import all_voices, default_voice
 from fama_worker.eta import Eta
 from fama_worker.extract import extract
-from fama_worker.model import Document, FileSource, Source
+from fama_worker.model import Document, FileSource, Source, UrlSource
 from fama_worker.pipeline import Book, ChapterFile, narrate
 from fama_worker.sample import make_sample
 
@@ -119,10 +119,16 @@ class JobReporter:
 
 
 def _source(api: Api, job: ClaimedJob, directory: Path) -> Source:
+    if isinstance(job.source, UrlSource) and job.source_path:
+        response = api.source(job)
+        path = directory / "page"
+        path.write_bytes(response.content)
+        log(f"{job.episode_id}: read uploaded page from the API, no web fetch")
+        return FileSource(path, response.headers.get("content-type"), job.source.url)
     if not isinstance(job.source, FileRef):
         return job.source
     path = directory / Path(job.source.file_name).name
-    path.write_bytes(api.source(job))
+    path.write_bytes(api.source(job).content)
     return FileSource(path, job.source.content_type)
 
 
