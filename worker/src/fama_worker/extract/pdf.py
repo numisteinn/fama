@@ -525,10 +525,10 @@ def _largest_line(lines: list[_Line]) -> str | None:
     return title if 2 <= len(title) <= 200 else None
 
 
-def _title(meta: dict[str, str], first_page_lines: list[_Line], path: Path) -> str:
+def _title(meta: dict[str, str], first_page_lines: list[_Line], path: Path, ocr_title: str | None = None) -> str:
     title = (meta.get("Title") or "").strip()
     if not title or re.match(r"(microsoft word|untitled|document)\b", title, re.IGNORECASE) or title.endswith((".doc", ".docx", ".pdf")):
-        return _largest_line(first_page_lines) or path.stem.replace("_", " ")
+        return _largest_line(first_page_lines) or ocr_title or path.stem.replace("_", " ")
     return title
 
 
@@ -541,13 +541,19 @@ def extract_pdf(path: Path) -> Document:
         paragraphs = _paragraphs(pages)
         entries = _toc_entries(doc)
         meta = doc.get_metadata_dict()
-        title = _title(meta, first_page_lines, path)
+        ocr_title = None
+        if not "".join(p.text for p in paragraphs).strip():
+            from fama_worker.extract import ocr
+
+            pages, ocr_title = ocr.extract_scanned_pages(doc)
+            paragraphs = _paragraphs(pages)
+        title = _title(meta, first_page_lines, path, ocr_title)
         author = (meta.get("Author") or "").strip() or None
     finally:
         doc.close()
 
     if not "".join(p.text for p in paragraphs).strip():
-        raise ValueError("This PDF has no text layer. Scanned PDFs need OCR, which Fama does not do yet.")
+        raise ValueError("This PDF has no text layer, and OCR found no text to read.")
 
     starts: list[tuple[str, int]] = []
     for name, page in entries:
