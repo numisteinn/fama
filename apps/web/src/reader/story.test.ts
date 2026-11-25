@@ -19,7 +19,7 @@ const segments = [
   { text: "Next sentence.", startMs: 800, endMs: 1600, endsParagraph: true },
 ]
 const start = (chapter: number) => withPlayback(withEpisodes(baseModel(), [episode]),
-  Playback.Loaded({ episodeId: episode.id, chapter, offsetMs: 0, isPlaying: true, isWaiting: false }))
+  Playback.Loaded({ episodeId: episode.id, chapter, url: episode.chapters[chapter]!.url, offsetMs: 0, isPlaying: true, isWaiting: false }))
 const loaded = wrap(R.SucceededFetchTiming({ url, timing: { segments } }))
 const scrolled = wrap(R.CompletedScrollToMark())
 const tick = (offsetMs: number) => Message.UpdatedAudioTime({ offsetMs, atMs: 1000 })

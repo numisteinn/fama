@@ -5,6 +5,7 @@ import { defineTaggedUnion } from "foldkit/schema"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { BatchFile, hasAttached } from "~/batch"
 import { formatRate } from "~/lib/format"
+import { NarrateAgain } from "~/review/narrateAgainModel"
 import { Reader } from "~/reader/model"
 import { Review } from "~/review/model"
 
@@ -89,6 +90,8 @@ export const Playback = defineTaggedUnion({
     episodeId: EpisodeId,
     chapter: Schema.Number,
     offsetMs: Schema.Number,
+    /** The media URL the element was told to load. A replacement URL loads again at the same place. */
+    url: Schema.String,
     /** The element plays: it was told to, or it said so. */
     isPlaying: Schema.Boolean,
     /** A Play is on at the end of the chapters made so far: it goes on when the next chapter is listed. */
@@ -168,6 +171,8 @@ export const Model = Schema.Struct({
   /** Counts the copies that showed Copied. A reset timer clears Copied only for its own copy. */
   feedUrlCopies: Schema.Number,
 
+  /** Narrate-again edits of a Ready or Failed episode. */
+  narrateAgain: NarrateAgain,
   /** Fact: what the audio element has. */
   playback: Playback,
   /** The text of the episode that plays, and whether it shows. */

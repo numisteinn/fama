@@ -5,6 +5,7 @@ import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { PickerId, StoredProgress } from "~/model"
+import { NarrateAgainMessage } from "~/review/narrateAgainMessage"
 import { ReaderMessage } from "~/reader/message"
 import { ReviewMessage } from "~/review/message"
 
@@ -65,6 +66,9 @@ export const Message = defineMessageUnion({
   FailedDeleteEpisode: { episodeId: EpisodeId, failure: ApiFailure },
   CompletedWaitBeforeDisarmDelete: { episodeId: EpisodeId },
   CompletedFocusDeleteConfirm: {},
+
+  // Narrate again
+  GotNarrateAgainMessage: { message: NarrateAgainMessage },
 
   // Reader
   GotReaderMessage: { message: ReaderMessage },

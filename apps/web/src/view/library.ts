@@ -5,6 +5,7 @@ import { deleteConfirmId } from "~/command"
 import { formatDuration } from "~/lib/format"
 import { Message } from "~/message"
 import type { Model } from "~/model"
+import { openNarrateAgainMessage } from "~/review/narrateAgainView"
 import { openReviewMessage, reviewBadge } from "~/review/view"
 import { totalMs } from "~/timeline"
 import { buttonClass, cx } from "~/view/button"
@@ -104,6 +105,25 @@ const row = (model: Model, episode: Episode, h: HtmlBuilder<Message>): Html => {
         ],
       ),
       jobStatus(episode, h),
+      ...(episode.job._tag === "Ready" || episode.job._tag === "Failed"
+        ? [
+            h.button(
+              [
+                h.Type("button"),
+                h.AriaLabel(`Narrate again ${episode.title}`),
+                h.Title("Narrate again"),
+                h.OnClick(openNarrateAgainMessage(episode.id)),
+                h.Class(
+                  buttonClass(
+                    { size: "icon-sm" },
+                    "relative opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
+                  ),
+                ),
+              ],
+              [Icon.rotateCw()],
+            ),
+          ]
+        : []),
       ...(episode.job._tag === "Failed"
         ? [
             h.button(

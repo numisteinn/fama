@@ -41,6 +41,7 @@ import {
   WaitBeforeResetTypeAhead,
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
+import type { NarrateAgainMessage } from "~/review/narrateAgainMessage"
 import type { ReaderMessage } from "~/reader/message"
 import type { ReviewMessage } from "~/review/message"
 import {
@@ -67,6 +68,8 @@ import {
   sortedVoices,
   toDraft,
 } from "~/model"
+import { initNarrateAgain } from "~/review/narrateAgainModel"
+import * as NarrateAgain from "~/review/narrateAgainUpdate"
 import { initReader } from "~/reader/model"
 import * as Reader from "~/reader/update"
 import { initReview } from "~/review/model"
@@ -110,6 +113,7 @@ export const init = (flags: Flags): UpdateReturn => {
     feedRequests: 0,
     isFeedUrlCopied: false,
     feedUrlCopies: 0,
+    narrateAgain: initNarrateAgain,
     playback: Playback.Stopped(),
     reader: initReader,
     review: initReview,
@@ -798,6 +802,14 @@ const playFrom = (ms: number): Step =>
 const playChapter = (index: number): Step =>
   withLoaded(({ episode }) => (episode.chapters[index] ? playFrom(chapterStartMs(episode.chapters, index)) : unchanged))
 
+/** A message of Narrate again. A queued change closes the screen and refreshes the Library. */
+const narrateAgainStep = (message: NarrateAgainMessage): Step => (model) => {
+  const { model: next, commands, outMessage } = NarrateAgain.update(model, message)
+  if (!outMessage) return { model: next, commands: commands ?? [] }
+  const library = fetchLibrary(next)
+  return { model: library.model, commands: [...(commands ?? []), library.command] }
+}
+
 /** A message of the reader. A click on a Segment plays from its start. */
 const readerStep = (message: ReaderMessage): Step => (model) => {
   const { model: next, commands, outMessage } = Reader.update(model, message)
@@ -842,6 +854,7 @@ const isSamePlayback = (a: Playback, b: Playback) =>
     ? a._tag === b._tag
     : a.episodeId === b.episodeId &&
       a.chapter === b.chapter &&
+      a.url === b.url &&
       a.offsetMs === b.offsetMs &&
       a.isPlaying === b.isPlaying &&
       a.isWaiting === b.isWaiting
@@ -938,7 +951,8 @@ const reconcile: Step = (model) => {
   const placeMs = mode === "Playing" && isStart ? start.positionMs : positionMs
 
   // Where the audio must be. Audio that rests, waits or plays on stays in its place: only a reason moves it.
-  const isPlaced = here === undefined || isSeek || isMovedToEntry || (mode === "Playing" && !(isOn && !isSeek))
+  const isReplaced = here !== undefined && chapters[here.chapter]?.url !== here.url
+  const isPlaced = here === undefined || isSeek || isMovedToEntry || isReplaced || (mode === "Playing" && !(isOn && !isSeek))
   const target = isPlaced || here === undefined ? locate(chapters, placeMs) : { index: here.chapter, offsetMs: here.offsetMs }
   /** The file to load. Audio that stays in its place has its file already, also when a late list no longer has it. */
   const file = chapters[target.index]
@@ -955,7 +969,7 @@ const reconcile: Step = (model) => {
         : here?.isPlaying && !hasFile
           ? [PauseAudio()]
           : []
-      : here === undefined || here.chapter !== target.index
+      : here === undefined || here.chapter !== target.index || here.url !== file.url
         ? [load(file)]
         : Math.abs(here.offsetMs - target.offsetMs) >= 1
           ? [isPlaying === here.isPlaying && !isStart ? SeekAudio({ offsetMs: target.offsetMs }) : load(file)]
@@ -987,6 +1001,7 @@ const reconcile: Step = (model) => {
       : Playback.Loaded({
           episodeId: episode.id,
           chapter: target.index,
+          url: file?.url ?? here?.url ?? "",
           offsetMs: target.offsetMs,
           isPlaying,
           isWaiting: mode === "Waiting",
@@ -1124,6 +1139,7 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     }),
     CompletedFocusDeleteConfirm: () => ({ model }),
 
+    GotNarrateAgainMessage: ({ message: narrateAgainMessage }) => narrateAgainStep(narrateAgainMessage)(model),
     GotReaderMessage: ({ message: readerMessage }) => readerStep(readerMessage)(model),
     GotReviewMessage: ({ message: reviewMessage }) => reviewStep(reviewMessage)(model),
 
@@ -1202,4 +1218,4 @@ const handle = (model: Model, message: Message): UpdateReturn =>
  * reader's `reconcile` loads text and keeps the mark in sight.
  */
 export const update = (model: Model, message: Message): UpdateReturn =>
-  Update.combine(model, [(start) => handle(start, message), reconcile, Reader.reconcile, Review.reconcile])
+  Update.combine(model, [(start) => handle(start, message), reconcile, NarrateAgain.reconcile, Reader.reconcile, Review.reconcile])
