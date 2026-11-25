@@ -487,17 +487,23 @@ describe("add bar", () => {
         expect(fileStates(next)).toEqual(["harbour-days.epub Attached", "harbour-notes.pdf Attached", "cover.png Refused"]),
       ),
       message(Message.SubmittedAddForm()),
-      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2 })),
+      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: serverFailed })),
-      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice: null, speed: 1.2 })),
+      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: notes })),
       model((next) => {
         expect(fileStates(next)).toEqual(["harbour-days.epub Failed", "cover.png Refused"])
-        expect(next.batch[0]?.state).toEqual({ _tag: "Failed", reason: "The server failed", voice: null, speed: 1.2 })
+        expect(next.batch[0]?.state).toEqual({
+          _tag: "Failed",
+          reason: "The server failed",
+          voice: null,
+          speed: 1.2,
+          review: false,
+        })
         expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([notes])
       }),
       message(Message.ClickedRetryFile({ key: 0 })),
-      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2 })),
+      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
       model((next) => expect(fileStates(next)).toEqual(["cover.png Refused"])),
       message(Message.ClickedRemoveFile({ key: 2 })),
@@ -511,7 +517,7 @@ describe("add bar", () => {
     const voice = "kokoro:af_heart" as VoiceRef
     const epub = new File(["book"], "harbour-days.epub")
     const pdf = new File(["pdf"], "harbour-notes.pdf")
-    const sent = { voice, speed: 1.2 }
+    const sent = { voice, speed: 1.2, review: false }
     story(
       update,
       given({
@@ -525,7 +531,7 @@ describe("add bar", () => {
         ],
       }),
       message(Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
-      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice, speed: 1.2 })),
+      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: queuedArticle })),
       model((next) => expect(next.batch).toEqual([])),
       Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
