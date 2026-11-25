@@ -12,6 +12,7 @@ import {
   keptCount,
   startButtonLabel,
 } from "~/review/model"
+import { voiceSamplesSection } from "~/review/samples"
 import { buttonClass, cx } from "~/view/button"
 import * as Icon from "~/view/icon"
 
@@ -195,7 +196,7 @@ const chapterRow = (
   )
 }
 
-const editingView = (editing: EditingReview, h: HtmlBuilder<Message>): Html => {
+const editingView = (model: Model, editing: EditingReview, h: HtmlBuilder<Message>): Html => {
   const kept = keptCount(editing)
   const total = editing.chapters.length
   const dirty = isDirty(editing)
@@ -256,6 +257,16 @@ const editingView = (editing: EditingReview, h: HtmlBuilder<Message>): Html => {
           "-mx-2 w-[calc(100%+1rem)] rounded-lg border border-transparent bg-transparent px-2 py-1 text-2xl font-semibold leading-tight tracking-tight text-foreground outline-none hover:border-input focus:border-ring disabled:opacity-40",
         ),
       ]),
+      voiceSamplesSection(
+        {
+          voices: model.voices,
+          language: editing.loaded.language,
+          samples: editing.samples,
+          isBusy,
+          toParent: (message) => toParent(ReviewMessage.GotSamplesMessage({ message })),
+        },
+        h,
+      ),
       ...(editing.repeatedLines.length > 0
         ? [
             h.div(
@@ -328,6 +339,6 @@ export const review = (model: Model, h: HtmlBuilder<Message>): Html => {
         ],
       )
     case "Editing":
-      return editingView(view, h)
+      return editingView(model, view, h)
   }
 }

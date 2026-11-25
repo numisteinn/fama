@@ -1,9 +1,10 @@
 import type { Episode, EpisodeId } from "@fama/contracts"
 import { Option } from "effect"
 import type { HttpClient } from "effect/http"
-import type { Update } from "foldkit"
+import { Command, type Update } from "foldkit"
 import { modifyFields } from "foldkit/struct"
-import type { Message } from "~/message"
+import { FetchVoices } from "~/command"
+import { Message } from "~/message"
 import { type Model, episodes } from "~/model"
 import { FetchDocument, SaveDocument, StartReviewNarration } from "~/review/command"
 import { ReviewMessage } from "~/review/message"
@@ -19,11 +20,23 @@ import {
   toFullDocument,
   toStartDocument,
 } from "~/review/model"
+import {
+  type SamplesMessage,
+  initSamples,
+  selectedVoiceForStart,
+  stopSampleCommandIfPlaying,
+  stopSampleIfMainPlaying,
+  updateSamples,
+} from "~/review/samples"
 
-/** Review started narration: the parent updates the episode in the library. */
+/** Review out-messages: starting narration updates the episode; playing a sample pauses main playback. */
 export interface StartedEpisode {
-  readonly episode: Episode
+  readonly episode?: Episode
+  readonly pausePlayback?: boolean
 }
+
+const toSamplesParent = (message: SamplesMessage) =>
+  Message.GotReviewMessage({ message: ReviewMessage.GotSamplesMessage({ message }) })
 
 type Return = Update.Return<Model, Message, HttpClient.HttpClient>
 type ReturnWithStart = Update.ReturnWithOutMessage<Model, Message, StartedEpisode, HttpClient.HttpClient>
@@ -52,12 +65,51 @@ const openEpisode = (model: Model, episodeId: EpisodeId): ReturnWithStart => {
 export const update = (model: Model, message: ReviewMessage): ReturnWithStart =>
   ReviewMessage.match<ReturnWithStart>(message, {
     ClickedEpisode: ({ episodeId }) => openEpisode(model, episodeId),
-    ClickedBack: () => ({ model: withReview(model, (review) => ({ ...review, view: ReviewView.Closed() })) }),
+    ClickedBack: () => ({
+      model: withReview(model, (review) => ({ ...review, view: ReviewView.Closed() })),
+      commands:
+        model.review.view._tag === "Editing"
+          ? Command.mapMessages(stopSampleCommandIfPlaying(model.review.view.samples), toSamplesParent)
+          : [],
+    }),
     ClickedTryAgain: () =>
       model.review.view._tag === "LoadFailed" ? openEpisode(model, model.review.view.episodeId) : { model },
+    GotSamplesMessage: ({ message: samplesMessage }) => {
+      const view = model.review.view
+      if (view._tag !== "Editing") return { model }
+      const episode = episodes(model).find((item) => item.id === view.episodeId)
+      const isBusy = view.save._tag === "Saving" || view.start._tag === "Starting"
+      const result = updateSamples(view.samples, samplesMessage, {
+        connection: model.connection,
+        episodeId: view.episodeId,
+        speed: episode?.speed ?? 1,
+        isBusy,
+      })
+      const changed = result.outMessage?.changedVoice
+      const withUpdatedSamples = withEditing(model, (editing) => ({ ...editing, samples: result.model }))
+      const nextModel = changed
+        ? modifyFields(withUpdatedSamples, {
+            maybeEpisodes: Option.map((list) =>
+              list.map((item) =>
+                item.id === changed.episodeId ? { ...item, voice: changed.voice, speed: changed.speed } : item,
+              ),
+            ),
+          })
+        : withUpdatedSamples
+      const fetchVoices =
+        samplesMessage._tag === "RequestedInitialFetch" && !view.samples.hasLoaded && model.voices.length === 0
+          ? [FetchVoices({ connection: model.connection })]
+          : []
+      return {
+        model: nextModel,
+        commands: [...Command.mapMessages(result.commands, toSamplesParent), ...fetchVoices],
+        ...(result.outMessage?.pausePlayback ? { outMessage: { pausePlayback: true } } : {}),
+      }
+    },
     SucceededFetchDocument: ({ episodeId, request, document }) => {
       const view = model.review.view
       if (view._tag !== "Loading" || view.episodeId !== episodeId || view.request !== request) return { model }
+      const episode = episodes(model).find((item) => item.id === episodeId)
       const chapters = document.chapters.map((chapter, index) => ({
         index,
         title: chapter.title,
@@ -74,6 +126,7 @@ export const update = (model: Model, message: ReviewMessage): ReturnWithStart =>
             chapters,
             maybeExpandedIndex: chapters.length === 1 ? Option.some(0) : Option.none(),
             repeatedLines: detectRepeatedLines(chapters),
+            samples: initSamples(episode?.voice ?? null),
             save: SaveState.Idle(),
             start: StartState.Idle(),
           }),
@@ -176,16 +229,28 @@ export const update = (model: Model, message: ReviewMessage): ReturnWithStart =>
     ClickedStart: () => {
       const view = model.review.view
       if (view._tag !== "Editing" || view.start._tag === "Starting" || view.save._tag === "Saving") return { model }
+      const voice = selectedVoiceForStart(view.samples)
       return Option.match(toStartDocument(view), {
         onNone: () => ({ model }),
         onSome: (document) => ({
           model: withEditing(model, (editing) => ({ ...editing, start: StartState.Starting() })),
-          commands: [StartReviewNarration({ connection: model.connection, episodeId: view.episodeId, document })],
+          commands: [
+            StartReviewNarration({
+              connection: model.connection,
+              episodeId: view.episodeId,
+              document,
+              ...(voice !== undefined ? { voice } : {}),
+            }),
+          ],
         }),
       })
     },
     SucceededStartReview: ({ episode }) => ({
       model: withReview(model, (review) => ({ ...review, view: ReviewView.Closed() })),
+      commands:
+        model.review.view._tag === "Editing"
+          ? Command.mapMessages(stopSampleCommandIfPlaying(model.review.view.samples), toSamplesParent)
+          : [],
       outMessage: { episode },
     }),
     FailedStartReview: ({ episodeId, failure }) => ({
@@ -203,6 +268,19 @@ export const reconcile = (model: Model): Return => {
   if (view._tag === "Closed" || Option.isNone(model.maybeEpisodes)) return { model }
   if (view._tag === "Editing" && view.start._tag === "Starting") return { model }
   const episode = model.maybeEpisodes.value.find((item) => item.id === view.episodeId)
-  if (episode && episode.job._tag === "Review") return { model }
-  return { model: withReview(model, (review) => ({ ...review, view: ReviewView.Closed() })) }
+  if (episode && episode.job._tag === "Review") {
+    if (view._tag !== "Editing") return { model }
+    const isMainPlaying = model.playback._tag === "Loaded" && model.playback.isPlaying
+    const reconciled = stopSampleIfMainPlaying(view.samples, isMainPlaying)
+    if (reconciled.commands.length === 0) return { model }
+    return {
+      model: withEditing(model, (editing) => ({ ...editing, samples: reconciled.samples })),
+      commands: Command.mapMessages(reconciled.commands, toSamplesParent),
+    }
+  }
+  return {
+    model: withReview(model, (review) => ({ ...review, view: ReviewView.Closed() })),
+    commands:
+      view._tag === "Editing" ? Command.mapMessages(stopSampleCommandIfPlaying(view.samples), toSamplesParent) : [],
+  }
 }
