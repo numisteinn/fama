@@ -20,13 +20,27 @@ export const SAMPLE_POLL_MS = 2000
 
 // MODEL
 
+export const SampleError = Schema.Struct({
+  source: Schema.Literals(["fetch", "voice", "audio"]),
+  message: Schema.String,
+})
+export type SampleError = typeof SampleError.Type
+
 export const Samples = Schema.Struct({
   /** Selected voice for narration in Review, initialized from the episode's voice. */
   maybeSelectedVoice: Schema.Option(VoiceRef),
   /** True once the user selects a voice in Review, so Start sends it atomically. */
   hasSelectedVoice: Schema.Boolean,
+  /** Voice save currently in flight, so rapid clicks serialize in order. */
+  maybeSavingVoice: Schema.Option(VoiceRef),
+  /** Latest voice clicked while a save was in flight, sent next when it finishes. */
+  maybePendingVoice: Schema.Option(VoiceRef),
   /** True once the initial `GET /api/episodes/:id/samples` has been triggered for this Review session. */
   hasLoaded: Schema.Boolean,
+  /** True while a `GET /api/episodes/:id/samples` is in flight, preventing overlapping polls. */
+  isFetching: Schema.Boolean,
+  /** Sequence number for sample list requests so older poll responses never overwrite newer ones. */
+  listRequest: Schema.Number,
   /** True while requesting samples for all language voices is in flight. */
   isRequesting: Schema.Boolean,
   /** Voices currently being retried individually. */
@@ -36,14 +50,18 @@ export const Samples = Schema.Struct({
   /** Voice whose sample clip is currently playing in Review. */
   maybePlayingVoice: Schema.Option(VoiceRef),
   /** Error from fetching/requesting samples, playing a sample, or saving the selected voice. */
-  maybeError: Schema.Option(Schema.String),
+  maybeError: Schema.Option(SampleError),
 })
 export type Samples = typeof Samples.Type
 
 export const initSamples = (voice: VoiceRef | null): Samples => ({
   maybeSelectedVoice: Option.fromNullishOr(voice),
   hasSelectedVoice: false,
+  maybeSavingVoice: Option.none(),
+  maybePendingVoice: Option.none(),
   hasLoaded: false,
+  isFetching: false,
+  listRequest: 0,
   isRequesting: false,
   retryingVoices: [],
   items: [],
@@ -115,10 +133,20 @@ export const SamplesMessage = defineMessageUnion({
   ClickedHearVoices: {},
   ClickedRetrySample: { voice: VoiceRef },
   TickedPoll: {},
-  SucceededFetchSamples: { episodeId: EpisodeId, samples: Schema.Array(Sample) },
-  FailedFetchSamples: { episodeId: EpisodeId, failure: ApiFailure },
-  SucceededRequestSamples: { episodeId: EpisodeId, samples: Schema.Array(Sample) },
-  FailedRequestSamples: { episodeId: EpisodeId, maybeVoice: Schema.Option(VoiceRef), failure: ApiFailure },
+  SucceededFetchSamples: { episodeId: EpisodeId, request: Schema.Number, samples: Schema.Array(Sample) },
+  FailedFetchSamples: { episodeId: EpisodeId, request: Schema.Number, failure: ApiFailure },
+  SucceededRequestSamples: {
+    episodeId: EpisodeId,
+    request: Schema.Number,
+    maybeVoice: Schema.Option(VoiceRef),
+    samples: Schema.Array(Sample),
+  },
+  FailedRequestSamples: {
+    episodeId: EpisodeId,
+    request: Schema.Number,
+    maybeVoice: Schema.Option(VoiceRef),
+    failure: ApiFailure,
+  },
   ClickedSelectVoice: { voice: VoiceRef },
   SucceededChangeVoice: { episodeId: EpisodeId, voice: VoiceRef, speed: Schema.Number },
   FailedChangeVoice: { episodeId: EpisodeId, voice: VoiceRef, failure: ApiFailure },
@@ -135,8 +163,8 @@ export type SamplesMessage = typeof SamplesMessage.Type
 // AUDIO ELEMENT
 
 let sampleAudioElement: HTMLAudioElement | undefined
+/** Tracks which voice owns the detached audio element; cleared before programmatic stops so queued events drop. */
 let activeSampleVoice: VoiceRef | null = null
-let isStoppingProgrammatically = false
 
 const getSampleAudio = (): HTMLAudioElement => {
   if (!sampleAudioElement) {
@@ -147,19 +175,11 @@ const getSampleAudio = (): HTMLAudioElement => {
 }
 
 const stopSampleElement = () => {
-  if (!sampleAudioElement) {
-    activeSampleVoice = null
-    return
-  }
   activeSampleVoice = null
-  isStoppingProgrammatically = true
-  try {
-    sampleAudioElement.pause()
-    sampleAudioElement.removeAttribute("src")
-    sampleAudioElement.load()
-  } finally {
-    isStoppingProgrammatically = false
-  }
+  if (!sampleAudioElement) return
+  sampleAudioElement.pause()
+  sampleAudioElement.removeAttribute("src")
+  sampleAudioElement.load()
 }
 
 const isInterrupted = (error: unknown): boolean =>
@@ -171,19 +191,19 @@ const encodeSamplesRequest = Schema.encodeSync(SamplesRequest)
 const encodeChangeVoice = Schema.encodeSync(ChangeVoice)
 
 export const FetchSamples = Command.define("FetchSamples", {
-  args: { connection: Connection, episodeId: EpisodeId },
+  args: { connection: Connection, episodeId: EpisodeId, request: Schema.Number },
   messages: [SamplesMessage.SucceededFetchSamples, SamplesMessage.FailedFetchSamples],
-  execute: ({ connection, episodeId }) =>
+  execute: ({ connection, episodeId, request }) =>
     sendJson(SampleList, connection, "GET", `${episodePath(episodeId)}/samples`).pipe(
-      Effect.map(({ samples }) => SamplesMessage.SucceededFetchSamples({ episodeId, samples })),
-      Effect.catch((failure) => Effect.succeed(SamplesMessage.FailedFetchSamples({ episodeId, failure }))),
+      Effect.map(({ samples }) => SamplesMessage.SucceededFetchSamples({ episodeId, request, samples })),
+      Effect.catch((failure) => Effect.succeed(SamplesMessage.FailedFetchSamples({ episodeId, request, failure }))),
     ),
 })
 
 export const RequestSamples = Command.define("RequestSamples", {
-  args: { connection: Connection, episodeId: EpisodeId, maybeVoice: Schema.Option(VoiceRef) },
+  args: { connection: Connection, episodeId: EpisodeId, request: Schema.Number, maybeVoice: Schema.Option(VoiceRef) },
   messages: [SamplesMessage.SucceededRequestSamples, SamplesMessage.FailedRequestSamples],
-  execute: ({ connection, episodeId, maybeVoice }) =>
+  execute: ({ connection, episodeId, request: reqId, maybeVoice }) =>
     sendJson(SampleList, connection, "POST", `${episodePath(episodeId)}/samples`, (request) =>
       HttpClientRequest.bodyJsonUnsafe(
         request,
@@ -193,8 +213,12 @@ export const RequestSamples = Command.define("RequestSamples", {
         }),
       ),
     ).pipe(
-      Effect.map(({ samples }) => SamplesMessage.SucceededRequestSamples({ episodeId, samples })),
-      Effect.catch((failure) => Effect.succeed(SamplesMessage.FailedRequestSamples({ episodeId, maybeVoice, failure }))),
+      Effect.map(({ samples }) =>
+        SamplesMessage.SucceededRequestSamples({ episodeId, request: reqId, maybeVoice, samples }),
+      ),
+      Effect.catch((failure) =>
+        Effect.succeed(SamplesMessage.FailedRequestSamples({ episodeId, request: reqId, maybeVoice, failure })),
+      ),
     ),
 })
 
@@ -217,12 +241,9 @@ export const PlaySampleAudio = Command.define("PlaySampleAudio", {
     Effect.tryPromise({
       try: () => {
         const audio = getSampleAudio()
-        isStoppingProgrammatically = true
-        try {
-          audio.pause()
-        } finally {
-          isStoppingProgrammatically = false
-        }
+        // Clearing activeSampleVoice before pause/src change ensures queued events from the old clip are ignored.
+        activeSampleVoice = null
+        audio.pause()
         activeSampleVoice = voice
         audio.src = src
         audio.currentTime = 0
@@ -271,6 +292,31 @@ export interface SamplesOutMessage {
 
 type SamplesReturn = Update.ReturnWithOutMessage<Samples, SamplesMessage, SamplesOutMessage, HttpClient.HttpClient>
 
+const clearErrorOf = (
+  maybeError: Option.Option<SampleError>,
+  source: SampleError["source"],
+): Option.Option<SampleError> =>
+  Option.exists(maybeError, (error) => error.source === source) ? Option.none() : maybeError
+
+const nextPendingVoice = (
+  samples: Samples,
+  connection: Connection,
+  episodeId: EpisodeId,
+  validSpeed: number,
+) =>
+  Option.match(samples.maybePendingVoice, {
+    onNone: () => ({
+      maybeSavingVoice: Option.none<VoiceRef>(),
+      maybePendingVoice: Option.none<VoiceRef>(),
+      commands: [] as ReadonlyArray<ReturnType<typeof ChangeReviewVoice>>,
+    }),
+    onSome: (nextVoice) => ({
+      maybeSavingVoice: Option.some(nextVoice),
+      maybePendingVoice: Option.none<VoiceRef>(),
+      commands: [ChangeReviewVoice({ connection, episodeId, voice: nextVoice, speed: validSpeed })],
+    }),
+  })
+
 export const updateSamples = (
   samples: Samples,
   message: SamplesMessage,
@@ -279,38 +325,60 @@ export const updateSamples = (
   const { connection, episodeId, speed, isBusy } = context
   const validSpeed = Number.isFinite(speed) && speed > 0 ? speed : 1
   return SamplesMessage.match<SamplesReturn>(message, {
-    RequestedInitialFetch: () =>
-      samples.hasLoaded
-        ? { model: samples }
-        : {
-            model: { ...samples, hasLoaded: true },
-            commands: [FetchSamples({ connection, episodeId })],
-          },
-    ClickedHearVoices: () =>
-      samples.isRequesting || isBusy
-        ? { model: samples }
-        : {
-            model: { ...samples, hasLoaded: true, isRequesting: true, maybeError: Option.none() },
-            commands: [RequestSamples({ connection, episodeId, maybeVoice: Option.none() })],
-          },
-    ClickedRetrySample: ({ voice }) =>
-      samples.retryingVoices.includes(voice) || isBusy
-        ? { model: samples }
-        : {
-            model: {
-              ...samples,
-              hasLoaded: true,
-              retryingVoices: [...samples.retryingVoices, voice],
-              maybeError: Option.none(),
-            },
-            commands: [RequestSamples({ connection, episodeId, maybeVoice: Option.some(voice) })],
-          },
-    TickedPoll: () =>
-      hasRequestedSamples(samples)
-        ? { model: samples, commands: [FetchSamples({ connection, episodeId })] }
-        : { model: samples },
-    SucceededFetchSamples: ({ episodeId: targetId, samples: items }) => {
+    RequestedInitialFetch: () => {
+      if (samples.hasLoaded) return { model: samples }
+      const request = samples.listRequest + 1
+      return {
+        model: { ...samples, hasLoaded: true, isFetching: true, listRequest: request },
+        commands: [FetchSamples({ connection, episodeId, request })],
+      }
+    },
+    ClickedHearVoices: () => {
+      if (samples.isRequesting || isBusy) return { model: samples }
+      const request = samples.listRequest + 1
+      return {
+        model: {
+          ...samples,
+          hasLoaded: true,
+          listRequest: request,
+          isRequesting: true,
+          maybeError: clearErrorOf(samples.maybeError, "fetch"),
+        },
+        commands: [RequestSamples({ connection, episodeId, request, maybeVoice: Option.none() })],
+      }
+    },
+    ClickedRetrySample: ({ voice }) => {
+      if (samples.retryingVoices.includes(voice) || isBusy) return { model: samples }
+      const request = samples.listRequest + 1
+      return {
+        model: {
+          ...samples,
+          hasLoaded: true,
+          listRequest: request,
+          retryingVoices: [...samples.retryingVoices, voice],
+          maybeError: clearErrorOf(samples.maybeError, "fetch"),
+        },
+        commands: [RequestSamples({ connection, episodeId, request, maybeVoice: Option.some(voice) })],
+      }
+    },
+    TickedPoll: () => {
+      if (
+        !hasRequestedSamples(samples) ||
+        samples.isFetching ||
+        samples.isRequesting ||
+        samples.retryingVoices.length > 0
+      ) {
+        return { model: samples }
+      }
+      const request = samples.listRequest + 1
+      return {
+        model: { ...samples, isFetching: true, listRequest: request },
+        commands: [FetchSamples({ connection, episodeId, request })],
+      }
+    },
+    SucceededFetchSamples: ({ episodeId: targetId, request, samples: items }) => {
       if (targetId !== episodeId) return { model: samples }
+      if (request !== samples.listRequest) return { model: { ...samples, isFetching: false } }
       const stillPlayable = Option.exists(samples.maybePlayingVoice, (voice) =>
         items.some((item) => item.voice === voice && item.state._tag === "Ready"),
       )
@@ -319,31 +387,49 @@ export const updateSamples = (
         model: {
           ...samples,
           hasLoaded: true,
+          isFetching: false,
           items,
           maybePlayingVoice: stopped ? Option.none() : samples.maybePlayingVoice,
-          maybeError: Option.none(),
+          maybeError: clearErrorOf(samples.maybeError, "fetch"),
         },
         commands: stopped ? [StopSampleAudio()] : [],
       }
     },
-    FailedFetchSamples: ({ episodeId: targetId, failure }) =>
-      targetId === episodeId
-        ? { model: { ...samples, hasLoaded: true, maybeError: Option.some(failure.message) } }
-        : { model: samples },
-    SucceededRequestSamples: ({ episodeId: targetId, samples: items }) =>
-      targetId === episodeId
-        ? {
-            model: {
-              ...samples,
-              hasLoaded: true,
-              isRequesting: false,
-              retryingVoices: [],
-              items,
-              maybeError: Option.none(),
-            },
-          }
-        : { model: samples },
-    FailedRequestSamples: ({ episodeId: targetId, maybeVoice, failure }) =>
+    FailedFetchSamples: ({ episodeId: targetId, request, failure }) => {
+      if (targetId !== episodeId) return { model: samples }
+      if (request !== samples.listRequest) return { model: { ...samples, isFetching: false } }
+      return {
+        model: {
+          ...samples,
+          hasLoaded: true,
+          isFetching: false,
+          maybeError: Option.some({ source: "fetch", message: failure.message }),
+        },
+      }
+    },
+    SucceededRequestSamples: ({ episodeId: targetId, request, maybeVoice, samples: items }) => {
+      if (targetId !== episodeId) return { model: samples }
+      const isRequesting = Option.isNone(maybeVoice) ? false : samples.isRequesting
+      const retryingVoices = Option.match(maybeVoice, {
+        onNone: () => samples.retryingVoices,
+        onSome: (voice) => samples.retryingVoices.filter((item) => item !== voice),
+      })
+      if (request < samples.listRequest) {
+        return { model: { ...samples, isRequesting, retryingVoices } }
+      }
+      return {
+        model: {
+          ...samples,
+          hasLoaded: true,
+          isFetching: false,
+          isRequesting,
+          retryingVoices,
+          items,
+          maybeError: clearErrorOf(samples.maybeError, "fetch"),
+        },
+      }
+    },
+    FailedRequestSamples: ({ episodeId: targetId, request, maybeVoice, failure }) =>
       targetId === episodeId
         ? {
             model: {
@@ -353,38 +439,82 @@ export const updateSamples = (
                 onNone: () => samples.retryingVoices,
                 onSome: (voice) => samples.retryingVoices.filter((item) => item !== voice),
               }),
-              maybeError: Option.some(failure.message),
+              maybeError:
+                request < samples.listRequest
+                  ? samples.maybeError
+                  : Option.some({ source: "fetch", message: failure.message }),
             },
           }
         : { model: samples },
     ClickedSelectVoice: ({ voice }) => {
       if (isBusy) return { model: samples }
-      if (Option.contains(samples.maybeSelectedVoice, voice) && Option.isNone(samples.maybeError)) {
+      const hasVoiceError = Option.exists(samples.maybeError, (error) => error.source === "voice")
+      if (Option.contains(samples.maybeSelectedVoice, voice) && !hasVoiceError) {
         return { model: samples }
+      }
+      if (Option.isSome(samples.maybeSavingVoice)) {
+        return {
+          model: {
+            ...samples,
+            maybeSelectedVoice: Option.some(voice),
+            hasSelectedVoice: true,
+            maybePendingVoice: Option.some(voice),
+            maybeError: clearErrorOf(samples.maybeError, "voice"),
+          },
+        }
       }
       return {
         model: {
           ...samples,
           maybeSelectedVoice: Option.some(voice),
           hasSelectedVoice: true,
-          maybeError: Option.none(),
+          maybeSavingVoice: Option.some(voice),
+          maybePendingVoice: Option.none(),
+          maybeError: clearErrorOf(samples.maybeError, "voice"),
         },
         commands: [ChangeReviewVoice({ connection, episodeId, voice, speed: validSpeed })],
       }
     },
-    SucceededChangeVoice: ({ episodeId: targetId, voice, speed: savedSpeed }) =>
-      targetId === episodeId
-        ? { model: samples, outMessage: { changedVoice: { episodeId: targetId, voice, speed: savedSpeed } } }
-        : { model: samples },
-    FailedChangeVoice: ({ episodeId: targetId, voice, failure }) =>
-      targetId === episodeId && Option.contains(samples.maybeSelectedVoice, voice)
-        ? { model: { ...samples, maybeError: Option.some(failure.message) } }
-        : { model: samples },
+    SucceededChangeVoice: ({ episodeId: targetId, voice, speed: savedSpeed }) => {
+      if (targetId !== episodeId) return { model: samples }
+      const next = nextPendingVoice(samples, connection, episodeId, validSpeed)
+      return {
+        model: {
+          ...samples,
+          maybeSavingVoice: next.maybeSavingVoice,
+          maybePendingVoice: next.maybePendingVoice,
+          maybeError: Option.contains(samples.maybeSelectedVoice, voice)
+            ? clearErrorOf(samples.maybeError, "voice")
+            : samples.maybeError,
+        },
+        commands: next.commands,
+        outMessage: { changedVoice: { episodeId: targetId, voice, speed: savedSpeed } },
+      }
+    },
+    FailedChangeVoice: ({ episodeId: targetId, voice, failure }) => {
+      if (targetId !== episodeId) return { model: samples }
+      const next = nextPendingVoice(samples, connection, episodeId, validSpeed)
+      return {
+        model: {
+          ...samples,
+          maybeSavingVoice: next.maybeSavingVoice,
+          maybePendingVoice: next.maybePendingVoice,
+          maybeError: Option.contains(samples.maybeSelectedVoice, voice)
+            ? Option.some({ source: "voice", message: failure.message })
+            : samples.maybeError,
+        },
+        commands: next.commands,
+      }
+    },
     ClickedPlaySample: ({ voice }) => {
       const sample = samples.items.find((item) => item.voice === voice)
       if (!sample || sample.state._tag !== "Ready") return { model: samples }
       return {
-        model: { ...samples, maybePlayingVoice: Option.some(voice), maybeError: Option.none() },
+        model: {
+          ...samples,
+          maybePlayingVoice: Option.some(voice),
+          maybeError: clearErrorOf(samples.maybeError, "audio"),
+        },
         commands: [PlaySampleAudio({ voice, src: connection.origin + sample.state.url })],
         outMessage: { pausePlayback: true },
       }
@@ -407,7 +537,11 @@ export const updateSamples = (
     }),
     FailedPlaySample: ({ voice, message: errorMessage }) => ({
       model: Option.contains(samples.maybePlayingVoice, voice)
-        ? { ...samples, maybePlayingVoice: Option.none(), maybeError: Option.some(errorMessage) }
+        ? {
+            ...samples,
+            maybePlayingVoice: Option.none(),
+            maybeError: Option.some({ source: "audio", message: errorMessage }),
+          }
         : samples,
     }),
   })
@@ -486,13 +620,13 @@ export const makeSampleSubscriptions = <ParentModel, ParentMessage>(
                       Queue.offerUnsafe(queue, toParent(SamplesMessage.EndedSampleAudio({ voice })))
                     }
                     const onPause = () => {
-                      if (isStoppingProgrammatically || audio.ended || activeSampleVoice === null) return
+                      if (audio.ended || activeSampleVoice === null) return
                       const voice = activeSampleVoice
                       activeSampleVoice = null
                       Queue.offerUnsafe(queue, toParent(SamplesMessage.PausedSampleAudio({ voice })))
                     }
                     const onError = () => {
-                      if (isStoppingProgrammatically || activeSampleVoice === null) return
+                      if (activeSampleVoice === null) return
                       const voice = activeSampleVoice
                       activeSampleVoice = null
                       Queue.offerUnsafe(
@@ -545,8 +679,7 @@ const sampleAction = <ParentMessage>(
             [
               h.Type("button"),
               h.AriaLabel(isPlaying ? `Pause ${option.label} sample` : `Play ${option.label} sample`),
-              h.AriaPressed(isPlaying ? "true" : "false"),
-              h.Disabled(isBusy),
+              h.Disabled(!isPlaying && isBusy),
               h.OnClick(
                 toParent(
                   isPlaying ? SamplesMessage.ClickedPauseSample() : SamplesMessage.ClickedPlaySample({ voice: option.id }),
@@ -588,7 +721,7 @@ const voiceRow = <ParentMessage>(
   })
   const genderLabel = option.gender === "female" ? "Female" : option.gender === "male" ? "Male" : null
 
-  return h.keyed("li")(
+  return h.keyed("div")(
     option.id,
     [
       h.Class(
@@ -706,9 +839,9 @@ export const voiceSamplesSection = <ParentMessage>(
       ),
       ...Option.match(samples.maybeError, {
         onNone: () => [],
-        onSome: (error) => [h.p([h.Role("alert"), h.Class("text-[13px] text-destructive")], [error])],
+        onSome: (error) => [h.p([h.Role("alert"), h.Class("text-[13px] text-destructive")], [error.message])],
       }),
-      h.ul(
+      h.div(
         [
           h.Role("radiogroup"),
           h.AriaLabel("Voice"),

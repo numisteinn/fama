@@ -109,8 +109,8 @@ describe("voice samples lifecycle in Review", () => {
       given(start),
       // Initial subscription fetch loads any existing samples (none yet).
       message(wrapSample(S.RequestedInitialFetch())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id })),
-      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, samples: [] })),
+      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 1 })),
+      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 1, samples: [] })),
       model((next) => {
         expect(next.review.view._tag === "Editing" && next.review.view.samples.hasLoaded).toBe(true)
         expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: false })
@@ -118,11 +118,15 @@ describe("voice samples lifecycle in Review", () => {
 
       // Request samples for all Icelandic voices.
       message(wrapSample(S.ClickedHearVoices())),
-      Command.expectExact(RequestSamples({ connection, episodeId: greinEpisode.id, maybeVoice: Option.none() })),
+      Command.expectExact(
+        RequestSamples({ connection, episodeId: greinEpisode.id, request: 2, maybeVoice: Option.none() }),
+      ),
       Command.resolve(
         RequestSamples,
         S.SucceededRequestSamples({
           episodeId: greinEpisode.id,
+          request: 2,
+          maybeVoice: Option.none(),
           samples: [requestedSample(bui), requestedSample(salka), requestedSample(steinn), requestedSample(ugla)],
         }),
       ),
@@ -133,11 +137,12 @@ describe("voice samples lifecycle in Review", () => {
 
       // Poll while Requested: Salka is Ready, Ugla Failed, others still Requested.
       message(wrapSample(S.TickedPoll())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id })),
+      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 3 })),
       Command.resolve(
         FetchSamples,
         S.SucceededFetchSamples({
           episodeId: greinEpisode.id,
+          request: 3,
           samples: [
             requestedSample(bui),
             readySample(salka),
@@ -150,11 +155,12 @@ describe("voice samples lifecycle in Review", () => {
 
       // Next poll: all samples settled (Ready or Failed), polling stops.
       message(wrapSample(S.TickedPoll())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id })),
+      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 4 })),
       Command.resolve(
         FetchSamples,
         S.SucceededFetchSamples({
           episodeId: greinEpisode.id,
+          request: 4,
           samples: [
             readySample(bui),
             readySample(salka),
@@ -205,11 +211,15 @@ describe("voice samples lifecycle in Review", () => {
 
       // Retry the failed Ugla sample individually.
       message(wrapSample(S.ClickedRetrySample({ voice: ugla }))),
-      Command.expectExact(RequestSamples({ connection, episodeId: greinEpisode.id, maybeVoice: Option.some(ugla) })),
+      Command.expectExact(
+        RequestSamples({ connection, episodeId: greinEpisode.id, request: 5, maybeVoice: Option.some(ugla) }),
+      ),
       Command.resolve(
         RequestSamples,
         S.SucceededRequestSamples({
           episodeId: greinEpisode.id,
+          request: 5,
+          maybeVoice: Option.some(ugla),
           samples: [readySample(bui), readySample(salka), readySample(steinn), requestedSample(ugla)],
         }),
       ),
@@ -224,7 +234,7 @@ describe("voice samples lifecycle in Review", () => {
     )
     const loaded = update(
       withMainPlaying,
-      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, samples: [readySample(salka)] })),
+      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 0, samples: [readySample(salka)] })),
     ).model
     const saved = progressAt(1000)
 
@@ -270,7 +280,7 @@ describe("voice samples lifecycle in Review", () => {
   test("sample end, play error, and leaving Review via reconcile all clean up playing state", () => {
     const loaded = update(
       openedModel(),
-      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, samples: [readySample(salka)] })),
+      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 0, samples: [readySample(salka)] })),
     ).model
     const startedElsewhere: Episode = { ...greinEpisode, job: { _tag: "Queued" } }
 
@@ -289,7 +299,7 @@ describe("voice samples lifecycle in Review", () => {
       model((next) => {
         expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(Option.none())
         expect(next.review.view._tag === "Editing" && next.review.view.samples.maybeError).toEqual(
-          Option.some("Could not play sample"),
+          Option.some({ source: "audio", message: "Could not play sample" }),
         )
       }),
 
@@ -352,11 +362,104 @@ describe("voice samples lifecycle in Review", () => {
       update,
       given(modelWithoutVoice),
       message(wrapSample(S.RequestedInitialFetch())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id }), FetchVoices({ connection })),
-      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, samples: [] })),
+      Command.expectExact(
+        FetchSamples({ connection, episodeId: greinEpisode.id, request: 1 }),
+        FetchVoices({ connection }),
+      ),
+      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 1, samples: [] })),
       Command.resolve(FetchVoices, Message.SucceededFetchVoices({ voices })),
       model((next) => expect(next.voices).toEqual(voices)),
     )
+  })
+
+  test("poll preserves voice and audio errors, drops stale responses, and skips overlapping polls", () => {
+    let state = update(
+      openedModel(),
+      wrapSample(
+        S.SucceededFetchSamples({
+          episodeId: greinEpisode.id,
+          request: 0,
+          samples: [requestedSample(bui), failedSample(ugla, "Model missing")],
+        }),
+      ),
+    ).model
+
+    // Trigger a voice save error while polling is active.
+    state = update(state, wrapSample(S.ClickedSelectVoice({ voice: salka }))).model
+    state = update(
+      state,
+      wrapSample(
+        S.FailedChangeVoice({
+          episodeId: greinEpisode.id,
+          voice: salka,
+          failure: { status: 500, message: "Save failed" },
+        }),
+      ),
+    ).model
+
+    // Poll starts (request 1); a second tick while in-flight sends no overlapping request.
+    const poll1 = update(state, wrapSample(S.TickedPoll()))
+    expect(poll1.commands).toHaveLength(1)
+    const poll2 = update(poll1.model, wrapSample(S.TickedPoll()))
+    expect(poll2.commands ?? []).toHaveLength(0)
+
+    // Retry Ugla bumps sequence to 2; the earlier poll response (request 1) arrives late and is dropped.
+    const retry = update(poll2.model, wrapSample(S.ClickedRetrySample({ voice: ugla })))
+    expect(retry.commands).toHaveLength(1)
+    const afterStalePoll = update(
+      retry.model,
+      wrapSample(
+        S.SucceededFetchSamples({
+          episodeId: greinEpisode.id,
+          request: 1,
+          samples: [readySample(bui), failedSample(ugla, "Model missing")],
+        }),
+      ),
+    ).model
+    const afterRetry = update(
+      afterStalePoll,
+      wrapSample(
+        S.SucceededRequestSamples({
+          episodeId: greinEpisode.id,
+          request: 2,
+          maybeVoice: Option.some(ugla),
+          samples: [readySample(bui), requestedSample(ugla)],
+        }),
+      ),
+    ).model
+
+    expect(afterRetry.review.view._tag === "Editing" && afterRetry.review.view.samples.items).toEqual([
+      readySample(bui),
+      requestedSample(ugla),
+    ])
+    expect(afterRetry.review.view._tag === "Editing" && afterRetry.review.view.samples.maybeError).toEqual(
+      Option.some({ source: "voice", message: "Save failed" }),
+    )
+  })
+
+  test("serializes rapid voice clicks and applies a late SucceededChangeVoice even after Back", () => {
+    // Click Salka then immediately Búi: only Salka PUT runs first; Búi waits as pending.
+    const first = update(openedModel(), wrapSample(S.ClickedSelectVoice({ voice: salka })))
+    expect(first.commands).toHaveLength(1)
+    const second = update(first.model, wrapSample(S.ClickedSelectVoice({ voice: bui })))
+    expect(second.commands ?? []).toHaveLength(0)
+
+    // When Salka finishes, Búi PUT is dispatched next.
+    const afterFirst = update(
+      second.model,
+      wrapSample(S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 })),
+    )
+    expect(afterFirst.commands).toHaveLength(1)
+
+    // User clicks Back before Búi finishes; late SucceededChangeVoice still updates the library Episode.
+    const afterBack = update(afterFirst.model, wrap(R.ClickedBack())).model
+    expect(afterBack.review.view._tag).toBe("Closed")
+    const afterLateSave = update(
+      afterBack,
+      wrapSample(S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 })),
+    ).model
+    const episode = Option.getOrThrow(afterLateSave.maybeEpisodes).find((item) => item.id === greinEpisode.id)
+    expect(episode?.voice).toBe(bui)
   })
 })
 
@@ -377,6 +480,8 @@ describe("voice samples view in Review", () => {
         RequestSamples,
         S.SucceededRequestSamples({
           episodeId: greinEpisode.id,
+          request: 1,
+          maybeVoice: Option.none(),
           samples: [
             requestedSample(bui),
             readySample(salka),
@@ -411,6 +516,8 @@ describe("voice samples view in Review", () => {
         RequestSamples,
         S.SucceededRequestSamples({
           episodeId: greinEpisode.id,
+          request: 2,
+          maybeVoice: Option.some(ugla),
           samples: [readySample(bui), readySample(salka), readySample(steinn), requestedSample(ugla)],
         }),
       ),

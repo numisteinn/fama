@@ -76,7 +76,23 @@ export const update = (model: Model, message: ReviewMessage): ReturnWithStart =>
       model.review.view._tag === "LoadFailed" ? openEpisode(model, model.review.view.episodeId) : { model },
     GotSamplesMessage: ({ message: samplesMessage }) => {
       const view = model.review.view
-      if (view._tag !== "Editing") return { model }
+      if (view._tag !== "Editing") {
+        // Apply a late voice-save response even after Back so the library Episode does not stay stale.
+        if (samplesMessage._tag === "SucceededChangeVoice") {
+          return {
+            model: modifyFields(model, {
+              maybeEpisodes: Option.map((list) =>
+                list.map((item) =>
+                  item.id === samplesMessage.episodeId && item.job._tag === "Review"
+                    ? { ...item, voice: samplesMessage.voice, speed: samplesMessage.speed }
+                    : item,
+                ),
+              ),
+            }),
+          }
+        }
+        return { model }
+      }
       const episode = episodes(model).find((item) => item.id === view.episodeId)
       const isBusy = view.save._tag === "Saving" || view.start._tag === "Starting"
       const result = updateSamples(view.samples, samplesMessage, {
