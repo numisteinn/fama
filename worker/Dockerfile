@@ -10,9 +10,10 @@ FROM python:3.12-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.11 /uv /uvx /bin/
 
-# ffmpeg encodes chapters and assembles the book. espeak-ng ships inside piper-tts and espeakng-loader.
+# ffmpeg encodes chapters and assembles the book; tesseract handles scanned PDFs (English and Icelandic).
+# espeak-ng ships inside piper-tts and espeakng-loader.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg tesseract-ocr tesseract-ocr-isl \
     && rm -rf /var/lib/apt/lists/*
 
 ENV UV_PROJECT_ENVIRONMENT=/usr/local \

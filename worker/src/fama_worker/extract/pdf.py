@@ -442,19 +442,93 @@ def _order_blocks(blocks: list[_Block], page_w: float) -> list[_Block]:
     return ordered
 
 
-def _pages(doc) -> tuple[list[list[str]], list[_Line]]:
-    pages: list[list[str]] = []
-    page_edges: list[dict[int, set[str]]] = []
+_SCAN_IMAGE_AREA_SHARE = 0.05
+
+
+def _page_has_scan_image(page) -> bool:
+    """True when a text-less page carries a raster image large enough to be a scanned page."""
+    import pypdfium2.raw as pdfium_c
+
+    page_w, page_h = page.get_size()
+    page_area = page_w * page_h
+    if page_area <= 0:
+        return False
+
+    image_area = 0.0
+    left = ctypes.c_float()
+    bottom = ctypes.c_float()
+    right = ctypes.c_float()
+    top = ctypes.c_float()
+
+    def walk(count: int, get_obj, depth: int) -> bool:
+        nonlocal image_area
+        if depth > 4:
+            return False
+        for i in range(count):
+            obj = get_obj(i)
+            kind = pdfium_c.FPDFPageObj_GetType(obj)
+            if kind == pdfium_c.FPDF_PAGEOBJ_IMAGE:
+                if pdfium_c.FPDFPageObj_GetBounds(obj, ctypes.byref(left), ctypes.byref(bottom), ctypes.byref(right), ctypes.byref(top)):
+                    w = max(0.0, right.value - left.value)
+                    h = max(0.0, top.value - bottom.value)
+                    image_area += w * h
+                    if image_area / page_area >= _SCAN_IMAGE_AREA_SHARE:
+                        return True
+            elif kind == pdfium_c.FPDF_PAGEOBJ_FORM:
+                if walk(
+                    pdfium_c.FPDFFormObj_CountObjects(obj),
+                    lambda j, obj=obj: pdfium_c.FPDFFormObj_GetObject(obj, j),
+                    depth + 1,
+                ):
+                    return True
+        return False
+
+    return walk(
+        pdfium_c.FPDFPage_CountObjects(page.raw),
+        lambda i: pdfium_c.FPDFPage_GetObject(page.raw, i),
+        0,
+    )
+
+
+def _pages(doc) -> tuple[list[list[str]], list[_Line], str | None]:
+    raw_pages: list[list[tuple[_Block, str]]] = []
     first_page_lines: list[_Line] = []
+    scan_indices: list[int] = []
     for idx in range(len(doc)):
         page = doc[idx]
         try:
             page_w, lines = _extract_lines(page)
+            has_scan = not lines and _page_has_scan_image(page)
         finally:
             page.close()
         if idx == 0:
             first_page_lines = lines
+        if has_scan:
+            scan_indices.append(idx)
+            raw_pages.append([])
+            continue
         blocks = [(block, text) for block in _order_blocks(_group_blocks(lines), page_w) if (text := _block_text(block.lines))]
+        raw_pages.append(blocks)
+
+    ocr_title: str | None = None
+    # OCR scanned pages (including scanned pages inside hybrid PDFs). If the whole document
+    # still has no embedded text at all (e.g. vector scan or blank scan), fall back to OCRing all pages.
+    if not scan_indices and not any(raw_pages):
+        scan_indices = list(range(len(doc)))
+
+    if scan_indices:
+        from fama_worker.extract import ocr
+
+        ocr_by_page, ocr_title = ocr.ocr_pages(doc, scan_indices)
+        for idx, ocr_blocks in ocr_by_page.items():
+            raw_pages[idx] = [
+                (_Block(x0=b.x0, y0=b.y0, x1=b.x1, y1=b.y1, lines=()), b.text)
+                for b in ocr_blocks
+            ]
+
+    pages: list[list[str]] = []
+    page_edges: list[dict[int, set[str]]] = []
+    for blocks in raw_pages:
         texts = [text for _, text in blocks]
         pages.append(texts)
         page_edges.append(_edge_keys([block for block, _ in blocks], texts))
@@ -472,7 +546,7 @@ def _pages(doc) -> tuple[list[list[str]], list[_Line]]:
         [text for i, text in enumerate(texts) if keep(text, edge.get(i)) and _prose(text)]
         for texts, edge in zip(pages, page_edges)
     ]
-    return cleaned, first_page_lines
+    return cleaned, first_page_lines, ocr_title
 
 
 def _paragraphs(pages: list[list[str]]) -> list[Paragraph]:
@@ -537,16 +611,10 @@ def extract_pdf(path: Path) -> Document:
 
     doc = pdfium.PdfDocument(path)
     try:
-        pages, first_page_lines = _pages(doc)
+        pages, first_page_lines, ocr_title = _pages(doc)
         paragraphs = _paragraphs(pages)
         entries = _toc_entries(doc)
         meta = doc.get_metadata_dict()
-        ocr_title = None
-        if not "".join(p.text for p in paragraphs).strip():
-            from fama_worker.extract import ocr
-
-            pages, ocr_title = ocr.extract_scanned_pages(doc)
-            paragraphs = _paragraphs(pages)
         title = _title(meta, first_page_lines, path, ocr_title)
         author = (meta.get("Author") or "").strip() or None
     finally:

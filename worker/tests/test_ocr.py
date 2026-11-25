@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,7 @@ from reportlab.pdfgen import canvas
 
 from fama_worker.extract import extract
 from fama_worker.extract import ocr as ocr_mod
-from fama_worker.extract.ocr import _Block, _Line, _drop_running, _group_blocks
+from fama_worker.extract.ocr import _Line, _group_blocks, _parse_tsv, _title_hint
 from fama_worker.model import FileSource
 
 _FONT_CANDIDATES = [
@@ -28,60 +29,149 @@ def _find_font() -> str | None:
 
 _FONT = _find_font()
 _HAVE_OCR = ocr_mod._tesseract_available() or ocr_mod._vision_available()
-_HAVE_TESSERACT = ocr_mod._tesseract_available()
+_TESS_EXE = shutil.which("tesseract")
+_HAVE_TESSERACT_ISL = _TESS_EXE is not None and "isl" in ocr_mod._tesseract_languages(_TESS_EXE)
+_HAVE_VISION = ocr_mod._vision_available()
 
 _needs_font = pytest.mark.skipif(_FONT is None, reason="no font with Icelandic glyphs on this machine")
 _needs_ocr = pytest.mark.skipif(not _HAVE_OCR, reason="no OCR backend (tesseract or Apple Vision) on this machine")
-_needs_tesseract = pytest.mark.skipif(not _HAVE_TESSERACT, reason="tesseract not installed")
+_needs_tesseract_isl = pytest.mark.skipif(not _HAVE_TESSERACT_ISL, reason="tesseract with isl traineddata not installed")
+_needs_vision = pytest.mark.skipif(not _HAVE_VISION, reason="Apple Vision not available on this machine")
 
 
-def _render_page(lines: list[str], font_size: int = 42) -> Image.Image:
+def _render_page(blocks: list[list[str]], font_size: int = 38) -> Image.Image:
+    """Render one or more paragraphs separated by clear blank gaps."""
     font = ImageFont.truetype(_FONT, font_size)
-    width = max(int(font.getlength(line)) for line in lines) + 120
-    line_height = int(font_size * 1.7)
-    image = Image.new("RGB", (width, 120 + line_height * len(lines)), "white")
+    all_lines = [line for block in blocks for line in block]
+    width = max(int(font.getlength(line)) for line in all_lines) + 160
+    line_height = int(font_size * 1.45)
+    para_gap = int(font_size * 2.2)
+    height = 160 + sum(len(block) * line_height for block in blocks) + max(0, len(blocks) - 1) * para_gap
+    image = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(image)
-    y = 60
-    for line in lines:
-        draw.text((60, y), line, font=font, fill="black")
-        y += line_height
+    y = 80
+    for b_idx, block in enumerate(blocks):
+        if b_idx > 0:
+            y += para_gap
+        for line in block:
+            draw.text((80, y), line, font=font, fill="black")
+            y += line_height
     return image
 
 
-def _scanned_pdf(path: Path, pages: list[list[str]]) -> Path:
+def _draw_scanned_page(doc: canvas.Canvas, png: Path, blocks: list[list[str]]) -> None:
+    width, height = A4
+    image = _render_page(blocks)
+    image.save(png)
+    scale = min(width / image.width, height / image.height) * 0.88
+    doc.drawImage(str(png), 40, height - 40 - image.height * scale, width=image.width * scale, height=image.height * scale)
+    doc.showPage()
+    png.unlink()
+
+
+def _scanned_pdf(path: Path, pages: list[list[list[str]]]) -> Path:
     """An image-only PDF: each page is a rendered raster with no text layer."""
     doc = canvas.Canvas(str(path), pagesize=A4)
-    width, height = A4
-    for lines in pages:
-        image = _render_page(lines)
-        png = path.with_name(path.stem + "-page.png")
-        image.save(png)
-        scale = min(width / image.width, height / image.height) * 0.9
-        doc.drawImage(str(png), 40, height - 40 - image.height * scale, width=image.width * scale, height=image.height * scale)
-        doc.showPage()
-        png.unlink()
+    for page_blocks in pages:
+        _draw_scanned_page(doc, path.with_name(path.stem + "-page.png"), page_blocks)
     doc.save()
     return path
 
 
+def test_parse_tsv_keeps_multi_block_pages_separate():
+    """Tesseract restarts par_num per block_num; _parse_tsv must key by (block_num, par_num, line_num)."""
+    tsv = "\n".join(
+        [
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+            "5\t1\t1\t1\t1\t1\t50\t20\t40\t20\t95\tThe",
+            "5\t1\t1\t1\t1\t2\t100\t20\t50\t20\t95\tHeader",
+            "5\t1\t2\t1\t1\t1\t50\t100\t80\t20\t95\tFirst",
+            "5\t1\t2\t1\t1\t2\t140\t100\t90\t20\t95\tparagraph.",
+            "5\t1\t3\t1\t1\t1\t50\t220\t80\t20\t95\tSecond",
+            "5\t1\t3\t1\t1\t2\t140\t220\t90\t20\t95\tparagraph.",
+        ]
+    )
+    lines = _parse_tsv(tsv)
+    assert [line.text for line in lines] == ["The Header", "First paragraph.", "Second paragraph."]
+    blocks = _group_blocks(lines)
+    assert [b.text for b in blocks] == ["The Header", "First paragraph.", "Second paragraph."]
+
+
+def test_parse_tsv_raises_on_non_tsv_output():
+    with pytest.raises(ValueError, match="TSV"):
+        _parse_tsv("not a tsv header")
+
+
 @_needs_font
 @_needs_ocr
-def test_scanned_english_pdf_is_ocrd(tmp_path):
-    path = _scanned_pdf(tmp_path / "scan.pdf", [["The harbour master reads the tide tables every morning."]])
+def test_scanned_multi_paragraph_english_pdf_is_ocrd_in_order(tmp_path):
+    pages = [
+        [
+            ["The City Book"],
+            ["The harbour master reads the tide tables", "every morning before the boats leave."],
+            ["In winter the ice comes down from the north", "and the boats stay tied to the quay."],
+            ["1"],
+        ]
+    ]
+    path = _scanned_pdf(tmp_path / "harbour_scan.pdf", pages)
+    document = extract(FileSource(path))
+    text = document.chapters[0].text
+    assert "The harbour master reads the tide tables" in text
+    assert "In winter the ice comes down from the north" in text
+    assert text.index("harbour master") < text.index("In winter")
+
+
+@_needs_font
+@_needs_tesseract_isl
+def test_scanned_icelandic_pdf_keeps_diacritics(tmp_path):
+    path = _scanned_pdf(tmp_path / "scan_is.pdf", [[["Þingvellir liggja við Öxará og Þjórsá."]]])
+    document = extract(FileSource(path))
+    text = document.chapters[0].text
+    assert "Þingvellir" in text and "við" in text and "Öxará" in text
+
+
+@_needs_font
+@_needs_vision
+def test_vision_backend_reads_english_scan(tmp_path, monkeypatch):
+    monkeypatch.setattr(ocr_mod, "_tesseract_available", lambda: False)
+    path = _scanned_pdf(tmp_path / "vision_scan.pdf", [[["The harbour master reads the tide tables every morning."]]])
     document = extract(FileSource(path))
     text = document.chapters[0].text.lower()
     assert "harbour" in text and "tide tables" in text
 
 
 @_needs_font
-@_needs_tesseract
-def test_scanned_icelandic_pdf_keeps_diacritics(tmp_path):
-    # Apple Vision does not read Icelandic (it mangles þ/ð/æ/ö), so this proves
-    # the tesseract path that Fama needs for Icelandic scans.
-    path = _scanned_pdf(tmp_path / "scan.pdf", [["Þingvellir liggja við Öxará og Þjórsá."]])
+@_needs_ocr
+def test_hybrid_pdf_ocrs_scanned_pages_and_keeps_text_pages(tmp_path):
+    """A text cover page followed by a scanned page must extract both."""
+    path = tmp_path / "hybrid.pdf"
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.setFont("Helvetica", 16)
+    doc.drawString(72, 720, "Cover page scanned at the library.")
+    doc.showPage()
+    _draw_scanned_page(doc, path.with_name("hybrid-page.png"), [["The boats sail out at dawn across the calm bay."]])
+    doc.save()
+
     document = extract(FileSource(path))
     text = document.chapters[0].text
-    assert "Þingvellir" in text and "við" in text and "Öxará" in text
+    assert "Cover page scanned at the library" in text
+    assert "boats sail out at dawn" in text
+
+
+def test_text_pdf_never_invokes_ocr(tmp_path, monkeypatch):
+    path = tmp_path / "normal.pdf"
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    doc.setFont("Helvetica", 12)
+    doc.drawString(72, 720, "Normal embedded text PDF should never call OCR.")
+    doc.showPage()
+    doc.save()
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("OCR should not run on a normal text PDF")
+
+    monkeypatch.setattr(ocr_mod, "ocr_pages", boom)
+    document = extract(FileSource(path))
+    assert "Normal embedded text PDF" in document.chapters[0].text
 
 
 def test_paragraph_lines_join_and_dehyphenate():
@@ -89,35 +179,42 @@ def test_paragraph_lines_join_and_dehyphenate():
         _Line("The harbour grew over the cen-", 40, 40, 400, 62),
         _Line("turies into a capital city.", 40, 66, 400, 88),
     ]
-    blocks = _group_blocks(lines)
+    blocks = _group_blocks(lines, page_w=600)
     assert len(blocks) == 1
     assert blocks[0].text == "The harbour grew over the centuries into a capital city."
 
 
-def test_paragraphs_split_on_a_large_vertical_gap():
+def test_two_column_vision_lines_do_not_interleave():
     lines = [
-        _Line("First paragraph ends here.", 40, 40, 400, 62),
-        _Line("A second paragraph starts far below.", 40, 200, 400, 222),
+        _Line("Left column line one.", 40, 100, 260, 122),
+        _Line("Right column line one.", 340, 100, 560, 122),
+        _Line("Left column line two.", 40, 128, 260, 150),
+        _Line("Right column line two.", 340, 128, 560, 150),
     ]
-    assert len(_group_blocks(lines)) == 2
-
-
-def test_drop_running_headers_footers_and_page_numbers():
-    body = "The harbour accounts close at the end of the year and the town council reads them."
-    pages = [
-        [
-            _Block("The City Book", 0, 0, 200, 24),
-            _Block(body, 0, 60, 500, 84),
-            _Block(str(number), 300, 820, 320, 844),
-        ]
-        for number in range(1, 7)
+    blocks = _group_blocks(lines, page_w=600)
+    assert [b.text for b in blocks] == [
+        "Left column line one. Left column line two.",
+        "Right column line one. Right column line two.",
     ]
-    kept = _drop_running(pages)
-    assert all(len(page) == 1 for page in kept)
-    assert all(page[0].text == body for page in kept)
 
 
-def test_scanned_pdf_without_backend_raises_install_hint(tmp_path, monkeypatch):
+def test_title_hint_requires_clear_heading_height():
+    body_only = [
+        _Line("First body line.", 40, 40, 400, 62),
+        _Line("Second body line slightly taller.", 40, 70, 400, 94),
+        _Line("Third body line.", 40, 100, 400, 122),
+    ]
+    assert _title_hint(body_only) is None
+
+    with_heading = [
+        _Line("Harbour Notes", 40, 40, 400, 88),
+        _Line("First body line.", 40, 110, 400, 132),
+        _Line("Second body line.", 40, 140, 400, 162),
+    ]
+    assert _title_hint(with_heading) == "Harbour Notes"
+
+
+def test_scanned_pdf_without_backend_raises_clear_error(tmp_path, monkeypatch):
     path = tmp_path / "scan.pdf"
     doc = canvas.Canvas(str(path), pagesize=A4)
     doc.rect(72, 72, 200, 200)
