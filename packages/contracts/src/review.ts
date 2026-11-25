@@ -1,11 +1,17 @@
 import { Schema } from "effect"
 import { Document } from "./document.ts"
+import { ChangeVoice } from "./stale.ts"
 
 /**
  * Body of `POST /api/episodes/:id/start`: the Document to narrate. It has only the chapters the user kept, with
- * their corrections, in playback order. Start selects those exact bytes when it queues narration.
+ * their corrections, in playback order. Optional `voice` and `speed` apply a choice made in Review atomically with
+ * queuing narration. Start selects those exact bytes when it queues narration.
  */
-export const StartReview = Schema.Struct({ document: Document })
+export const StartReview = Schema.Struct({
+  document: Document,
+  voice: Schema.optionalKey(ChangeVoice.fields.voice),
+  speed: Schema.optionalKey(ChangeVoice.fields.speed),
+})
 export interface StartReview extends Schema.Schema.Type<typeof StartReview> {}
 
 /**

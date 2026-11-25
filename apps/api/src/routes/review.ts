@@ -55,8 +55,8 @@ export const reviewRoutes = HttpRouter.addAll([
       Effect.gen(function* () {
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         const { voice, speed } = yield* HttpServerRequest.schemaBodyJson(ChangeVoice)
-        const { finishedAt } = yield* (yield* EpisodeRepo).changeVoice(userId, id, voice, speed)
-        yield* wakeNarration(userId, id, finishedAt)
+        const result = yield* (yield* EpisodeRepo).changeVoice(userId, id, voice, speed)
+        if (result.queued) yield* wakeNarration(userId, id, result.finishedAt)
         return noContent
       }),
     ),
@@ -69,8 +69,11 @@ export const reviewRoutes = HttpRouter.addAll([
         const { id } = yield* HttpRouter.schemaPathParams(IdParams)
         const repo = yield* EpisodeRepo
         yield* repo.inReview(userId, id)
-        const { document } = yield* HttpServerRequest.schemaBodyJson(StartReview)
-        yield* repo.start(userId, id, yield* stageDocument(userId, id, document))
+        const { document, voice, speed } = yield* HttpServerRequest.schemaBodyJson(StartReview)
+        yield* repo.start(userId, id, yield* stageDocument(userId, id, document), {
+          ...(voice !== undefined ? { voice } : {}),
+          ...(speed !== undefined ? { speed } : {}),
+        })
         const episode = yield* repo.get(userId, id)
         yield* (yield* Wake).wake
         return json(episode)

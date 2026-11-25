@@ -210,11 +210,12 @@ export interface Interface {
   ) => Effect.Effect<{ readonly queued: boolean; readonly finishedAt: string | null }, EpisodeNotFound | Job.NotEditable | Failure>
   readonly changeVoice: (
     userId: UserId, id: string, voice: VoiceRef, speed: number,
-  ) => Effect.Effect<{ readonly finishedAt: string | null }, EpisodeNotFound | Job.NotEditable | Failure>
+  ) => Effect.Effect<{ readonly queued: boolean; readonly finishedAt: string | null }, EpisodeNotFound | Job.NotEditable | Failure>
   readonly start: (
     userId: UserId,
     id: string,
     document: StoredDocument,
+    options?: { readonly voice?: VoiceRef; readonly speed?: number },
   ) => Effect.Effect<void, EpisodeNotFound | Job.NotInReview | Failure>
   readonly claim: (
     workerId: WorkerId,
@@ -483,12 +484,26 @@ export const layer = Layer.effect(
     const changeVoice = Effect.fn("EpisodeRepo.changeVoice")(function* (
       userId: UserId, id: string, voice: VoiceRef, speed: number,
     ) {
-      const { row } = yield* transition(id, Job.narrateAgain, { voice, speed }, userId)
-      return { finishedAt: row.finished_at }
+      const { row, job } = yield* transition(id, Job.editDocument, { voice, speed }, userId)
+      return { queued: job._tag === "Queued", finishedAt: row.finished_at }
     })
 
-    const start = Effect.fn("EpisodeRepo.start")(function* (userId: UserId, id: string, document: StoredDocument) {
-      yield* transition(id, Job.start, documentColumns(document), userId)
+    const start = Effect.fn("EpisodeRepo.start")(function* (
+      userId: UserId,
+      id: string,
+      document: StoredDocument,
+      options?: { readonly voice?: VoiceRef; readonly speed?: number },
+    ) {
+      yield* transition(
+        id,
+        Job.start,
+        {
+          ...documentColumns(document),
+          ...(options?.voice !== undefined ? { voice: options.voice } : {}),
+          ...(options?.speed !== undefined ? { speed: options.speed } : {}),
+        },
+        userId,
+      )
     })
 
     /** Whether `lease` is the token of the row's current claim. */

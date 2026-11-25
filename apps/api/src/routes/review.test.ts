@@ -133,6 +133,31 @@ it("keeps the winning Document when a second start was already writing to R2", a
   }
 })
 
+it("lets the owner change voice in Review without queuing and override voice or speed at Start", async () => {
+  const job = await review()
+  const path = episodePath(job.episodeId)
+  expect((await app.alice("PUT", `${path}/voice`, { json: { voice: "kokoro:af_bella", speed: 1.15 } })).status).toBe(204)
+  expect(await (await app.alice("GET", path)).json()).toMatchObject({
+    voice: "kokoro:af_bella",
+    speed: 1.15,
+    job: { _tag: "Review" },
+  })
+  expect((await claim()).status).toBe(204)
+
+  const started = await app.alice("POST", `${path}/start`, {
+    json: { document: kept, voice: "kokoro:am_adam", speed: 1.25 },
+  })
+  expect(started.status).toBe(200)
+  expect(await started.json()).toMatchObject({
+    voice: "kokoro:am_adam",
+    speed: 1.25,
+    job: { _tag: "Queued" },
+  })
+  const next = await take()
+  expect(next.voice).toBe("kokoro:am_adam")
+  expect(next.speed).toBe(1.25)
+})
+
 it("deletes a Review episode and its Document with no remaining work", async () => {
   const job = await review()
   const path = episodePath(job.episodeId)
