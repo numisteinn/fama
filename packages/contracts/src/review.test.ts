@@ -21,8 +21,11 @@ describe("CreateEpisode", () => {
 describe("StartReview", () => {
   const decode = Schema.decodeUnknownResult(StartReview)
 
-  test("takes the Document to narrate", () => {
+  test("takes the Document to narrate, with optional voice and speed", () => {
     expect(decode({ document })._tag).toBe("Success")
+    expect(decode({ document, voice: "piper:is_IS-salka-medium", speed: 1.1 })._tag).toBe("Success")
+    expect(decode({ document, voice: "invalid" })._tag).toBe("Failure")
+    expect(decode({ document, speed: 0 })._tag).toBe("Failure")
   })
 
   test("refuses a Document with no chapter left", () => {

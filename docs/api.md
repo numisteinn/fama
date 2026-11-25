@@ -35,8 +35,8 @@ Every episode has one owner, a user. There are three credentials, and each opens
 | `PUT /api/episodes/:id/progress` | `EpisodeProgress` `{ positionMs, updatedAt }` | `200 EpisodeProgress`, the stored value after the write |
 | `GET /api/episodes/:id/document` | | `Document`, or `404` (`NotStored`) until the worker has stored it |
 | `PUT /api/episodes/:id/document` | `Document` | `204` in `Review`, `Ready` or `Failed`. `409` (`NotEditable`) in `Queued` or `Running` |
-| `PUT /api/episodes/:id/voice` | `ChangeVoice` `{ voice, speed }` | `204` after queuing a `Ready` or `Failed` Job. `409` (`NotEditable`) in other states |
-| `POST /api/episodes/:id/start` | `StartReview` `{ document: Document }` | `200 Episode` after queuing narration, `409` (`NotInReview`) in other states |
+| `PUT /api/episodes/:id/voice` | `ChangeVoice` `{ voice, speed }` | `204` in `Review`, `Ready` or `Failed` (queues narration in `Ready` or `Failed`, stays in `Review` while in `Review`). `409` (`NotEditable`) in `Queued` or `Running` |
+| `POST /api/episodes/:id/start` | `StartReview` `{ document: Document, voice?, speed? }` | `200 Episode` after queuing narration, `409` (`NotInReview`) in other states |
 | `GET /api/episodes/:id/samples` | | `200 SampleList` for the owner's Episode, or `404` |
 | `POST /api/episodes/:id/samples` | Optional `SamplesRequest` `{ voices }` | `200 SampleList`, or `404` when the Episode or Document is missing |
 | `GET /api/voices` | | `{ voices: Voice[] }` from workers seen in the last 30 days |
@@ -77,7 +77,8 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 - The `review` flag is available for every Source and defaults to `false`. JSON requests take a boolean. Multipart requests take the text `true` or `false`.
 - With Review on, the worker stores the Document and the extracted title, author, language and voice before the job stops in `Review`. There is no active lease, audio chapter or book file at that point.
 - Only the owner can edit the Document or start narration. Another user's episode gets `404`. Both writes need a Document with at least one chapter or they return `400`.
-- For Start, send the full Document with the edits and only the kept chapters, in playback order. The API selects that Document and queues the job in the same update. The worker reads it on the next claim and indexes the kept chapters from zero.
+- For Start, send the full Document with the edits and only the kept chapters, in playback order, plus optional `voice` and `speed` to apply a choice made in Review. The API selects that Document (and voice/speed if given) and queues the job in the same update. The worker reads it on the next claim and indexes the kept chapters from zero.
+- While in `Review`, `PUT /api/episodes/:id/voice` also updates the Episode's `voice` and `speed` without queuing narration or waking a worker.
 - A repeated Start gets `409` and leaves the selected Document in place. Retry changes `Failed` to `Queued`, succeeds without a state change in `Queued`, and gets `409` in `Review`, `Running` or `Ready`. Delete works in every state.
 
 ## Narrate again
