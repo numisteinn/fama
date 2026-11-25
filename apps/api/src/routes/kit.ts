@@ -3,6 +3,7 @@ import { EpisodeId, UploadQuery } from "@fama/contracts"
 import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { clientUser, requireWorker, type User } from "../auth.ts"
+import { MediaStore } from "../media-store.ts"
 
 export class BadRequest extends Schema.TaggedError<BadRequest>()("BadRequest", { message: Schema.String }) {}
 export class TooLarge extends Schema.TaggedError<TooLarge>()("TooLarge", {}) {}
@@ -18,6 +19,7 @@ const statusOf: Record<string, number> = {
   NotStored: 404,
   TooLarge: 413,
   LeaseLost: 409,
+  NotEditable: 409,
   NotInReview: 409,
   NotRetryable: 409,
 }
@@ -62,4 +64,10 @@ export const uploadRequest = Effect.gen(function* () {
   if (length > MAX_UPLOAD_BYTES) return yield* new TooLarge()
   if (request.body === null) return yield* new BadRequest({ message: "Body required" })
   return { body: request.body, headers: request.headers }
+})
+
+/** Reads a raw upload body into R2. Needs `Content-Length`, because R2 stores only bodies of known length. */
+export const putBody = Effect.fn("http.putBody")(function* (key: string, fallbackType: string) {
+  const { body, headers } = yield* uploadRequest
+  return yield* (yield* MediaStore).put(key, body, headers.get("content-type") ?? fallbackType)
 })

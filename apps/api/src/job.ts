@@ -21,6 +21,10 @@ export class NotInReview extends Schema.TaggedError<NotInReview>()("NotInReview"
   state: Schema.String,
 }) {}
 
+export class NotEditable extends Schema.TaggedError<NotEditable>()("NotEditable", {
+  state: Schema.String,
+}) {}
+
 const iso = (now: number) => new Date(now).toISOString()
 
 export const leaseExpired = (heartbeatAt: string, now: number) =>
@@ -122,8 +126,8 @@ export const retry = (state: JobState): Result.Result<JobState, NotRetryable> =>
   }
 }
 
-/** The user can change the Document only while the job waits in `Review`: later, a worker narrates from it. */
-export const editDocument = (state: JobState): Result.Result<JobState, NotInReview> =>
+/** Guards actions that only work in Review. */
+export const inReview = (state: JobState): Result.Result<JobState, NotInReview> =>
   state._tag === "Review" ? Result.succeed(state) : Result.fail(new NotInReview({ state: state._tag }))
 
 /**
@@ -131,4 +135,15 @@ export const editDocument = (state: JobState): Result.Result<JobState, NotInRevi
  * refused and cannot change the Document under a worker.
  */
 export const start = (state: JobState): Result.Result<JobState, NotInReview> =>
-  Result.map(editDocument(state), () => JobState.cases.Queued.make({}))
+  Result.map(inReview(state), () => JobState.cases.Queued.make({}))
+
+
+/** A text or Voice change after an attempt needs a new claim. */
+export const narrateAgain = (state: JobState): Result.Result<JobState, NotEditable> =>
+  state._tag === "Ready" || state._tag === "Failed"
+    ? Result.succeed(JobState.cases.Queued.make({}))
+    : Result.fail(new NotEditable({ state: state._tag }))
+
+/** Review still lets the User save a Document without starting the Job. */
+export const editDocument = (state: JobState): Result.Result<JobState, NotEditable> =>
+  state._tag === "Review" ? Result.succeed(state) : narrateAgain(state)

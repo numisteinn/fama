@@ -41,7 +41,7 @@ describe("ClaimResponse", () => {
     coverPath: null,
     voice: null,
     speed: 1,
-    completedChapters: [],
+    chapters: [],
   }
   const sample = {
     _tag: "Sample",

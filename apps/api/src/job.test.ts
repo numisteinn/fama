@@ -178,7 +178,7 @@ describe("editDocument", () => {
   })
 
   it.each([queued, runningFor(a, t0), ready, failed])("refuses a $_tag job", (state) => {
-    expect(rejection(Job.editDocument(state))).toMatchObject({ _tag: "NotInReview", state: state._tag })
+    expect(rejection(Job.inReview(state))).toMatchObject({ _tag: "NotInReview", state: state._tag })
   })
 })
 

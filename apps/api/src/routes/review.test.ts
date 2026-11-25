@@ -97,7 +97,7 @@ it("lets the owner edit and start with the kept chapters in their new order", as
 
   const next = await take()
   expect(next.leaseToken).not.toBe(job.leaseToken)
-  expect(next.completedChapters).toEqual([])
+  expect(next.chapters).toEqual([])
   expect(next.documentPath).toBe(`/api/worker/jobs/${job.episodeId}/document`)
   const stored = await app.asWorker("GET", `${next.documentPath}?leaseToken=${next.leaseToken}`)
   expect(await stored.json()).toEqual(kept)
