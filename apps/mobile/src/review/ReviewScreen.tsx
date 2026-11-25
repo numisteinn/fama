@@ -1,13 +1,14 @@
-import type { Document } from "@fama/contracts"
+import type { Document, VoiceRef } from "@fama/contracts"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, ScrollView, StyleSheet, Text, TextInput, View } from "react-native"
 import { SafeAreaView } from "react-native-safe-area-context"
 import { Button, Icon, Tap } from "../components/ui"
 import type { Api } from "../lib/api"
-import { useLibrary } from "../lib/library"
+import { useEpisode, useLibrary } from "../lib/library"
 import { useSettings } from "../lib/settings"
 import { colors, fonts, radius, space } from "../theme"
+import { Samples } from "./Samples"
 import { editText, removeHeader, repeatedHeader, reviewDocument, startDocument, toggleChapter, type Review } from "./state"
 
 export default function ReviewScreen() {
@@ -19,6 +20,10 @@ export default function ReviewScreen() {
 function ReviewEpisode({ id, api }: { id: string; api: Api }) {
   const router = useRouter()
   const library = useLibrary()
+  const episode = useEpisode(id)
+  // The voice the user picked by ear. Undefined until then: the episode's own voice applies.
+  const [picked, setPicked] = useState<VoiceRef | null | undefined>(undefined)
+  const selected = picked !== undefined ? picked : episode?.voice ?? null
   const [review, setReview] = useState<Review | null>(null)
   const [error, setError] = useState("")
   const [attempt, setAttempt] = useState(0)
@@ -60,7 +65,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
   const start = () => run("starting", async () => {
     const doc = startDocument(review)
     if (!doc) return
-    await library.start(id, doc)
+    await library.start(id, doc, selected)
     router.dismissTo("/library")
   })
   const remove = () => Alert.alert("Delete episode?", review.edited.title, [
@@ -99,6 +104,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
         </View>
       }}
       ListFooterComponent={<View style={styles.section}>
+        <Samples id={id} api={api} selected={selected} onSelect={setPicked} />
         <Button title={`Start · ${count} ${count === 1 ? "chapter" : "chapters"}`} disabled={busy || count === 0} busy={review.operation === "starting"} onPress={start} />
         <Button variant="danger" title="Delete" disabled={busy} onPress={remove} />
       </View>}

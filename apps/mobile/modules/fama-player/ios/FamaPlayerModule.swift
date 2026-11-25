@@ -32,10 +32,15 @@ public class FamaPlayerModule: Module {
     self?.sendEvent("onStatus", status)
   }
 
+  // The sample clips of Review. Kept apart from the episode: it changes no Now Playing info.
+  private lazy var samplePlayer: SamplePlayer = SamplePlayer { [weak self] status in
+    self?.sendEvent("onSampleStatus", status)
+  }
+
   public func definition() -> ModuleDefinition {
     Name("FamaPlayer")
 
-    Events("onStatus")
+    Events("onStatus", "onSampleStatus")
 
     AsyncFunction("load") { (record: LoadRecord) in
       let info = EpisodeInfo(
@@ -62,6 +67,15 @@ public class FamaPlayerModule: Module {
     AsyncFunction("setStatusInterval") { (seconds: Double) in self.player.setStatusInterval(seconds) }.runOnQueue(.main)
     AsyncFunction("unload") { self.player.unload() }.runOnQueue(.main)
     AsyncFunction("getStatus") { () -> [String: Any] in self.player.status }.runOnQueue(.main)
+
+    // A sample clip. Narration pauses for it, like it does for a navigation prompt.
+    AsyncFunction("playSample") { (url: String) in
+      guard let clip = URL(string: url) else { return }
+      self.player.pause()
+      self.samplePlayer.play(clip)
+    }.runOnQueue(.main)
+    AsyncFunction("pauseSample") { self.samplePlayer.pause() }.runOnQueue(.main)
+    AsyncFunction("stopSample") { self.samplePlayer.stop() }.runOnQueue(.main)
 
     View(RouteButtonView.self) {
       Prop("tint") { (view: RouteButtonView, color: UIColor) in
