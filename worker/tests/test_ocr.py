@@ -102,6 +102,52 @@ def test_parse_tsv_raises_on_non_tsv_output():
         _parse_tsv("not a tsv header")
 
 
+def test_parse_tsv_drops_low_confidence_photo_noise():
+    tsv = "\n".join(
+        [
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext",
+            "5\t1\t1\t1\t1\t1\t50\t20\t40\t20\t28\tA",
+            "5\t1\t1\t1\t1\t2\t100\t20\t50\t20\t31\tMare",
+            "5\t1\t1\t1\t1\t3\t160\t20\t30\t20\t35\tee",
+        ]
+    )
+    assert _parse_tsv(tsv) == []
+
+
+def test_text_pdf_with_photo_plate_skips_noise_and_succeeds_without_ocr_backend(tmp_path, monkeypatch):
+    """A text PDF with an image-only photo page must not narrate noise or fail when no OCR backend exists."""
+    path = tmp_path / "photo_book.pdf"
+    photo = tmp_path / "plate.png"
+    # Synthetic noisy texture image resembling a photo/illustration plate with no text.
+    img = Image.new("RGB", (600, 800), (40, 80, 120))
+    draw = ImageDraw.Draw(img)
+    for y in range(0, 800, 17):
+        draw.line((0, y, 600, (y * 3) % 800), fill=((y * 5) % 255, (y * 7) % 255, 180), width=4)
+    img.save(photo)
+
+    doc = canvas.Canvas(str(path), pagesize=A4)
+    w, h = A4
+    doc.drawImage(str(photo), 40, 40, width=w - 80, height=h - 80)
+    doc.showPage()
+    doc.setFont("Helvetica", 12)
+    doc.drawString(72, 720, "Chapter one begins cleanly after the cover plate.")
+    doc.showPage()
+    doc.save()
+
+    # With real OCR enabled (if present), low-confidence photo noise must still be dropped.
+    if _HAVE_OCR:
+        extracted_with_ocr = extract(FileSource(path))
+        assert extracted_with_ocr.chapters[0].text == "Chapter one begins cleanly after the cover plate."
+        assert extracted_with_ocr.title == "photo book"
+
+    # Without any OCR engine, the text PDF must still succeed using its embedded text.
+    monkeypatch.setattr(ocr_mod, "_tesseract_available", lambda: False)
+    monkeypatch.setattr(ocr_mod, "_vision_available", lambda: False)
+    extracted = extract(FileSource(path))
+    assert extracted.chapters[0].text == "Chapter one begins cleanly after the cover plate."
+    assert extracted.title == "photo book"
+
+
 @_needs_font
 @_needs_ocr
 def test_scanned_multi_paragraph_english_pdf_is_ocrd_in_order(tmp_path):

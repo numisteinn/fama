@@ -511,15 +511,16 @@ def _pages(doc) -> tuple[list[list[str]], list[_Line], str | None]:
         raw_pages.append(blocks)
 
     ocr_title: str | None = None
+    has_embedded_text = any(raw_pages)
     # OCR scanned pages (including scanned pages inside hybrid PDFs). If the whole document
     # still has no embedded text at all (e.g. vector scan or blank scan), fall back to OCRing all pages.
-    if not scan_indices and not any(raw_pages):
+    if not scan_indices and not has_embedded_text:
         scan_indices = list(range(len(doc)))
 
     if scan_indices:
         from fama_worker.extract import ocr
 
-        ocr_by_page, ocr_title = ocr.ocr_pages(doc, scan_indices)
+        ocr_by_page, ocr_title = ocr.ocr_pages(doc, scan_indices, strict=not has_embedded_text)
         for idx, ocr_blocks in ocr_by_page.items():
             raw_pages[idx] = [
                 (_Block(x0=b.x0, y0=b.y0, x1=b.x1, y1=b.y1, lines=()), b.text)

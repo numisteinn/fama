@@ -86,5 +86,5 @@ PY
 ## Gotchas
 
 - Apple Vision does not support Icelandic (33 languages, no `is`) and mangles `þ`/`ð`. The worker therefore prefers `tesseract` (`isl+eng`) whenever installed, and falls back to Apple Vision on macOS.
-- Normal text PDFs never invoke OCR; per-page OCR only runs on text-less pages with a raster scan image (or if the entire PDF has no embedded text).
+- Pages that have embedded text never invoke OCR. Text-less pages with a raster image are checked with OCR, low-confidence photo/plate pages are discarded, and OCR errors on picture pages inside a text PDF are skipped rather than failing the document.
 - `pyobjc-framework-Vision` is gated to `sys_platform == 'darwin'` and imported lazily so Linux/Modal/Docker builds never install it.

@@ -2,9 +2,10 @@
 
 A scanned PDF stores its pages as raster images with little or no embedded text.
 `extract/pdf.py` reads the text layer; for pages without embedded text that carry
-a scan image (or when a whole PDF has no text layer), it calls `ocr_pages` here
-to read the page images. Normal text PDFs never reach this module, so they keep
-their exact output and speed.
+a raster image (or when a whole PDF has no text layer), it calls `ocr_pages` here
+to read the page images. Text pages never go through OCR, low-confidence photo/plate
+pages are discarded, and OCR errors on image-only pages inside a text PDF are skipped
+rather than failing the document.
 
 Backends, in preference order:
 
@@ -46,6 +47,9 @@ _MAX_RENDER_SIDE = 3500
 _TESSERACT_TIMEOUT_S = 120
 _LIST_LANGS_TIMEOUT_S = 15
 _TITLE_HEIGHT_RATIO = 1.3
+# Measured on macOS (2026-11-25): real scans have median word conf 95-96; photos/plates ~31.
+_MIN_WORD_CONF = 40.0
+_MIN_PAGE_MEDIAN_CONF = 60.0
 
 # Raised when a scanned PDF arrives on a worker with no OCR engine.
 _NO_BACKEND = (
@@ -159,7 +163,13 @@ def _select_tesseract_lang(exe: str) -> str:
     return "eng"
 
 
-def _tesseract_lines(image, *, exe: str | None = None, lang: str | None = None) -> list[_Line]:
+def _tesseract_lines(
+    image,
+    *,
+    exe: str | None = None,
+    lang: str | None = None,
+    dpi: int = _RENDER_DPI,
+) -> list[_Line]:
     """OCR one PIL image with the `tesseract` CLI, using `isl+eng` when Icelandic data is installed."""
     exe = exe or shutil.which("tesseract")
     assert exe is not None  # _tesseract_available() gated this
@@ -169,7 +179,7 @@ def _tesseract_lines(image, *, exe: str | None = None, lang: str | None = None) 
         image.save(png)
         try:
             proc = subprocess.run(
-                [exe, str(png), "stdout", "--dpi", str(_RENDER_DPI), "-l", lang, "tsv"],
+                [exe, str(png), "stdout", "--dpi", str(max(72, dpi)), "-l", lang, "tsv"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -183,15 +193,19 @@ def _tesseract_lines(image, *, exe: str | None = None, lang: str | None = None) 
 
 
 def _parse_tsv(stdout: str) -> list[_Line]:
-    """Parse tesseract TSV output into lines grouped by `(block_num, par_num, line_num)`."""
+    """Parse tesseract TSV output into lines grouped by `(block_num, par_num, line_num)`.
+
+    Drops low-confidence noise (e.g. photos or cover illustrations inside a text PDF).
+    """
     rows = [line.split("\t") for line in stdout.splitlines()]
     if not rows:
         raise ValueError("tesseract returned empty TSV output.")
     columns = {name: index for index, name in enumerate(rows[0])}
-    needed = ("level", "block_num", "par_num", "line_num", "left", "top", "width", "height", "text")
+    needed = ("level", "block_num", "par_num", "line_num", "left", "top", "width", "height", "conf", "text")
     if not all(name in columns for name in needed):
         raise ValueError("tesseract did not return valid TSV output.")
 
+    all_confs: list[float] = []
     words_by_line: dict[tuple[int, int, int], list[tuple[int, int, int, int, str]]] = {}
     for row in rows[1:]:
         if len(row) <= columns["level"] or row[columns["level"]] != "5":
@@ -207,9 +221,18 @@ def _parse_tsv(stdout: str) -> list[_Line]:
             block_num = int(row[columns["block_num"]])
             par_num = int(row[columns["par_num"]])
             line_num = int(row[columns["line_num"]])
+            conf = float(row[columns["conf"]])
         except (ValueError, IndexError):
             continue
+        if conf < 0:
+            continue
+        all_confs.append(conf)
+        if conf < _MIN_WORD_CONF:
+            continue
         words_by_line.setdefault((block_num, par_num, line_num), []).append((left, top, width, height, text))
+
+    if not all_confs or median(all_confs) < _MIN_PAGE_MEDIAN_CONF:
+        return []
 
     lines: list[_Line] = []
     for (block_num, par_num, _line_num), words in sorted(words_by_line.items()):
@@ -333,7 +356,7 @@ def _group_blocks(lines: list[_Line], page_w: float = 0.0) -> list[_Block]:
 
 
 def _title_hint(lines: list[_Line]) -> str | None:
-    """Return the first-page heading only when it is clearly taller than normal body lines."""
+    """Return the first-page heading only when it is clearly taller than normal body lines and readable prose."""
     sized = [(line, max(0.0, line.y1 - line.y0)) for line in lines if line.text.strip()]
     if len(sized) < 2:
         return None
@@ -343,8 +366,11 @@ def _title_hint(lines: list[_Line]) -> str | None:
     tallest_line, tallest_height = max(sized, key=lambda pair: pair[1])
     if tallest_height < _TITLE_HEIGHT_RATIO * median_height:
         return None
-    text = tallest_line.text.strip()
-    return text if 2 <= len(text) <= 200 else None
+    text = " ".join(tallest_line.text.split())
+    letters = sum(c.isalpha() for c in text)
+    if letters < 2 or not (2 <= len(text) <= 200):
+        return None
+    return text
 
 
 def _render_scale(page) -> float:
@@ -369,15 +395,26 @@ def _choose_backend() -> tuple[str, str | None, str | None]:
     raise ValueError(_NO_BACKEND)
 
 
-def ocr_pages(doc, page_indices: list[int]) -> tuple[dict[int, list[_Block]], str | None]:
+def ocr_pages(doc, page_indices: list[int], *, strict: bool = True) -> tuple[dict[int, list[_Block]], str | None]:
     """Render and OCR the selected `page_indices` of `doc`.
+
+    When `strict` is False (other pages already have embedded text), a missing OCR
+    engine or a per-page OCR error is logged and skipped so picture/cover pages in
+    a normal text PDF never fail extraction.
 
     Returns `(blocks_by_page, first_page_title_hint)`.
     """
     if not page_indices:
         return {}, None
 
-    backend, exe, lang = _choose_backend()
+    try:
+        backend, exe, lang = _choose_backend()
+    except ValueError:
+        if strict:
+            raise
+        log.warning("Skipping OCR on %d image page(s) in a text PDF: no OCR engine available", len(page_indices))
+        return {}, None
+
     log.info("OCR starting: backend=%s lang=%s pages=%d", backend, lang or "auto", len(page_indices))
 
     blocks_by_page: dict[int, list[_Block]] = {}
@@ -386,9 +423,19 @@ def ocr_pages(doc, page_indices: list[int]) -> tuple[dict[int, list[_Block]], st
         page = doc[index]
         try:
             scale = _render_scale(page)
+            dpi = round(scale * 72)
             image = page.render(scale=scale, grayscale=True).to_pil()
-            lines = _tesseract_lines(image, exe=exe, lang=lang) if backend == "tesseract" else _vision_lines(image)
+            lines = (
+                _tesseract_lines(image, exe=exe, lang=lang, dpi=dpi)
+                if backend == "tesseract"
+                else _vision_lines(image)
+            )
             page_w = float(image.size[0])
+        except ValueError as exc:
+            if strict:
+                raise
+            log.warning("Skipping OCR on page %d of a text PDF: %s", index + 1, exc)
+            continue
         finally:
             page.close()
         if index == 0:
