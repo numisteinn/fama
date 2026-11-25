@@ -7,7 +7,7 @@ export const SubmitState = defineTaggedUnion({
   Idle: {},
   SubmittingText: {},
   SubmittingVoice: {},
-  Failed: { message: Schema.String },
+  Failed: { target: Schema.Literals(["text", "voice"]), message: Schema.String },
 })
 export type SubmitState = typeof SubmitState.Type
 

@@ -5,8 +5,8 @@ import { File } from "foldkit"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { PickerId, StoredProgress } from "~/model"
-import { NarrateAgainMessage } from "~/review/narrateAgainMessage"
 import { ReaderMessage } from "~/reader/message"
+import { NarrateAgainMessage } from "~/review/narrateAgainMessage"
 import { ReviewMessage } from "~/review/message"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])

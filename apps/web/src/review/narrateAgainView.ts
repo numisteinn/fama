@@ -83,7 +83,7 @@ const chapterText = (editing: EditingNarrateAgain, h: HtmlBuilder<Message>): Htm
                               h.Disabled(busy),
                               h.OnInput((value) => toParent(NarrateAgainMessage.UpdatedChapterText({ index, value }))),
                               h.Class(
-                                "min-h-48 max-h-[55vh] w-full resize-y rounded-lg border border-input bg-transparent px-3 py-2.5 text-[15px] leading-relaxed outline-none focus:border-ring disabled:opacity-40",
+                                "min-h-48 max-h-[55vh] w-full resize-y rounded-lg border border-input bg-transparent px-3 py-2.5 text-base leading-relaxed outline-none focus:border-ring disabled:opacity-40",
                               ),
                             ]),
                           ],
@@ -94,6 +94,17 @@ const chapterText = (editing: EditingNarrateAgain, h: HtmlBuilder<Message>): Htm
               )
             }),
           ),
+          ...(editing.submit._tag === "Failed" && editing.submit.target === "text"
+            ? [h.p([h.Role("alert"), h.Class("text-[13px] text-destructive")], [editing.submit.message])]
+            : []),
+          ...(isTextDirty(editing) && isVoiceDirty(editing)
+            ? [
+                h.p(
+                  [h.Class("text-[13px] text-muted-foreground")],
+                  ["Queuing chapter edits starts narration now; apply voice and speed changes after it finishes."],
+                ),
+              ]
+            : []),
           h.button(
             [
               h.Type("button"),
@@ -138,7 +149,7 @@ const voiceAndSpeed = (model: Model, editing: EditingNarrateAgain, h: HtmlBuilde
                   h.Value(editing.voice ?? ""),
                   h.Disabled(busy || voices.length === 0),
                   h.OnChange((value) => toParent(NarrateAgainMessage.ChangedVoice({ value }))),
-                  h.Class("h-10 rounded-lg border border-input bg-background px-3 outline-none focus:border-ring"),
+                  h.Class("h-10 rounded-lg border border-input bg-background px-3 text-base outline-none focus:border-ring"),
                 ],
                 [
                   ...(editing.voice === null ? [h.option([h.Value("")], ["Choose a voice"])] : []),
@@ -161,7 +172,7 @@ const voiceAndSpeed = (model: Model, editing: EditingNarrateAgain, h: HtmlBuilde
                   h.Value(String(editing.speed)),
                   h.Disabled(busy),
                   h.OnChange((value) => toParent(NarrateAgainMessage.ChangedSpeed({ value }))),
-                  h.Class("h-10 rounded-lg border border-input bg-background px-3 tabular-nums outline-none focus:border-ring"),
+                  h.Class("h-10 rounded-lg border border-input bg-background px-3 text-base tabular-nums outline-none focus:border-ring"),
                 ],
                 speeds.map((speed) => h.option([h.Value(String(speed))], [formatRate(speed)])),
               ),
@@ -169,6 +180,17 @@ const voiceAndSpeed = (model: Model, editing: EditingNarrateAgain, h: HtmlBuilde
           ),
         ],
       ),
+      ...(editing.submit._tag === "Failed" && editing.submit.target === "voice"
+        ? [h.p([h.Role("alert"), h.Class("text-[13px] text-destructive")], [editing.submit.message])]
+        : []),
+      ...(isTextDirty(editing) && isVoiceDirty(editing)
+        ? [
+            h.p(
+              [h.Class("text-[13px] text-muted-foreground")],
+              ["Changing voice and speed starts narration now and discards unsaved chapter edits."],
+            ),
+          ]
+        : []),
       h.button(
         [
           h.Type("button"),
@@ -198,9 +220,6 @@ const editingView = (model: Model, editing: EditingNarrateAgain, h: HtmlBuilder<
           ...(episode ? [h.p([h.Class("mt-1 text-muted-foreground")], [episode.title])] : []),
         ],
       ),
-      ...(editing.submit._tag === "Failed"
-        ? [h.p([h.Role("alert"), h.Class("text-[13px] text-destructive")], [editing.submit.message])]
-        : []),
       chapterText(editing, h),
       voiceAndSpeed(model, editing, h),
     ],
@@ -232,6 +251,7 @@ export const narrateAgain = (model: Model, h: HtmlBuilder<Message>): Html => {
         [h.Class("mt-2 flex flex-col gap-4")],
         [
           h.div([h.Class("flex items-center")], [backButton(h)]),
+          h.h1([h.Class("text-2xl font-semibold leading-tight")], ["Narrate again"]),
           h.div(
             [h.Class("flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 text-sm")],
             [

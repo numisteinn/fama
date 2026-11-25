@@ -5,8 +5,8 @@ import { defineTaggedUnion } from "foldkit/schema"
 import { ApiFailure, ApiToken, Connection } from "~/api"
 import { BatchFile, hasAttached } from "~/batch"
 import { formatRate } from "~/lib/format"
-import { NarrateAgain } from "~/review/narrateAgainModel"
 import { Reader } from "~/reader/model"
+import { NarrateAgain } from "~/review/narrateAgainModel"
 import { Review } from "~/review/model"
 
 // CONSTANTS
@@ -175,6 +175,8 @@ export const Model = Schema.Struct({
   narrateAgain: NarrateAgain,
   /** Fact: what the audio element has. */
   playback: Playback,
+  /** Duration of the currently loaded chapter before any replacement, for preserving chapter fraction. */
+  loadedChapterDurationMs: Schema.NullOr(Schema.Number),
   /** The text of the episode that plays, and whether it shows. */
   reader: Reader,
   /** Review of an episode waiting before narration. */

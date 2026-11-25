@@ -152,6 +152,11 @@ describe("Narrate again", () => {
         ChangeNarrateAgainVoice,
         wrap(N.FailedQueueNarration({ episodeId: harbourDays.id, failure: { status: 409, message: "Not editable" } })),
       ),
+      Scene.Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 2 })),
+      Scene.Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [harbourDays] }),
+      ),
       Scene.expect(Scene.role("alert")).toHaveText("Not editable"),
     )
   })
@@ -266,6 +271,105 @@ describe("Narrate again", () => {
     ).model
     const text = chapterText(loaded.reader, newEpisode.chapters[0]!)
     expect(text._tag === "Loaded" && text.segments[0]?.text).toBe("Orange lanterns guide the last ship home.")
-    expect(Option.isSome(loaded.maybeEpisodes)).toBe(true)
+  })
+
+  test("A late shorter Library list does not move playing audio", () => {
+    const playingChapter1 = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 1,
+        url: harbourDays.chapters[1]!.url,
+        offsetMs: 5_000,
+        isPlaying: true,
+        isWaiting: false,
+      }),
+    )
+    const lateList: Episode = { ...harbourDays, chapters: [harbourDays.chapters[0]!] }
+    const result = update(
+      playingChapter1,
+      Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [lateList] }),
+    )
+    expect(result.commands ?? []).toHaveLength(0)
+    expect(result.model.playback).toMatchObject({ chapter: 1, offsetMs: 5_000, isPlaying: true })
+  })
+
+  test("Replacing a playing Chapter keeps the same fraction through that Chapter", () => {
+    const oldChapter = harbourDays.chapters[0]!
+    const shorter: Episode = {
+      ...harbourDays,
+      chapters: [
+        { ...oldChapter, url: "/media/t/episodes/harbour-days/chapters/v2-000.m4a", durationMs: 17_883 },
+        harbourDays.chapters[1]!,
+      ],
+    }
+    const playing = withPlayback(
+      withEpisodes(baseModel(), [harbourDays]),
+      Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        url: oldChapter.url,
+        offsetMs: 20_000,
+        isPlaying: true,
+        isWaiting: false,
+      }),
+    )
+    const expectedOffset = Math.round((20_000 / oldChapter.durationMs) * 17_883)
+    story(
+      update,
+      given(playing),
+      message(Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [shorter] })),
+      Command.expectExact(
+        LoadChapter({
+          src: shorter.chapters[0]!.url,
+          offsetMs: expectedOffset,
+          rate: 1,
+          isAutoplay: true,
+        }),
+      ),
+      model((next) => {
+        expect(next.playback).toMatchObject({
+          chapter: 0,
+          offsetMs: expectedOffset,
+          url: shorter.chapters[0]!.url,
+          isPlaying: true,
+        })
+        expect(next.loadedChapterDurationMs).toBe(17_883)
+      }),
+      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+    )
+  })
+
+  test("A late submit success for another Episode does not close the open editor, and Text closes Narrate again", () => {
+    const timedHarbour: Episode = {
+      ...harbourDays,
+      chapters: [{ ...harbourDays.chapters[0]!, timingUrl: "/timing/000.json" }, harbourDays.chapters[1]!],
+    }
+    const other: Episode = { ...timedHarbour, id: "other" as Episode["id"], title: "Other Book" }
+    const start = { ...withEpisodes(baseModel(), [timedHarbour, other]), voices: [heart, sarah] }
+    const openedB = update(
+      update(start, wrap(N.ClickedEpisode({ episodeId: other.id }))).model,
+      wrap(N.SucceededFetchDocument({ episodeId: other.id, request: 1, document: storedDocument })),
+    ).model
+    // Late success for timedHarbour must not close other's editor, but still refreshes the library.
+    const afterLate = update(openedB, wrap(N.SucceededQueueNarration({ episodeId: timedHarbour.id })))
+    expect(afterLate.model.narrateAgain.view._tag).toBe("Editing")
+    expect(afterLate.commands?.map((command) => command.name)).toEqual([FetchEpisodes.name])
+
+    // Opening Read-along via Text closes Narrate again so the reader is visible.
+    const withPlayer = withPlayback(
+      afterLate.model,
+      Playback.Loaded({
+        episodeId: timedHarbour.id,
+        chapter: 0,
+        url: timedHarbour.chapters[0]!.url,
+        offsetMs: 0,
+        isPlaying: false,
+        isWaiting: false,
+      }),
+    )
+    const afterText = update(withPlayer, Message.GotReaderMessage({ message: ReaderMessage.ClickedText() })).model
+    expect(afterText.reader.view._tag).toBe("Open")
+    expect(afterText.narrateAgain.view._tag).toBe("Closed")
   })
 })

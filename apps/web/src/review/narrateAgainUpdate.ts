@@ -22,13 +22,13 @@ import {
   toDocument,
 } from "~/review/narrateAgainModel"
 
-/** The parent closes the screen and refreshes the Library after either route answers 204. */
-export interface QueuedNarration {
-  readonly episodeId: EpisodeId
+/** The parent refreshes the Library after queueing narration or hitting a stale-state 409/404. */
+export interface NarrateAgainOutMessage {
+  readonly refreshLibrary: true
 }
 
 type Return = Update.Return<Model, Message, HttpClient.HttpClient>
-type ReturnWithQueue = Update.ReturnWithOutMessage<Model, Message, QueuedNarration, HttpClient.HttpClient>
+type ReturnWithQueue = Update.ReturnWithOutMessage<Model, Message, NarrateAgainOutMessage, HttpClient.HttpClient>
 
 const withNarrateAgain = (model: Model, toNarrateAgain: (state: NarrateAgain) => NarrateAgain): Model =>
   modifyFields(model, { narrateAgain: toNarrateAgain })
@@ -105,24 +105,43 @@ export const update = (model: Model, message: NarrateAgainMessage): ReturnWithQu
       })),
     }),
     UpdatedChapterText: ({ index, value }) => ({
-      model: withEditing(model, (editing) => ({
-        ...editing,
-        texts: editing.texts.map((text, chapter) => (chapter === index ? value : text)),
-        submit: SubmitState.Idle(),
-      })),
+      model: withEditing(model, (editing) =>
+        isSubmitting(editing)
+          ? editing
+          : {
+              ...editing,
+              texts: editing.texts.map((text, chapter) => (chapter === index ? value : text)),
+              submit: editing.submit._tag === "Failed" && editing.submit.target === "text" ? SubmitState.Idle() : editing.submit,
+            },
+      ),
     }),
     ChangedVoice: ({ value }) => ({
-      model: withEditing(model, (editing) => ({
-        ...editing,
-        voice: value === "" ? null : (value as VoiceRef),
-        submit: SubmitState.Idle(),
-      })),
+      model: withEditing(model, (editing) =>
+        isSubmitting(editing)
+          ? editing
+          : {
+              ...editing,
+              voice: value === "" ? null : (value as VoiceRef),
+              submit: editing.submit._tag === "Failed" && editing.submit.target === "voice" ? SubmitState.Idle() : editing.submit,
+            },
+      ),
     }),
     ChangedSpeed: ({ value }) => {
       const speed = Number(value)
       return SPEEDS.includes(speed as (typeof SPEEDS)[number])
         ? {
-            model: withEditing(model, (editing) => ({ ...editing, speed, submit: SubmitState.Idle() })),
+            model: withEditing(model, (editing) =>
+              isSubmitting(editing)
+                ? editing
+                : {
+                    ...editing,
+                    speed,
+                    submit:
+                      editing.submit._tag === "Failed" && editing.submit.target === "voice"
+                        ? SubmitState.Idle()
+                        : editing.submit,
+                  },
+            ),
           }
         : { model }
     },
@@ -160,17 +179,27 @@ export const update = (model: Model, message: NarrateAgainMessage): ReturnWithQu
         ],
       }
     },
-    SucceededQueueNarration: ({ episodeId }) => ({
-      model: withNarrateAgain(model, (state) => ({ ...state, view: NarrateAgainView.Closed() })),
-      outMessage: { episodeId },
-    }),
-    FailedQueueNarration: ({ episodeId, failure }) => ({
-      model: withEditing(model, (editing) =>
-        editing.episodeId === episodeId && isSubmitting(editing)
-          ? { ...editing, submit: SubmitState.Failed({ message: failure.message }) }
-          : editing,
-      ),
-    }),
+    SucceededQueueNarration: ({ episodeId }) => {
+      const view = model.narrateAgain.view
+      const shouldClose = view._tag === "Editing" && view.episodeId === episodeId
+      return {
+        model: shouldClose
+          ? withNarrateAgain(model, (state) => ({ ...state, view: NarrateAgainView.Closed() }))
+          : model,
+        outMessage: { refreshLibrary: true },
+      }
+    },
+    FailedQueueNarration: ({ episodeId, failure }) => {
+      const shouldRefresh = failure.status === 409 || failure.status === 404
+      return {
+        model: withEditing(model, (editing) => {
+          if (editing.episodeId !== episodeId || !isSubmitting(editing)) return editing
+          const target = editing.submit._tag === "SubmittingVoice" ? "voice" : "text"
+          return { ...editing, submit: SubmitState.Failed({ target, message: failure.message }) }
+        }),
+        ...(shouldRefresh ? { outMessage: { refreshLibrary: true } } : {}),
+      }
+    },
   })
 
 /** Closes the screen if another device removes the Episode or starts its narration first. */

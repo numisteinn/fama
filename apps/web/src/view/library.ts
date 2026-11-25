@@ -120,7 +120,7 @@ const row = (model: Model, episode: Episode, h: HtmlBuilder<Message>): Html => {
                   ),
                 ),
               ],
-              [Icon.rotateCw()],
+              [Icon.pencil()],
             ),
           ]
         : []),
