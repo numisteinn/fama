@@ -61,7 +61,30 @@ export function sha256Hex(input: string): string {
 }
 
 const slot = (index: number) => String(index).padStart(3, "0")
-const tag = (mediaPath: string) => sha256Hex(mediaPath).slice(0, 16)
+const tagCache = new Map<string, string>()
+
+/** Strips `/media/<feedToken>/` so rotating the feed token does not invalidate local downloads. */
+export function canonicalMediaPath(mediaPath: string): string {
+  const match = mediaPath.match(/^\/media\/[^/]+\/(.+)$/)
+  return match ? match[1]! : mediaPath
+}
+
+const tag = (mediaPath: string): string => {
+  const key = canonicalMediaPath(mediaPath)
+  const cached = tagCache.get(key)
+  if (cached !== undefined) return cached
+  const digest = sha256Hex(key).slice(0, 16)
+  tagCache.set(key, digest)
+  return digest
+}
+
+/** True when `mediaPath` is an unversioned legacy chapter URL (`.../chapters/000.m4a` or `.json`), never replaced. */
+export const isUnversionedChapterPath = (mediaPath: string): boolean =>
+  /\/chapters\/\d{3}\.(?:m4a|json)$/.test(canonicalMediaPath(mediaPath))
+
+/** Legacy unkeyed local file names (`000.m4a`, `000.json`) that can be migrated when a chapter was never replaced. */
+export const legacyAudioFileName = (index: number): string => `${slot(index)}.m4a`
+export const legacyTimingFileName = (index: number): string => `${slot(index)}.json`
 
 /** Local file name for a chapter's audio, keyed by its media path so a re-narrated chapter never reads stale bytes. */
 export const audioFileName = (index: number, url: string): string => `${slot(index)}-${tag(url)}.m4a`

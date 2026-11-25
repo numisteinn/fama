@@ -475,4 +475,43 @@ describe("re-narrated chapters with replaced URLs", () => {
     device.library([renarrated])
     expect(device.calls).toEqual(["Load e1, 2 chapters, at 32000, paused"])
   })
+
+  test("a playing player shifts its position when an earlier chapter changes duration", () => {
+    const device = paused()
+    device.send({ _tag: "Seek", positionMs: 30_000, play: true })
+    device.status({ position: 30, playing: true })
+    device.calls.length = 0
+    // Chapter 1 shortens from 26,825 ms to 20,000 ms while playing Chapter 2 at 30,000 ms -> 23,175 ms.
+    const renarrated: Episode = {
+      ...ready,
+      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 20_000 }, chapters[1]!],
+      progress: at(23_175, newer.updatedAt),
+    }
+    device.library([renarrated])
+    expect(device.calls).toEqual(["Load e1, 2 chapters, at 23175, play"])
+  })
+
+  test("a playing player keeps the same fraction when the currently playing chapter is replaced", () => {
+    const device = paused()
+    device.send({ _tag: "Seek", positionMs: 20_000, play: true })
+    device.status({ position: 20, playing: true })
+    device.calls.length = 0
+    const renarrated: Episode = {
+      ...ready,
+      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 17_883 }, chapters[1]!],
+    }
+    const expected = Math.round((20_000 / chapters[0]!.durationMs) * 17_883)
+    device.library([renarrated])
+    expect(device.calls).toEqual([`Load e1, 2 chapters, at ${expected}, play`])
+  })
+
+  test("a late shorter library list does not rebuild a playing queue", () => {
+    const device = paused()
+    device.send({ _tag: "Seek", positionMs: 30_000, play: true })
+    device.status({ position: 30, playing: true })
+    device.calls.length = 0
+    const staleList: Episode = { ...running, chapters: [chapters[0]!] }
+    device.library([staleList])
+    expect(device.calls).toEqual(["UpdateTracks 1 chapters, Running"])
+  })
 })

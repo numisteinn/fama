@@ -138,7 +138,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       },
       async changeVoice(id, voice, speed) {
         await requireApi().changeVoice(id, voice, speed)
-        await load()
+        setEpisodes((list) =>
+          list.map((e) => (e.id === id ? { ...e, voice, speed, job: { _tag: "Queued" }, bookUrl: null } : e)),
+        )
+        void load()
       },
       async create(source, voice, speed, review) {
         const episode = await requireApi().createEpisode(source, voice, speed, review)
@@ -162,7 +165,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       },
       async saveDocument(id, document) {
         await requireApi().saveDocument(id, document)
-        await load()
+        setEpisodes((list) => list.map((e) => (e.id === id ? { ...e, job: { _tag: "Queued" }, bookUrl: null } : e)))
+        void load()
       },
       async start(id, document) {
         const episode = await requireApi().start(id, document)

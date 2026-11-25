@@ -1,5 +1,5 @@
 import type { Voice } from "@fama/contracts"
-import { useLocalSearchParams, useRouter } from "expo-router"
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router"
 import { useEffect, useRef, useState } from "react"
 import {
   ActionSheetIOS,
@@ -57,6 +57,7 @@ export default function NarrateAgainScreen() {
 
 function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   const router = useRouter()
+  const navigation = useNavigation()
   const library = useLibrary()
   const episode = useEpisode(id)
   const voices = useVoices()
@@ -64,10 +65,46 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   const [attempt, setAttempt] = useState(0)
   const [editor, setEditor] = useState<number | null>(null)
   const locked = useRef(false)
+  const leaving = useRef(false)
+  const wasEditable = useRef(isEditableJob(episode?.job))
 
   useEffect(() => {
     setState((current) => syncEpisode(current, episode))
   }, [episode])
+
+  // Reload the stored Document if the episode finishes narrating and returns to Ready/Failed while open without edits.
+  const editableNow = isEditableJob(episode?.job)
+  useEffect(() => {
+    if (!wasEditable.current && editableNow && !hasTextEdits(state)) {
+      setAttempt((n) => n + 1)
+    }
+    wasEditable.current = editableNow
+  }, [editableNow, state])
+
+  // Warn before leaving if there are unsaved chapter text edits.
+  const dirtyText = hasTextEdits(state)
+  useEffect(() => {
+    type BeforeRemoveEvent = { preventDefault(): void; data: { action: Parameters<typeof navigation.dispatch>[0] } }
+    const addListener = navigation.addListener as unknown as (
+      type: "beforeRemove",
+      listener: (event: BeforeRemoveEvent) => void,
+    ) => () => void
+    return addListener("beforeRemove", (event) => {
+      if (leaving.current || !dirtyText || locked.current) return
+      event.preventDefault()
+      Alert.alert("Discard unsaved text edits?", "Your chapter text changes have not been saved yet.", [
+        { text: "Keep editing", style: "cancel" },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: () => {
+            leaving.current = true
+            navigation.dispatch(event.data.action)
+          },
+        },
+      ])
+    })
+  }, [navigation, dirtyText])
 
   useEffect(() => {
     let current = true
@@ -88,6 +125,7 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   }, [api, id, attempt])
 
   const leave = () => {
+    leaving.current = true
     if (router.canDismiss()) router.dismissTo("/library")
     else router.navigate("/library")
   }
@@ -100,6 +138,7 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
       await action()
     } catch (cause) {
       const status = cause instanceof ApiError ? cause.status : null
+      if (status === 409 || status === 404) void library.refresh()
       const fallback = cause instanceof Error ? cause.message : "Request failed"
       Alert.alert("Narrate again", describeNarrateAgainError(status, fallback))
     } finally {
@@ -165,7 +204,7 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
           </Text>
         ) : null}
 
-        {episode && !editable ? (
+        {episode && !editable && !leaving.current ? (
           <View style={styles.card}>
             <Text accessibilityRole="alert" style={styles.note}>
               This episode is being narrated. Wait until it finishes to edit again.
@@ -211,7 +250,7 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
                       {index > 0 ? <View style={styles.separator} /> : null}
                       <Tap
                         accessibilityRole="button"
-                        accessibilityLabel={`Edit ${chapterTitle}`}
+                        accessibilityLabel={edited ? `Edit ${chapterTitle}, edited` : `Edit ${chapterTitle}`}
                         disabled={busy || !editable}
                         style={styles.chapterRow}
                         onPress={() => setEditor(index)}

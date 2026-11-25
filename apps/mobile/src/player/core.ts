@@ -23,11 +23,46 @@ export const IDLE_STATUS: NativeStatus = {
   error: null,
 }
 
-/** What the native player was told of an episode: its chapter URLs and whether the job makes more chapters. */
+/** What the native player was told of an episode: its chapter URLs, durations, and whether the job makes more chapters. */
 export interface Told {
   readonly episodeId: string
   readonly urls: ReadonlyArray<string>
+  readonly durations: ReadonlyArray<number>
   readonly expectsMore: boolean
+}
+
+/**
+ * Remaps an episode position from the chapter timeline the native player was told onto a replacement chapter list,
+ * matching the server rule in `docs/api.md`: same fraction inside a replaced chapter, shifted by duration deltas after it.
+ */
+export function remapReplacedPosition(
+  posMs: number,
+  oldDurations: ReadonlyArray<number>,
+  oldUrls: ReadonlyArray<string>,
+  newChapters: ReadonlyArray<{ readonly url: string; readonly durationMs: number }>,
+): number {
+  const newTotal = newChapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
+  if (oldDurations.length === 0 || newChapters.length === 0) return Math.min(Math.max(0, posMs), newTotal)
+  let elapsed = 0
+  let index = oldDurations.length - 1
+  let offset = Math.max(0, posMs)
+  for (let i = 0; i < oldDurations.length; i++) {
+    const duration = oldDurations[i]!
+    if (posMs < elapsed + duration || i === oldDurations.length - 1) {
+      index = i
+      offset = Math.max(0, Math.min(posMs - elapsed, duration))
+      break
+    }
+    elapsed += duration
+  }
+  const targetIndex = Math.min(index, newChapters.length - 1)
+  let newStart = 0
+  for (let i = 0; i < targetIndex; i++) newStart += newChapters[i]!.durationMs
+  const oldDuration = oldDurations[targetIndex] ?? 0
+  const newDuration = newChapters[targetIndex]!.durationMs
+  const replaced = oldUrls[targetIndex] !== newChapters[targetIndex]!.url
+  const newOffset = replaced && oldDuration > 0 ? Math.round((offset / oldDuration) * newDuration) : Math.min(offset, newDuration)
+  return Math.max(0, Math.min(newTotal, newStart + newOffset))
 }
 
 export interface Core {
@@ -374,7 +409,12 @@ export const plan = (core: Core, now: string): Outcome => {
       core: {
         ...saved.core,
         ...done,
-        told: { episodeId: episode.id, urls: episode.chapters.map((chapter) => chapter.url), expectsMore: isActive(episode.job) },
+        told: {
+          episodeId: episode.id,
+          urls: episode.chapters.map((chapter) => chapter.url),
+          durations: episode.chapters.map((chapter) => chapter.durationMs),
+          expectsMore: isActive(episode.job),
+        },
         wantsPlay: isPlay,
         awaitingPause: false,
         followedAt: entry?.updatedAt ?? null,
@@ -391,17 +431,20 @@ export const plan = (core: Core, now: string): Outcome => {
   // The native player has the episode. A late list may no longer have it: then only the listener's asks go on.
   const effects: Array<NativeCall> = []
   const expectsMore = episode ? isActive(episode.job) : told.expectsMore
+  // Compare only shared indices so a late, shorter library list never falsely triggers a reload.
+  const sharedCount = episode ? Math.min(episode.chapters.length, told.urls.length) : 0
   const urlsReplaced =
     episode !== undefined &&
     episode.chapters.length > 0 &&
-    (episode.chapters.length < told.urls.length ||
-      told.urls.some((url, index) => episode.chapters[index]?.url !== url))
+    Array.from({ length: sharedCount }, (_, index) => index).some((index) => episode.chapters[index]!.url !== told.urls[index])
   const hasNewTracks =
     episode !== undefined && (urlsReplaced || episode.chapters.length > told.urls.length || expectsMore !== told.expectsMore)
+  const keepToldChapters = episode !== undefined && !urlsReplaced && episode.chapters.length < told.urls.length
   const nextTold = episode
     ? {
         ...told,
-        urls: urlsReplaced || episode.chapters.length >= told.urls.length ? episode.chapters.map((c) => c.url) : told.urls,
+        urls: keepToldChapters ? told.urls : episode.chapters.map((c) => c.url),
+        durations: keepToldChapters ? told.durations : episode.chapters.map((c) => c.durationMs),
         expectsMore,
       }
     : told
@@ -429,8 +472,9 @@ export const plan = (core: Core, now: string): Outcome => {
       if (core.ask === "Pause") effects.push({ _tag: "Pause" })
     }
   } else if (urlsReplaced && episode !== undefined) {
-    // A re-narrated chapter got a new URL: UpdateTracks keeps existing items, so reload the queue with the new tracks.
-    const here = positionMs(core.status)
+    // A re-narrated chapter got a new URL: UpdateTracks keeps existing items, so reload the queue with the new tracks
+    // and remap the current position across any duration changes so playback stays in the same place.
+    const here = remapReplacedPosition(positionMs(core.status), told.durations, told.urls, episode.chapters)
     const targetMs =
       core.move?._tag === "Seek"
         ? core.move.positionMs
