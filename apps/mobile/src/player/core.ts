@@ -474,7 +474,7 @@ export const plan = (core: Core, now: string): Outcome => {
   } else if (urlsReplaced && episode !== undefined) {
     // A re-narrated chapter got a new URL: UpdateTracks keeps existing items, so reload the queue with the new tracks
     // and remap the current position across any duration changes so playback stays in the same place.
-    const here = remapReplacedPosition(positionMs(core.status), told.durations, told.urls, episode.chapters)
+    const here = remapReplacedPosition(core.landingMs ?? positionMs(core.status), told.durations, told.urls, episode.chapters)
     const targetMs =
       core.move?._tag === "Seek"
         ? core.move.positionMs

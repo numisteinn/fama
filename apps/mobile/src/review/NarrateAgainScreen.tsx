@@ -1,5 +1,5 @@
 import type { Voice } from "@fama/contracts"
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router"
+import { useLocalSearchParams, usePreventRemove, useRouter } from "expo-router"
 import { useEffect, useRef, useState } from "react"
 import {
   ActionSheetIOS,
@@ -57,7 +57,6 @@ export default function NarrateAgainScreen() {
 
 function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   const router = useRouter()
-  const navigation = useNavigation()
   const library = useLibrary()
   const episode = useEpisode(id)
   const voices = useVoices()
@@ -81,30 +80,27 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
     wasEditable.current = editableNow
   }, [editableNow, state])
 
-  // Warn before leaving if there are unsaved chapter text edits.
+  // Warn before leaving (back button or swipe) if there are unsaved chapter text edits.
   const dirtyText = hasTextEdits(state)
-  useEffect(() => {
-    type BeforeRemoveEvent = { preventDefault(): void; data: { action: Parameters<typeof navigation.dispatch>[0] } }
-    const addListener = navigation.addListener as unknown as (
-      type: "beforeRemove",
-      listener: (event: BeforeRemoveEvent) => void,
-    ) => () => void
-    return addListener("beforeRemove", (event) => {
-      if (leaving.current || !dirtyText || locked.current) return
-      event.preventDefault()
-      Alert.alert("Discard unsaved text edits?", "Your chapter text changes have not been saved yet.", [
-        { text: "Keep editing", style: "cancel" },
-        {
-          text: "Discard",
-          style: "destructive",
-          onPress: () => {
-            leaving.current = true
-            navigation.dispatch(event.data.action)
-          },
+  const disablePrevention = usePreventRemove(dirtyText && state.operation === "idle", ({ repeat }) => {
+    if (leaving.current) {
+      disablePrevention()
+      repeat()
+      return
+    }
+    Alert.alert("Discard unsaved text edits?", "Your chapter text changes have not been saved yet.", [
+      { text: "Keep editing", style: "cancel" },
+      {
+        text: "Discard",
+        style: "destructive",
+        onPress: () => {
+          leaving.current = true
+          disablePrevention()
+          repeat()
         },
-      ])
-    })
-  }, [navigation, dirtyText])
+      },
+    ])
+  })
 
   useEffect(() => {
     let current = true
@@ -126,6 +122,7 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
 
   const leave = () => {
     leaving.current = true
+    disablePrevention()
     if (router.canDismiss()) router.dismissTo("/library")
     else router.navigate("/library")
   }

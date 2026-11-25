@@ -57,33 +57,42 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
     let changed = false
     for (const episode of episodes) {
       if (episode.job._tag !== "Ready" || episode.chapters.length === 0 || active.has(episode.id)) continue
-      const dir = episodeDir(accountKey, episode.id)
-      if (!dir.exists) continue
-      for (const chapter of episode.chapters) {
-        if (isUnversionedChapterPath(chapter.url)) {
-          const legacy = new File(dir, legacyAudioFileName(chapter.index))
-          const current = new File(dir, audioFileName(chapter.index, chapter.url))
-          if (legacy.exists && !current.exists) {
-            legacy.move(current)
+      try {
+        const dir = episodeDir(accountKey, episode.id)
+        if (!dir.exists) continue
+        const entries = dir.list()
+        const names = new Set(entries.map((entry) => entry.name))
+        for (const chapter of episode.chapters) {
+          if (isUnversionedChapterPath(chapter.url)) {
+            const legacyName = legacyAudioFileName(chapter.index)
+            const currentName = audioFileName(chapter.index, chapter.url)
+            if (names.has(legacyName) && !names.has(currentName)) {
+              new File(dir, legacyName).move(new File(dir, currentName))
+              names.delete(legacyName)
+              names.add(currentName)
+              changed = true
+            }
+          }
+          if (chapter.timingUrl !== null && isUnversionedChapterPath(chapter.timingUrl)) {
+            const legacyName = legacyTimingFileName(chapter.index)
+            const currentName = timingFileName(chapter.index, chapter.timingUrl)
+            if (names.has(legacyName) && !names.has(currentName)) {
+              new File(dir, legacyName).move(new File(dir, currentName))
+              names.delete(legacyName)
+              names.add(currentName)
+              changed = true
+            }
+          }
+        }
+        const stale = new Set(staleFileNames([...names], episode.chapters))
+        for (const entry of entries) {
+          if (stale.has(entry.name) && entry.exists) {
+            entry.delete()
             changed = true
           }
         }
-        if (chapter.timingUrl !== null && isUnversionedChapterPath(chapter.timingUrl)) {
-          const legacy = new File(dir, legacyTimingFileName(chapter.index))
-          const current = new File(dir, timingFileName(chapter.index, chapter.timingUrl))
-          if (legacy.exists && !current.exists) {
-            legacy.move(current)
-            changed = true
-          }
-        }
-      }
-      const entries = dir.list()
-      const stale = new Set(staleFileNames(entries.map((entry) => entry.name), episode.chapters))
-      for (const entry of entries) {
-        if (stale.has(entry.name)) {
-          entry.delete()
-          changed = true
-        }
+      } catch {
+        // Ignore transient file system errors during background cleanup.
       }
     }
     if (changed) setVersion((v) => v + 1)
