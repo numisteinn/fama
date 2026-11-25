@@ -1,6 +1,5 @@
 import {
   API_VERSION,
-  ChapterUploadQuery,
   ClaimRequest,
   CompleteRequest,
   CreateEpisode,
@@ -18,8 +17,9 @@ import { EpisodeRepo } from "./episode-repo.ts"
 import { renderFeed } from "./feed.ts"
 import { keys, MediaStore, mediaKey } from "./media-store.ts"
 import { mediaResponse } from "./media.ts"
+import { chapterRoutes } from "./routes/chapter.ts"
 import { documentRoutes } from "./routes/document.ts"
-import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, uploadRequest, webRequest, worker } from "./routes/kit.ts"
+import { api, BadRequest, BlobParams, handle, IdParams, json, noContent, putBody, webRequest, worker } from "./routes/kit.ts"
 import { reviewRoutes } from "./routes/review.ts"
 import { sampleRoutes } from "./routes/sample.ts"
 import { timingRoutes } from "./routes/timing.ts"
@@ -39,22 +39,12 @@ const mediaPathOf = (url: string) => {
 
 const feedUrl = (origin: string, feedToken: string) => `${origin}/feed/${feedToken}/rss.xml`
 
-const ChapterParams = Schema.Struct({
-  ...ChapterUploadQuery.fields,
-  id: EpisodeId,
-  index: Schema.NumberFromString.pipe(Schema.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
-})
 
 /** Wakes the cloud worker. Call it only after the write that made the job `Queued` has committed. */
 const wakeWorker = Effect.gen(function* () {
   yield* (yield* Wake).wake
 })
 
-/** Reads a raw upload body into R2. Needs `Content-Length`, because R2 stores only bodies of known length. */
-const putBody = Effect.fn("http.putBody")(function* (key: string, fallbackType: string) {
-  const { body, headers } = yield* uploadRequest
-  return yield* (yield* MediaStore).put(key, body, headers.get("content-type") ?? fallbackType)
-})
 
 const clientRoutes = HttpRouter.addAll([
   HttpRouter.route(
@@ -200,28 +190,14 @@ const workerRoutes = HttpRouter.addAll([
   ),
   HttpRouter.route(
     "PUT",
-    "/api/worker/jobs/:id/chapters/:index",
-    worker(
-      Effect.gen(function* () {
-        const params = yield* HttpRouter.schemaParams(ChapterParams)
-        const repo = yield* EpisodeRepo
-        const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
-        const { size } = yield* putBody(keys.chapter(userId, params.id, params.index), "audio/mp4")
-        yield* repo.putChapter(params.id, { ...params, size })
-        return noContent
-      }),
-    ),
-  ),
-  HttpRouter.route(
-    "PUT",
     "/api/worker/jobs/:id/book",
     worker(
       Effect.gen(function* () {
         const params = yield* HttpRouter.schemaParams(BlobParams)
         const repo = yield* EpisodeRepo
-        const { userId } = yield* repo.holdLease(params.id, params.leaseToken)
-        const { size } = yield* putBody(keys.book(userId, params.id), "audio/mp4")
-        yield* repo.setBook(params.id, size)
+        const { userId, leaseHash } = yield* repo.holdLease(params.id, params.leaseToken)
+        const { size } = yield* putBody(keys.book(userId, params.id, leaseHash), "audio/mp4")
+        yield* repo.setBook(params.id, leaseHash, size)
         return noContent
       }),
     ),
@@ -327,6 +303,7 @@ const notFound = HttpRouter.route(
 export const routes = Layer.mergeAll(
   clientRoutes,
   workerRoutes,
+  chapterRoutes,
   documentRoutes,
   reviewRoutes,
   sampleRoutes,

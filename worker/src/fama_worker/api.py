@@ -38,7 +38,7 @@ class ClaimedJob:
     cover_path: str | None
     voice: VoiceRef | None
     speed: float
-    completed_chapters: frozenset[int]
+    chapters: dict[int, str]
 
     @staticmethod
     def parse(data: dict) -> ClaimedJob:
@@ -61,7 +61,7 @@ class ClaimedJob:
             cover_path=data["coverPath"],
             voice=VoiceRef.parse(data["voice"]) if data["voice"] else None,
             speed=float(data["speed"]),
-            completed_chapters=frozenset(int(i) for i in data["completedChapters"]),
+            chapters={entry["index"]: entry["inputHash"] for entry in data["chapters"]},
         )
 
 
@@ -165,11 +165,19 @@ class Api:
                    params={"workerId": self.worker_id, "leaseToken": job.lease_token, **params},
                    headers={"Content-Type": content_type})
 
-    def put_chapter(self, job: ClaimedJob, index: int, title: str, duration_ms: int, file: Path) -> None:
-        self._put(job, f"chapters/{index}", file, "audio/mp4", {"title": title, "durationMs": str(duration_ms)})
+    def chapter(self, job: ClaimedJob, index: int, path: Path) -> None:
+        response = self._send("GET", f"/api/worker/jobs/{job.episode_id}/chapters/{index}",
+                              params={"leaseToken": job.lease_token})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(response.content)
 
-    def put_timing(self, job: ClaimedJob, index: int, file: Path) -> None:
-        self._put(job, f"chapters/{index}/timing", file, "application/json", {})
+    def put_chapter(self, job: ClaimedJob, index: int, title: str, duration_ms: int, input_hash: str,
+                    file: Path) -> None:
+        self._put(job, f"chapters/{index}", file, "audio/mp4",
+                  {"title": title, "durationMs": str(duration_ms), "inputHash": input_hash})
+
+    def put_timing(self, job: ClaimedJob, index: int, input_hash: str, file: Path) -> None:
+        self._put(job, f"chapters/{index}/timing", file, "application/json", {"inputHash": input_hash})
 
     def put_book(self, job: ClaimedJob, file: Path) -> None:
         self._put(job, "book", file, "audio/mp4", {})

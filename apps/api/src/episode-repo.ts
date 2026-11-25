@@ -17,6 +17,7 @@ import {
 } from "@fama/contracts"
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { Bindings } from "./bindings.ts"
+import { remapChapterProgress } from "./chapter-progress.ts"
 import { DatabaseError, query } from "./db.ts"
 import type { FeedItem } from "./feed.ts"
 import * as Job from "./job.ts"
@@ -44,6 +45,7 @@ const EpisodeRow = Schema.Struct({
   speed: Schema.Number,
   duration_ms: Schema.NullOr(Schema.Number),
   book_size: Schema.NullOr(Schema.Number),
+  book_revision: Schema.NullOr(Schema.String),
   cover_key: Schema.NullOr(Schema.String),
   document_size: Schema.NullOr(Schema.Number),
   document_key: Schema.NullOr(Schema.String),
@@ -72,8 +74,9 @@ const ChapterRow = Schema.Struct({
   idx: Schema.Number,
   title: Schema.String,
   duration_ms: Schema.Number,
-  /** 1 when the chapter has a row in `timings`. */
-  has_timing: Schema.Number,
+  input_hash: Schema.NullOr(Schema.String),
+  media_revision: Schema.NullOr(Schema.String),
+  timed: Schema.Number,
 })
 interface ChapterRow extends Schema.Schema.Type<typeof ChapterRow> {}
 
@@ -138,6 +141,7 @@ interface EpisodeUpdate {
   readonly author?: string | null
   readonly language?: string | null
   readonly voice?: string | null
+  readonly speed?: number
   readonly duration_ms?: number | null
   readonly lease_hash?: string | null
   readonly document_size?: number
@@ -147,6 +151,22 @@ interface EpisodeUpdate {
 interface StoredDocument {
   readonly key: string
   readonly size: number
+}
+
+interface EditableDocument {
+  readonly key: string | null
+  readonly version: number
+  readonly review: boolean
+}
+
+interface UploadedChapter {
+  readonly index: number
+  readonly title: string
+  readonly durationMs: number
+  readonly size: number
+  readonly inputHash: string
+  readonly revision: string
+  readonly timed: boolean
 }
 
 const documentColumns = ({ key, size }: StoredDocument) => ({ document_key: key, document_size: size })
@@ -179,11 +199,18 @@ export interface Interface {
   /** Checks that the user owns the episode and that its job waits in Review, so its Document can change. */
   readonly inReview: (userId: UserId, id: string) => Effect.Effect<void, EpisodeNotFound | Job.NotInReview | Failure>
   readonly documentKey: (userId: UserId, id: string) => Effect.Effect<string | null, EpisodeNotFound | Failure>
+  readonly documentForEdit: (
+    userId: UserId, id: string,
+  ) => Effect.Effect<EditableDocument, EpisodeNotFound | Job.NotEditable | Failure>
   readonly editDocument: (
     userId: UserId,
     id: string,
     document: StoredDocument,
-  ) => Effect.Effect<void, EpisodeNotFound | Job.NotInReview | Failure>
+    version: number,
+  ) => Effect.Effect<{ readonly queued: boolean; readonly finishedAt: string | null }, EpisodeNotFound | Job.NotEditable | Failure>
+  readonly changeVoice: (
+    userId: UserId, id: string, voice: VoiceRef, speed: number,
+  ) => Effect.Effect<{ readonly finishedAt: string | null }, EpisodeNotFound | Job.NotEditable | Failure>
   readonly start: (
     userId: UserId,
     id: string,
@@ -206,16 +233,14 @@ export interface Interface {
     id: string,
     lease: LeaseToken,
   ) => Effect.Effect<
-    { readonly source: Source; readonly userId: UserId; readonly coverKey: string | null; readonly documentKey: string | null },
+    { readonly source: Source; readonly userId: UserId; readonly leaseHash: string; readonly coverKey: string | null; readonly documentKey: string | null },
     EpisodeNotFound | Job.LeaseLost | Failure
   >
+  readonly chapterKey: (userId: UserId, id: string, index: number) => Effect.Effect<string | null, Failure>
   readonly putChapter: (
-    id: string,
-    chapter: { readonly index: number; readonly title: string; readonly durationMs: number; readonly size: number },
-  ) => Effect.Effect<void, DatabaseError>
-  /** Records that the timing file of a chapter is stored. The chapter itself can come later. */
-  readonly putTiming: (id: string, index: number) => Effect.Effect<void, DatabaseError>
-  readonly setBook: (id: string, size: number) => Effect.Effect<void, DatabaseError>
+    id: string, leaseHash: string, chapter: UploadedChapter,
+  ) => Effect.Effect<void, Job.LeaseLost | DatabaseError>
+  readonly setBook: (id: string, leaseHash: string, size: number) => Effect.Effect<void, Job.LeaseLost | DatabaseError>
   readonly setCover: (id: string, key: string) => Effect.Effect<void, DatabaseError>
   /**
    * Records the Document a worker stored under its lease. Returns the job after it: `Review` when the job stops
@@ -280,10 +305,10 @@ export const layer = Layer.effect(
           index: chapter.idx,
           title: chapter.title,
           durationMs: chapter.duration_ms,
-          url: media(row, keys.chapter(row.user_id, row.id, chapter.idx)),
-          timingUrl: chapter.has_timing === 1 ? media(row, keys.timing(row.user_id, row.id, chapter.idx)) : null,
+          url: media(row, keys.chapter(row.user_id, row.id, chapter.idx, chapter.media_revision)),
+          timingUrl: chapter.timed === 1 ? media(row, keys.timing(row.user_id, row.id, chapter.idx, chapter.media_revision)) : null,
         })),
-        bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id)),
+        bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id, row.book_revision)),
         coverUrl: row.cover_key === null ? null : media(row, row.cover_key),
         job: jobOf(row),
         progress:
@@ -307,7 +332,8 @@ export const layer = Layer.effect(
       return row
     })
 
-    const selectChapters = `SELECT c.*, t.idx IS NOT NULL AS has_timing FROM chapters c
+    const selectChapters = `SELECT c.*,
+      CASE WHEN c.media_revision IS NULL THEN t.idx IS NOT NULL ELSE c.has_timing END AS timed FROM chapters c
       LEFT JOIN timings t ON t.episode_id = c.episode_id AND t.idx = c.idx`
 
     const chaptersOf = (id: string) =>
@@ -340,6 +366,8 @@ export const layer = Layer.effect(
         const columns: Record<string, unknown> = jobColumns(next.success)
         if (next.success._tag === "Queued" && job._tag !== "Queued") {
           columns.queued_at = new Date(at).toISOString()
+          columns.book_size = null
+          columns.book_revision = null
         }
         // An episode stops for Review one time. Its job does not come back here.
         if (job._tag === "Review" && next.success._tag !== "Review") columns.review = null
@@ -426,14 +454,37 @@ export const layer = Layer.effect(
 
     const inReview = Effect.fn("EpisodeRepo.inReview")(function* (userId: UserId, id: string) {
       const row = yield* findRow(id, userId)
-      const open = Job.editDocument(yield* Schema.decodeUnknownEffect(JobState)(jobOf(row)))
+      const open = Job.inReview(yield* Schema.decodeUnknownEffect(JobState)(jobOf(row)))
       if (Result.isFailure(open)) return yield* Effect.fail(open.failure)
     })
 
+    const documentForEdit = Effect.fn("EpisodeRepo.documentForEdit")(function* (userId: UserId, id: string) {
+      const row = yield* findRow(id, userId)
+      const job = yield* Schema.decodeUnknownEffect(JobState)(jobOf(row))
+      const next = Job.editDocument(job)
+      if (Result.isFailure(next)) return yield* Effect.fail(next.failure)
+      return { key: documentKey(row), version: row.job_version, review: job._tag === "Review" }
+    })
+
     const editDocument = Effect.fn("EpisodeRepo.editDocument")(function* (
-      userId: UserId, id: string, document: StoredDocument,
+      userId: UserId, id: string, document: StoredDocument, version: number,
     ) {
-      yield* transition(id, Job.editDocument, documentColumns(document), userId)
+      const { row, job } = yield* transition(
+        id,
+        (job, _at, row) => row.job_version === version
+          ? Job.editDocument(job)
+          : Result.fail(new Job.NotEditable({ state: job._tag })),
+        documentColumns(document),
+        userId,
+      )
+      return { queued: job._tag === "Queued", finishedAt: row.finished_at }
+    })
+
+    const changeVoice = Effect.fn("EpisodeRepo.changeVoice")(function* (
+      userId: UserId, id: string, voice: VoiceRef, speed: number,
+    ) {
+      const { row } = yield* transition(id, Job.narrateAgain, { voice, speed }, userId)
+      return { finishedAt: row.finished_at }
     })
 
     const start = Effect.fn("EpisodeRepo.start")(function* (userId: UserId, id: string, document: StoredDocument) {
@@ -499,11 +550,13 @@ export const layer = Layer.effect(
           leaseToken,
           source: Schema.encodeSync(Source)(claimed.source),
           sourcePath: hasUpload ? `/api/worker/jobs/${claimed.id}/source` : null,
-          documentPath: claimed.document_size === null ? null : `/api/worker/jobs/${claimed.id}/document`,
+          documentPath: documentKey(claimed) === null ? null : `/api/worker/jobs/${claimed.id}/document`,
           coverPath: claimed.cover_key === null ? null : `/api/worker/jobs/${claimed.id}/cover`,
           voice: claimed.voice,
           speed: claimed.speed,
-          completedChapters: chapters.map((chapter) => chapter.idx),
+          chapters: chapters.flatMap(({ idx, input_hash }) =>
+            input_hash === null ? [] : [{ index: idx, inputHash: input_hash }],
+          ),
         })
         return { ...job, _tag: "Narrate" as const }
       }
@@ -538,31 +591,45 @@ export const layer = Layer.effect(
       const job = yield* Schema.decodeUnknownEffect(JobState)(jobOf(row))
       const held = Job.holdLease(job, holds(row, leaseHash))
       if (Result.isFailure(held)) return yield* Effect.fail(held.failure)
-      return { source: row.source, userId: row.user_id, coverKey: row.cover_key, documentKey: documentKey(row) }
+      return { source: row.source, userId: row.user_id, leaseHash, coverKey: row.cover_key, documentKey: documentKey(row) }
+    })
+
+    const chapterKey = Effect.fn("EpisodeRepo.chapterKey")(function* (userId: UserId, id: string, index: number) {
+      const [row] = yield* all("chapters.get", `${selectChapters} WHERE c.episode_id = ? AND c.idx = ?`, id, index)
+        .pipe(Effect.flatMap(decodeRows(ChapterRow)))
+      return row === undefined ? null : keys.chapter(userId, id, index, row.media_revision)
     })
 
     const putChapter = Effect.fn("EpisodeRepo.putChapter")(function* (
-      id: string,
-      chapter: { readonly index: number; readonly title: string; readonly durationMs: number; readonly size: number },
+      id: string, leaseHash: string, chapter: UploadedChapter,
     ) {
-      yield* run(
-        "chapters.put",
-        `INSERT INTO chapters (episode_id, idx, title, duration_ms, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT (episode_id, idx) DO UPDATE SET title = excluded.title,
-           duration_ms = excluded.duration_ms, size = excluded.size`,
-        id,
-        chapter.index,
-        chapter.title,
-        chapter.durationMs,
-        chapter.size,
+      const stamp = new Date(yield* now).toISOString()
+      const [, written] = yield* query("chapters.put", () =>
+        db.batch([
+          db.prepare(remapChapterProgress).bind(id, chapter.index, chapter.durationMs, leaseHash, stamp),
+          db.prepare(
+            `INSERT INTO chapters (episode_id, idx, title, duration_ms, size, input_hash, media_revision, has_timing)
+             SELECT id, ?, ?, ?, ?, ?, ?, ? FROM episodes
+             WHERE id = ? AND lease_hash = ? AND job_state = 'Running'
+             ON CONFLICT (episode_id, idx) DO UPDATE SET title = excluded.title, duration_ms = excluded.duration_ms,
+               size = excluded.size, input_hash = excluded.input_hash, media_revision = excluded.media_revision,
+               has_timing = excluded.has_timing
+             RETURNING idx`,
+          ).bind(chapter.index, chapter.title, chapter.durationMs, chapter.size, chapter.inputHash,
+            chapter.revision, Number(chapter.timed), id, leaseHash),
+        ]),
       )
+      if (written?.results.length !== 1) return yield* new Job.LeaseLost()
     })
 
-    const putTiming = (id: string, index: number) =>
-      run("timings.put", "INSERT INTO timings (episode_id, idx) VALUES (?, ?) ON CONFLICT DO NOTHING", id, index)
-
-    const setBook = (id: string, size: number) =>
-      run("episode.setBook", "UPDATE episodes SET book_size = ? WHERE id = ?", size, id)
+    const setBook = Effect.fn("EpisodeRepo.setBook")(function* (id: string, leaseHash: string, size: number) {
+      const written = yield* all("episode.setBook",
+        `UPDATE episodes SET book_size = ?, book_revision = ?
+         WHERE id = ? AND lease_hash = ? AND job_state = 'Running' RETURNING id`,
+        size, leaseHash, id, leaseHash,
+      )
+      if (written.length !== 1) return yield* new Job.LeaseLost()
+    })
 
     const setCover = (id: string, key: string) =>
       run("episode.setCover", "UPDATE episodes SET cover_key = ? WHERE id = ?", key, id)
@@ -595,7 +662,7 @@ export const layer = Layer.effect(
       const timed = new Map<string, Array<{ hasTiming: boolean }>>()
       for (const chapter of chapters) {
         const list = timed.get(chapter.episode_id) ?? []
-        list.push({ hasTiming: chapter.has_timing === 1 })
+        list.push({ hasTiming: chapter.timed === 1 })
         timed.set(chapter.episode_id, list)
       }
       return rows.flatMap((row): ReadonlyArray<FeedItem> =>
@@ -608,7 +675,7 @@ export const layer = Layer.effect(
                 author: row.author,
                 finishedAt: row.finished_at,
                 durationMs: row.duration_ms,
-                bookUrl: origin + media(row, keys.book(row.user_id, row.id)),
+                bookUrl: origin + media(row, keys.book(row.user_id, row.id, row.book_revision)),
                 bookSize: row.book_size,
                 coverUrl: row.cover_key === null ? null : origin + media(row, row.cover_key),
                 language: row.language,
@@ -672,6 +739,8 @@ export const layer = Layer.effect(
       remove,
       retry,
       inReview,
+      documentForEdit,
+      changeVoice,
       documentKey: (userId, id) => findRow(id, userId).pipe(Effect.map(documentKey)),
       editDocument,
       start,
@@ -680,8 +749,8 @@ export const layer = Layer.effect(
       complete,
       fail,
       holdLease,
+      chapterKey,
       putChapter,
-      putTiming,
       setBook,
       setCover,
       storeDocument,

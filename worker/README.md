@@ -35,7 +35,7 @@ out/<slug>/cover.jpg        (when the source has one)
 out/<slug>/episode.json     (title, language, voice, chapter durations)
 ```
 
-`fama work` loops: claim a job (with the worker token, `FAMA_WORKER_TOKEN` on the API), send its lease token on every job call, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. Chapters listed in `completedChapters` are not uploaded again. The first attempt extracts the source and uploads the Document. A claim with `documentPath` has a stored Document: the worker reads it (and the cover at `coverPath`) and does not extract again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
+`fama work` loops: claim a job (with the worker token, `FAMA_WORKER_TOKEN` on the API), send its lease token on every job call, send progress at least every 30 seconds, upload each chapter as soon as it is encoded, then the book, then complete. A `409` drops the job. For each claimed Chapter with a matching `inputHash`, the Worker reuses the published audio in the Book file. The first attempt extracts the source and uploads the Document. A claim with `documentPath` has a stored Document: the worker reads it (and the cover at `coverPath`) and does not extract again. `--once` stops after one job or an empty queue. `--drain` takes jobs until `claim` returns nothing, then stops. The cloud worker runs `--drain`.
 
 Settings:
 
@@ -84,7 +84,7 @@ Both `wake` and `sweep` call one dispatcher. It reads the stats of `drain` and d
 
 Modal runs at most `MAX_DRAINS` (1) drains at once. The CPU claim keeps the sweep cheap: a sweep of an empty queue costs one small CPU call, not a GPU cold start.
 
-The sweep covers a missed wake and an expired lease. The API offers a `Running` job again when its heartbeat is older than `LEASE_MS` (10 minutes): see `claim` in `apps/api/src/job.ts` and the candidate query in `EpisodeRepo.claim` (`apps/api/src/episode-repo.ts`). So a drain that crashes, times out (6 hours) or is preempted leaves a lease that expires. A sweep at most 5 minutes later starts a new drain. That drain claims the job and skips the chapters in `completedChapters`.
+The sweep covers a missed wake and an expired lease. The API offers a `Running` job again when its heartbeat is older than `LEASE_MS` (10 minutes): see `claim` in `apps/api/src/job.ts` and the candidate query in `EpisodeRepo.claim` (`apps/api/src/episode-repo.ts`). So a drain that crashes, times out (6 hours) or is preempted leaves a lease that expires. A sweep at most 5 minutes later starts a new drain. That drain claims the job and reuses Chapters with matching input hashes.
 
 The image installs the worker with uv and ffmpeg. It bakes all Kokoro voices and the four Icelandic Piper voices, so a cold start downloads nothing. At build time it makes two short episodes on the CPU (English with Kokoro, Icelandic with Piper). A broken image fails the deploy. Piper runs on the CPU: `onnxruntime` from PyPI has no CUDA provider, so Piper falls back to it. Kokoro runs on the GPU.
 
@@ -142,7 +142,7 @@ The `wall` figures show the cost of a warm container alone. The gap between them
 uv run pytest
 ```
 
-The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, Segments, timing files, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a resume with `completedChapters`, a failed job, a retry from the stored Document, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
+The tests cover extraction (built EPUB and PDF fixtures, article markdown, Gutenberg text), normalization, Segments, timing files, cache keys, re-run idempotency, the `.m4b` layout (ffprobe), `fama work` against a fake API server (the full run, a `409` drop, a new attempt that reuses Chapters with matching input hashes, a failed job, a retry from the stored Document, `--drain`), the drain loop, and the pure parts of `modal_app.py` (dispatch plan, wake secret, baked weights) without Modal installed.
 
 ## Bakeoff
 

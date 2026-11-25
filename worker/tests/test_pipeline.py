@@ -6,7 +6,7 @@ from conftest import LEAD_S
 
 from fama_worker.cache import chunk_key
 from fama_worker.model import Chapter, Document, VoiceRef
-from fama_worker.pipeline import PARAGRAPH_GAP_S, SEGMENT_GAP_S, TITLE_GAP_S, narrate
+from fama_worker.pipeline import PARAGRAPH_GAP_S, SEGMENT_GAP_S, TITLE_GAP_S, chapter_input_hash, narrate
 
 VOICE = VoiceRef("tone", "a")
 
@@ -23,6 +23,20 @@ def test_cache_key_changes_with_every_input():
                 chunk_key("Hello.", VoiceRef("other", "a"), "v1", 1.0), chunk_key("Hello.", VOICE, "v2", 1.0),
                 chunk_key("Hello.", VOICE, "v1", 1.25)]
     assert len({base, *variants}) == 6
+
+
+def test_chapter_hash_tracks_stored_text_voice_exact_speed_and_model():
+    document = _document("41 years.", "The end.")
+    base = chapter_input_hash(document, 0, VOICE, 1.0, "v1")
+    assert base == chapter_input_hash(_document("41 years.", "An edit elsewhere."), 0, VOICE, 1.0, "v1")
+    variants = [
+        chapter_input_hash(_document("forty-one years.", "The end."), 0, VOICE, 1.0, "v1"),
+        chapter_input_hash(document, 0, VoiceRef("tone", "b"), 1.0, "v1"),
+        chapter_input_hash(document, 0, VOICE, 1.0001, "v1"),
+        chapter_input_hash(document, 0, VOICE, 1.0, "v2"),
+    ]
+    assert len({base, *variants}) == 5
+    assert chunk_key("The end.", VOICE, "v1", 1.0) != chunk_key("The end.", VOICE, "v1", 1.0001)
 
 
 def test_rerun_only_synthesizes_missing_chunks(tone, tmp_path):

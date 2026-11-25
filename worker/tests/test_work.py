@@ -25,6 +25,7 @@ class FakeApi:
         self.leases: list[tuple[str, str | None]] = []  # (path, lease token sent) of every job call
         self.calls: list[tuple[str, str]] = []
         self.chapters: dict[int, dict] = {}
+        self.chapter_audio: dict[int, bytes] = {}
         self.timings: dict[int, dict] = {}
         self.book: bytes | None = None
         self.document: dict | None = None  # the stored Document
@@ -52,7 +53,9 @@ class FakeApi:
             base = f"/api/worker/jobs/{self.job['episodeId']}"
             stored = {"documentPath": f"{base}/document" if self.document else None,
                       "coverPath": f"{base}/cover" if self.cover else None}
-            return 200, json.dumps({"work": {"_tag": "Narrate", **self.job, **stored, "leaseToken": self.lease}}).encode()
+            chapters = [{"index": i, "inputHash": c["inputHash"]} for i, c in self.chapters.items()]
+            return 200, json.dumps({"work": {"_tag": "Narrate", **self.job, **stored,
+                                             "leaseToken": self.lease, "chapters": chapters}}).encode()
         lease = query.get("leaseToken") if request.command in ("GET", "PUT") else json.loads(body).get("leaseToken")
         self.leases.append((url.path, lease))
         if lease != self.lease or self.state != "Running":
@@ -73,7 +76,11 @@ class FakeApi:
             self.timings[int(parts[5])] = json.loads(body)
         elif kind == "chapters":
             index = int(parts[5])
-            self.chapters[index] = {"title": query["title"], "durationMs": int(query["durationMs"]), "bytes": len(body)}
+            if request.command == "GET":
+                return 200, self.chapter_audio[index]
+            self.chapter_audio[index] = body
+            self.chapters[index] = {"title": query["title"], "durationMs": int(query["durationMs"]),
+                                    "bytes": len(body), "inputHash": query["inputHash"]}
             if self.steal_after_chapter == index:
                 self.lease = "another-workers-lease"
         elif kind == "book":
@@ -127,10 +134,9 @@ def server():
         httpd.shutdown()
 
 
-def _job(completed=()):
+def _job():
     return {"episodeId": "ep1", "source": {"_tag": "File", "fileName": "story.txt", "contentType": "text/plain"},
-            "sourcePath": "/api/worker/jobs/ep1/source", "voice": "tone:a", "speed": 1.0,
-            "completedChapters": list(completed)}
+            "sourcePath": "/api/worker/jobs/ep1/source", "voice": "tone:a", "speed": 1.0}
 
 
 def _run(url: str, tmp_path: Path):
@@ -219,11 +225,24 @@ def test_409_drops_the_job_without_failing_it(tone, server, tmp_path):
     assert ("POST", "/api/worker/jobs/ep1/fail") not in fake.calls
 
 
-def test_resume_skips_completed_chapters(tone, server, tmp_path):
-    fake, url = server(_job(completed=[0, 1]))
+def test_narrate_again_reads_matching_chapters_for_the_new_book(tone, server, tmp_path):
+    fake, url = server(_job())
     _run(url, tmp_path)
-    assert sorted(fake.chapters) == sorted(fake.timings) == [2]
-    assert fake.book is not None and fake.state == "Ready"
+    assert fake.state == "Ready"
+    first_book = fake.book
+    first_hashes = {index: chapter["inputHash"] for index, chapter in fake.chapters.items()}
+
+    fake.state = "Queued"
+    fake.calls.clear()
+    fake.document["chapters"][1]["text"] = "The harbour is quiet."
+    _run(url, tmp_path)
+    assert fake.state == "Ready"
+    reads = [path for method, path in fake.calls if method == "GET" and "/chapters/" in path]
+    writes = [path for method, path in fake.calls if method == "PUT" and "/chapters/" in path]
+    assert reads == ["/api/worker/jobs/ep1/chapters/0", "/api/worker/jobs/ep1/chapters/2"]
+    assert writes == ["/api/worker/jobs/ep1/chapters/1/timing", "/api/worker/jobs/ep1/chapters/1"]
+    assert fake.chapters[1]["inputHash"] != first_hashes[1]
+    assert fake.book and fake.book != first_book
 
 
 def test_extraction_error_fails_the_job(tone, server, tmp_path):

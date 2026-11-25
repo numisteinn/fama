@@ -9,10 +9,11 @@ upload them right away.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -70,7 +71,8 @@ class ChapterFile:
     title: str
     path: Path
     duration_ms: int
-    timing: Path  # the timing file, next to the audio
+    timing: Path | None  # reused chapters only need their audio for the book
+    input_hash: str
 
 
 @dataclass(frozen=True)
@@ -112,12 +114,15 @@ def _sentence(text: str) -> str:
     return text if re.search(r"[.!?]$", text) else f"{text}."
 
 
-def plan(document: Document, voice: VoiceRef, speed: float, engine: Engine) -> Plan:
+def plan(document: Document, voice: VoiceRef, speed: float, engine: Engine, *,
+         skip: Collection[int] = ()) -> Plan:
     def speak(text: str) -> str:
         return normalize(text, document.language)
 
     chapters = []
     for index, chapter in enumerate(document.chapters):
+        if index in skip:
+            continue
         body = tuple(segments(chapter.text, engine.max_chars, speak))
         start = _key(" ".join(s.spoken for s in body))
         lines: list[str] = []
@@ -194,14 +199,28 @@ def write_timing(timed: tuple[Timed, ...], path: Path) -> None:
     ]}, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def chapter_input_hash(document: Document, index: int, voice: VoiceRef, speed: float, model_version: str) -> str:
+    chapter = document.chapters[index]
+    payload = json.dumps([
+        "chapter-v1", index, chapter.title, chapter.text, document.title, document.author, document.language,
+        str(voice), float(speed), model_version,
+    ])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def narrate(document: Document, voice: VoiceRef, speed: float, out_dir: Path, *,
             reporter: Reporter | None = None, cache: ChunkCache | None = None,
-            skip: Collection[int] = ()) -> Book:
-    """Make every chapter file, then the book file. Chapters in `skip` are not reported again."""
+            stored_hashes: Mapping[int, str] | None = None,
+            fetch_chapter: Callable[[int, Path], None] | None = None) -> Book:
+    """Narrate stale or missing chapters and assemble a book from new and reused audio."""
     reporter = reporter or SilentReporter()
     cache = cache or ChunkCache()
     engine = get_engine(voice.engine)
-    the_plan = plan(document, voice, speed, engine)
+    hashes = [chapter_input_hash(document, i, voice, speed, engine.model_version)
+              for i in range(len(document.chapters))]
+    reused = {i for i, digest in enumerate(hashes) if stored_hashes and stored_hashes.get(i) == digest}
+    the_plan = plan(document, voice, speed, engine, skip=reused)
+    to_render = iter(the_plan.chapters)
     directory = out_dir / slug(document.title)
     directory.mkdir(parents=True, exist_ok=True)
     cover = audio.write_cover(document.cover, directory) if document.cover else None
@@ -216,15 +235,21 @@ def narrate(document: Document, voice: VoiceRef, speed: float, out_dir: Path, *,
 
     reporter.stage("synthesizing", 0, total)
     files = []
-    for chapter in the_plan.chapters:
-        rendered, timed = render_chapter(chapter, the_plan, engine, cache, tick)
-        path = directory / "chapters" / f"{chapter.index:03d}.m4a"
-        audio.encode_chapter(rendered, path, title=chapter.title, album=document.title, artist=document.author,
-                             track=chapter.index + 1)
-        write_timing(timed, path.with_suffix(".json"))
-        file = ChapterFile(chapter.index, chapter.title, path, audio.duration_ms(path), path.with_suffix(".json"))
+    for index, chapter in enumerate(document.chapters):
+        path = directory / "chapters" / f"{index:03d}.m4a"
+        timing = None
+        if index in reused:
+            assert fetch_chapter is not None
+            fetch_chapter(index, path)
+        else:
+            rendered, timed = render_chapter(next(to_render), the_plan, engine, cache, tick)
+            audio.encode_chapter(rendered, path, title=chapter.title, album=document.title, artist=document.author,
+                                 track=index + 1)
+            timing = path.with_suffix(".json")
+            write_timing(timed, timing)
+        file = ChapterFile(index, chapter.title, path, audio.duration_ms(path), timing, hashes[index])
         files.append(file)
-        if chapter.index not in skip:
+        if timing is not None:
             reporter.chapter_ready(file)
 
     reporter.stage("encoding", 0, 1)
