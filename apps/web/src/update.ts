@@ -42,6 +42,7 @@ import {
 } from "~/command"
 import { Message, type PlayerShortcut } from "~/message"
 import type { ReaderMessage } from "~/reader/message"
+import type { NarrateAgainMessage } from "~/review/narrateAgainMessage"
 import type { ReviewMessage } from "~/review/message"
 import {
   Feed,
@@ -69,6 +70,8 @@ import {
 } from "~/model"
 import { initReader } from "~/reader/model"
 import * as Reader from "~/reader/update"
+import { NarrateAgainView, initNarrateAgain } from "~/review/narrateAgainModel"
+import * as NarrateAgain from "~/review/narrateAgainUpdate"
 import { initReview } from "~/review/model"
 import * as Review from "~/review/update"
 import { chapterStartMs, locate, scrubTargetMs, totalMs } from "~/timeline"
@@ -110,7 +113,9 @@ export const init = (flags: Flags): UpdateReturn => {
     feedRequests: 0,
     isFeedUrlCopied: false,
     feedUrlCopies: 0,
+    narrateAgain: initNarrateAgain,
     playback: Playback.Stopped(),
+    loadedChapterDurationMs: null,
     reader: initReader,
     review: initReview,
     maybeListening: Option.none(),
@@ -246,10 +251,26 @@ const fetchEpisodes: Step = (model) => {
 const answerLibrary = (model: Model, request: number): Model =>
   modifyFields(model, { libraryRequestsInFlight: (inFlight) => inFlight.filter((sent) => sent !== request) })
 
-/** Replaces the episode list. It is a fact: `reconcile` applies the playback rules that depend on it. */
+/** Replaces the episode list. Captures the loaded chapter's duration before replacement so chapter fraction holds. */
 const withEpisodes =
   (toEpisodes: (list: ReadonlyArray<Episode>) => ReadonlyArray<Episode>): Step =>
-  (model) => ({ model: modifyFields(model, { maybeEpisodes: () => Option.some(toEpisodes(episodes(model))) }) })
+  (model) => {
+    const previous = episodes(model)
+    const playback = model.playback
+    const previousDuration =
+      model.loadedChapterDurationMs === null && playback._tag === "Loaded"
+        ? (() => {
+            const chapter = previous.find((item) => item.id === playback.episodeId)?.chapters[playback.chapter]
+            return chapter && chapter.url === playback.url ? chapter.durationMs : null
+          })()
+        : model.loadedChapterDurationMs
+    return {
+      model: modifyFields(model, {
+        maybeEpisodes: () => Option.some(toEpisodes(previous)),
+        loadedChapterDurationMs: () => previousDuration,
+      }),
+    }
+  }
 
 const forgetRow = (episodeId: EpisodeId): Step => (model) => ({
   model: modifyFields(model, {
@@ -798,10 +819,22 @@ const playFrom = (ms: number): Step =>
 const playChapter = (index: number): Step =>
   withLoaded(({ episode }) => (episode.chapters[index] ? playFrom(chapterStartMs(episode.chapters, index)) : unchanged))
 
-/** A message of the reader. A click on a Segment plays from its start. */
+/** A message of Narrate again. A queued change closes the screen and refreshes the Library. */
+const narrateAgainStep = (message: NarrateAgainMessage): Step => (model) => {
+  const { model: next, commands, outMessage } = NarrateAgain.update(model, message)
+  if (!outMessage) return { model: next, commands: commands ?? [] }
+  const library = fetchLibrary(next)
+  return { model: library.model, commands: [...(commands ?? []), library.command] }
+}
+
+/** A message of the reader. A click on a Segment plays from its start. Opening Read-along closes Narrate again. */
 const readerStep = (message: ReaderMessage): Step => (model) => {
   const { model: next, commands, outMessage } = Reader.update(model, message)
-  return Update.combine(next, [
+  const closed =
+    message._tag === "ClickedText" && next.reader.view._tag === "Open" && next.narrateAgain.view._tag !== "Closed"
+      ? modifyFields(next, { narrateAgain: (state) => ({ ...state, view: NarrateAgainView.Closed() }) })
+      : next
+  return Update.combine(closed, [
     (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
     outMessage ? playFrom(outMessage.positionMs) : unchanged,
   ])
@@ -843,6 +876,7 @@ const isSamePlayback = (a: Playback, b: Playback) =>
     ? a._tag === b._tag
     : a.episodeId === b.episodeId &&
       a.chapter === b.chapter &&
+      a.url === b.url &&
       a.offsetMs === b.offsetMs &&
       a.isPlaying === b.isPlaying &&
       a.isWaiting === b.isWaiting
@@ -862,6 +896,7 @@ const stopPlayback: Step = (model) => {
   return {
     model: modifyFields(model, {
       playback: () => Playback.Stopped(),
+      loadedChapterDurationMs: () => null,
       maybeListening: () => Option.none(),
       isSaveDue: () => false,
       maybeScrubMs: () => Option.none(),
@@ -939,8 +974,22 @@ const reconcile: Step = (model) => {
   const placeMs = mode === "Playing" && isStart ? start.positionMs : positionMs
 
   // Where the audio must be. Audio that rests, waits or plays on stays in its place: only a reason moves it.
-  const isPlaced = here === undefined || isSeek || isMovedToEntry || (mode === "Playing" && !(isOn && !isSeek))
-  const target = isPlaced || here === undefined ? locate(chapters, placeMs) : { index: here.chapter, offsetMs: here.offsetMs }
+  // A late shorter list may omit the current chapter; only a listed chapter with a different URL counts as replaced.
+  const listed = here !== undefined ? chapters[here.chapter] : undefined
+  const isReplaced = here !== undefined && listed !== undefined && listed.url !== here.url
+  const isPlaced = here === undefined || isSeek || isMovedToEntry || isReplaced || (mode === "Playing" && !(isOn && !isSeek))
+  const replacedTarget =
+    isReplaced && !isSeek && !isMovedToEntry && !(mode === "Playing" && isStart)
+      ? {
+          index: here.chapter,
+          offsetMs:
+            model.loadedChapterDurationMs !== null && model.loadedChapterDurationMs > 0
+              ? Math.min(listed.durationMs, Math.round((here.offsetMs / model.loadedChapterDurationMs) * listed.durationMs))
+              : Math.min(listed.durationMs, here.offsetMs),
+        }
+      : undefined
+  const target =
+    replacedTarget ?? (isPlaced || here === undefined ? locate(chapters, placeMs) : { index: here.chapter, offsetMs: here.offsetMs })
   /** The file to load. Audio that stays in its place has its file already, also when a late list no longer has it. */
   const file = chapters[target.index]
   const hasFile = isPlaced ? file !== undefined : true
@@ -956,7 +1005,7 @@ const reconcile: Step = (model) => {
         : here?.isPlaying && !hasFile
           ? [PauseAudio()]
           : []
-      : here === undefined || here.chapter !== target.index
+      : here === undefined || here.chapter !== target.index || here.url !== file.url
         ? [load(file)]
         : Math.abs(here.offsetMs - target.offsetMs) >= 1
           ? [isPlaying === here.isPlaying && !isStart ? SeekAudio({ offsetMs: target.offsetMs }) : load(file)]
@@ -988,10 +1037,15 @@ const reconcile: Step = (model) => {
       : Playback.Loaded({
           episodeId: episode.id,
           chapter: target.index,
+          url: file?.url ?? here?.url ?? "",
           offsetMs: target.offsetMs,
           isPlaying,
           isWaiting: mode === "Waiting",
         })
+  const nextLoadedDurationMs =
+    nextPlayback._tag === "Loaded"
+      ? (file !== undefined && file.url === nextPlayback.url ? file.durationMs : model.loadedChapterDurationMs)
+      : null
   const nextListening: Listening = {
     episodeId: episode.id,
     wantsPlay: listening.wantsPlay && !isOver,
@@ -1000,12 +1054,17 @@ const reconcile: Step = (model) => {
     maybeFollowedAt,
   }
   const isUnchanged =
-    isSamePlayback(playback, nextPlayback) && isSameListening(listening, nextListening) && !model.isSaveDue && !stamp
+    isSamePlayback(playback, nextPlayback) &&
+    isSameListening(listening, nextListening) &&
+    model.loadedChapterDurationMs === nextLoadedDurationMs &&
+    !model.isSaveDue &&
+    !stamp
   return {
     model: isUnchanged
       ? model
       : modifyFields(model, {
           playback: () => (isSamePlayback(playback, nextPlayback) ? playback : nextPlayback),
+          loadedChapterDurationMs: () => nextLoadedDurationMs,
           maybeListening: () => (isSameListening(listening, nextListening) ? model.maybeListening : Option.some(nextListening)),
           isSaveDue: () => false,
           stamping: (stamping) =>
@@ -1125,6 +1184,7 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     }),
     CompletedFocusDeleteConfirm: () => ({ model }),
 
+    GotNarrateAgainMessage: ({ message: narrateAgainMessage }) => narrateAgainStep(narrateAgainMessage)(model),
     GotReaderMessage: ({ message: readerMessage }) => readerStep(readerMessage)(model),
     GotReviewMessage: ({ message: reviewMessage }) => reviewStep(reviewMessage)(model),
 
@@ -1203,4 +1263,4 @@ const handle = (model: Model, message: Message): UpdateReturn =>
  * reader's `reconcile` loads text and keeps the mark in sight.
  */
 export const update = (model: Model, message: Message): UpdateReturn =>
-  Update.combine(model, [(start) => handle(start, message), reconcile, Reader.reconcile, Review.reconcile])
+  Update.combine(model, [(start) => handle(start, message), reconcile, NarrateAgain.reconcile, Reader.reconcile, Review.reconcile])

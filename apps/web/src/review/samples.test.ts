@@ -230,7 +230,14 @@ describe("voice samples lifecycle in Review", () => {
   test("playing a sample pauses main episode playback, and resuming main playback or leaving Review stops the sample", () => {
     const withMainPlaying = withPlayback(
       openedModel(),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 1000, isPlaying: true, isWaiting: false }),
+      Playback.Loaded({
+        episodeId: harbourDays.id,
+        chapter: 0,
+        offsetMs: 1000,
+        url: harbourDays.chapters[0]!.url,
+        isPlaying: true,
+        isWaiting: false,
+      }),
     )
     const loaded = update(
       withMainPlaying,
