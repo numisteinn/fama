@@ -95,6 +95,10 @@ export const play = icon("play", [
   ["path", "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"],
 ])
 export const pause = icon("pause", [rect(14, 3, 5, 18, 1), rect(5, 3, 5, 18, 1)])
+export const pencil = icon("pencil", [
+  ["path", "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"],
+  ["path", "m15 5 4 4"],
+])
 export const rotateCw = icon("rotate-cw", [
   ["path", "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"],
   ["path", "M21 3v5h-5"],

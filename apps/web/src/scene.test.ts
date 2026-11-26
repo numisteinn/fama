@@ -234,7 +234,7 @@ describe("chapters menu", () => {
   test("typing a chapter number highlights that chapter, as the item shows it", () => {
     const loaded = withPlayback(
       withEpisodes(baseModel(), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, offsetMs: 0, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 0, isPlaying: false, isWaiting: false }),
     )
     const chaptersMenu = role("menu")
     scene(

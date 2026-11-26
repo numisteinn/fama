@@ -3,6 +3,7 @@ import type { Message } from "~/message"
 import { type Model, current } from "~/model"
 import { Message as M } from "~/message"
 import { isReaderShown, reader } from "~/reader/view"
+import { isNarrateAgainShown, narrateAgain } from "~/review/narrateAgainView"
 import { isReviewShown, review } from "~/review/view"
 import { addBar } from "~/view/addBar"
 import { buttonClass } from "~/view/button"
@@ -44,11 +45,13 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Document => ({
               ),
             ],
           ),
-          ...(isReaderShown(model)
-            ? [reader(model, h)]
-            : isReviewShown(model)
-              ? [review(model, h)]
-              : [...addBar(model, h), h.section([h.Class("mt-6")], [library(model, h)])]),
+          ...(isNarrateAgainShown(model)
+            ? [narrateAgain(model, h)]
+            : isReaderShown(model)
+              ? [reader(model, h)]
+              : isReviewShown(model)
+                ? [review(model, h)]
+                : [...addBar(model, h), h.section([h.Class("mt-6")], [library(model, h)])]),
         ],
       ),
       ...playerBar(model, h),

@@ -36,7 +36,10 @@ export type NativeStatus = {
   error: string | null
 }
 
-declare class FamaPlayerModule extends NativeModule<{ onStatus: (status: NativeStatus) => void }> {
+/** One sample clip of Review. `error` is set when the clip could not be played. */
+export type SampleStatus = { url: string; playing: boolean; error?: string | null }
+
+declare class FamaPlayerModule extends NativeModule<{ onStatus: (status: NativeStatus) => void; onSampleStatus: (status: SampleStatus) => void }> {
   load(options: LoadOptions): Promise<void>
   /** The episode as the library lists it now: its chapters, and whether the job still makes more. */
   updateTracks(tracks: Track[], expectsMore: boolean): Promise<void>
@@ -49,6 +52,10 @@ declare class FamaPlayerModule extends NativeModule<{ onStatus: (status: NativeS
   setStatusInterval?(seconds: number): Promise<void>
   unload(): Promise<void>
   getStatus(): Promise<NativeStatus>
+  /** Plays one sample clip. The same clip resumes; another clip replaces it. Pauses narration. */
+  playSample(url: string): Promise<void>
+  pauseSample(): Promise<void>
+  stopSample(): Promise<void>
 }
 
 export const FamaPlayer = requireNativeModule<FamaPlayerModule>("FamaPlayer")

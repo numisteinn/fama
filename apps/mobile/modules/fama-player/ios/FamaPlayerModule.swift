@@ -28,14 +28,21 @@ private func toTracks(_ records: [TrackRecord]) -> [Track] {
 
 public class FamaPlayerModule: Module {
   // Built on first use. Every function runs on the main queue.
-  private lazy var player: EpisodePlayer = EpisodePlayer { [weak self] status in
+  private lazy var player: EpisodePlayer = EpisodePlayer(onWillPlay: { [weak self] in
+    self?.samplePlayer.stop()
+  }) { [weak self] status in
     self?.sendEvent("onStatus", status)
+  }
+
+  // The sample clips of Review. Kept apart from the episode: it changes no Now Playing info.
+  private lazy var samplePlayer: SamplePlayer = SamplePlayer { [weak self] status in
+    self?.sendEvent("onSampleStatus", status)
   }
 
   public func definition() -> ModuleDefinition {
     Name("FamaPlayer")
 
-    Events("onStatus")
+    Events("onStatus", "onSampleStatus")
 
     AsyncFunction("load") { (record: LoadRecord) in
       let info = EpisodeInfo(
@@ -62,6 +69,17 @@ public class FamaPlayerModule: Module {
     AsyncFunction("setStatusInterval") { (seconds: Double) in self.player.setStatusInterval(seconds) }.runOnQueue(.main)
     AsyncFunction("unload") { self.player.unload() }.runOnQueue(.main)
     AsyncFunction("getStatus") { () -> [String: Any] in self.player.status }.runOnQueue(.main)
+
+    // A sample clip. Narration pauses while a sample plays, and starting narration stops any sample.
+    AsyncFunction("playSample") { (url: String) in
+      guard let clip = URL(string: url), let scheme = clip.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+        throw Exception(name: "InvalidSampleURL", description: "Invalid sample URL.")
+      }
+      self.player.pause()
+      self.samplePlayer.play(clip, rawUrl: url)
+    }.runOnQueue(.main)
+    AsyncFunction("pauseSample") { self.samplePlayer.pause() }.runOnQueue(.main)
+    AsyncFunction("stopSample") { self.samplePlayer.stop(deactivateSession: !self.player.isLoaded) }.runOnQueue(.main)
 
     View(RouteButtonView.self) {
       Prop("tint") { (view: RouteButtonView, color: UIColor) in
