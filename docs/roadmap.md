@@ -13,17 +13,13 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 | Voice sample | yes | yes (the worker must be free) |
 | Narrate again | yes | no |
 
-The foundation, Read-along, Review, the API of Voice sample, the core of Narrate again, and links that the phone fetches are built. What is left is the Voice sample screens, the Narrate again screens, and extraction.
+The foundation, Read-along, Review, Voice sample, Narrate again, links that the phone fetches, and OCR for scanned PDFs are built. What is left is the optional Icelandic LLM text pass.
 
 ```
-now ──┬─ S2 Sample web
-      ├─ S3 Sample iPhone
-      ├─ N2 Narrate again web
-      ├─ N3 Narrate again iPhone
-      └─ X  Extraction (OCR, LLM text fix)
+now ── X3 LLM text fix (Icelandic)
 ```
 
-Five units can start now: `S2`, `S3`, `N2`, `N3`, `X`.
+One unit can start now: `X3`.
 
 ## Rules for parallel work
 
@@ -72,7 +68,7 @@ In Review, each voice reads the first paragraph of your Document. You choose by 
 
 The Sample API is in place. Once an Episode has a stored Document, use `POST /api/episodes/:id/samples` to ask for clips and `GET /api/episodes/:id/samples` to read the states and URLs. See [the Sample contract](api.md#samples). A Worker finishes any narration it already started before it claims Samples.
 
-**S2** adds Samples to web Review after `V2`. **S3** adds Samples to iPhone Review after `V3`.
+Built on the web and the iPhone.
 
 ### N. Narrate again
 
@@ -88,7 +84,7 @@ First principles: a chapter's audio is stale when its inputs differ from the inp
 - The API stores the feed transcript after the first request. When a chapter changes, delete the stored transcript.
 - The timing file of a chapter changes with its audio. The readers keep timing files in memory and on the phone, so they must load them again.
 
-The core is built. Units: **N2** web and **N3** iPhone. Each adds a screen that edits chapter text, voice and speed of a `Ready` or `Failed` episode, with the routes in [the contract](./api.md#narrate-again).
+Built across the API, worker, web, and iPhone.
 
 
 ### L. Links the phone fetches
@@ -104,7 +100,7 @@ First principles: the device that has the link is on a network the site accepts,
 
 All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit at a time, because the units share `pdf.py`.
 
-- **X2. OCR for scanned PDFs.** A scanned PDF has no text to extract. On the Mac, Apple Vision OCR works offline. Check its Icelandic support first. Seen in: abogen (on its roadmap).
+- **X2** (built). **OCR for scanned PDFs.** Scanned and hybrid PDF pages with no text layer are read offline with `tesseract` (`isl+eng` when installed, keeping Icelandic letters intact) or Apple Vision on macOS as a fallback, then cleaned by `pdf.py`.
 - **X3. LLM pass to fix text, for Icelandic only.** This fixes Icelandic numbers ("3 bækur" must be read as "þrjár bækur"), which the rules in `normalize.py` do not handle. Optional, with a local model or an API model. Seen in: abogen.
 
 ## Files
@@ -113,14 +109,7 @@ A unit may edit the files in its row. Other files get connecting lines only (rul
 
 | Unit | Its own files | Migration |
 |---|---|---|
-| S2, S3 | `apps/web/src/review/samples.ts`, `apps/mobile/src/review/Samples.tsx` | |
-| N2, N3 | `apps/web/src/review/`, `apps/mobile/src/review/` | |
-| X | `worker/.../extract/`, `worker/.../normalize.py` | |
-
-Known shared points, and who goes first:
-
-- `apps/web/src/review/` and `apps/mobile/src/review/`: `S2` and `N2` share the web folder, `S3` and `N3` the iPhone folder. Each puts its logic in its own file. The Review screen gets connecting lines only.
-- `apps/web/src/api.ts` and `apps/mobile/src/lib/api.ts`: each unit adds its calls in alphabetical order.
+| X3 | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 
 ## Open choices
