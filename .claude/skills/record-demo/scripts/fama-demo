@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+VERIFY="$REPO_ROOT/.claude/skills/verify-fama/scripts/fama-verify"
+
+# Ensure mise-pinned tools (node, pnpm, uv) are on PATH in non-interactive shells.
+if [ -d "$HOME/.local/share/mise/shims" ]; then
+  export PATH="$HOME/.local/share/mise/shims:$PATH"
+fi
+
+usage() {
+  cat <<'EOF'
+Usage:
+  fama-demo run <spec.json> [--format 16:9|9:16] [--out <dir>] [--keep-stack]
+  fama-demo vo <run-dir>
+  fama-demo render <run-dir> [--format 16:9|9:16]
+
+Commands:
+  run     Start isolated fama-verify stack, generate fixtures, capture real UI + audio,
+          tear down stack, synthesize Kokoro voiceover, and render MP4 + contact sheet.
+  vo      Re-synthesize Kokoro voiceover clips from <run-dir>/spec.json.
+  render  Re-render MP4 + contact sheet from existing captured assets in <run-dir>.
+EOF
+  exit 1
+}
+
+[ $# -ge 2 ] || usage
+CMD="$1"
+shift
+
+FORMAT="16:9"
+OUT_DIR=""
+KEEP_STACK=0
+
+case "$CMD" in
+  run)
+    SPEC_PATH="$1"
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --format) FORMAT="$2"; shift 2 ;;
+        --out) OUT_DIR="$2"; shift 2 ;;
+        --keep-stack) KEEP_STACK=1; shift ;;
+        *) echo "Unknown flag: $1" >&2; usage ;;
+      esac
+    done
+
+    SPEC_ABS="$(cd "$(dirname "$SPEC_PATH")" && pwd)/$(basename "$SPEC_PATH")"
+    [ -f "$SPEC_ABS" ] || { echo "Spec not found: $SPEC_PATH" >&2; exit 1; }
+
+    NAME="$(node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log((s.meta&&s.meta.name)||"demo");' "$SPEC_ABS")"
+    STAMP="$(date +%Y%m%d-%H%M%S)"
+    if [ -z "$OUT_DIR" ]; then
+      OUT_DIR="$HOME/Developer/fama-shots/demos/${NAME}-${STAMP}"
+    fi
+    mkdir -p "$OUT_DIR/assets"
+    cp "$SPEC_ABS" "$OUT_DIR/spec.json"
+
+    # Isolated verify stack so we never touch port 8787 or an active verify run on 8788.
+    export FAMA_VERIFY_API_PORT="${FAMA_VERIFY_API_PORT:-8971}"
+    export FAMA_VERIFY_FIXTURE_PORT="${FAMA_VERIFY_FIXTURE_PORT:-8972}"
+    export FAMA_VERIFY_STATE="${FAMA_VERIFY_STATE:-${TMPDIR:-/tmp}/fama-demo-verify-${STAMP}}"
+
+    STACK_UP=0
+    cleanup() {
+      if [ "$STACK_UP" -eq 1 ] && [ "$KEEP_STACK" -eq 0 ]; then
+        echo "fama-demo: stopping isolated fama-verify stack..."
+        (cd "$REPO_ROOT" && "$VERIFY" down) || true
+      fi
+    }
+    trap cleanup EXIT
+
+    echo "fama-demo: out=$OUT_DIR format=$FORMAT"
+    echo "fama-demo: preparing fixtures..."
+    (cd "$REPO_ROOT/worker" && uv run python "$SCRIPT_DIR/voiceover.py" fixtures "$OUT_DIR/spec.json" "$OUT_DIR" "$REPO_ROOT/.claude/skills/verify-fama/fixtures")
+
+    echo "fama-demo: launching isolated fama-verify stack on :$FAMA_VERIFY_API_PORT..."
+    (cd "$REPO_ROOT" && "$VERIFY" up && "$VERIFY" doctor)
+    STACK_UP=1
+
+    echo "fama-demo: capturing real Fama UI, bounding boxes, and audio..."
+    node "$SCRIPT_DIR/capture.mjs" \
+      --spec "$OUT_DIR/spec.json" \
+      --out "$OUT_DIR" \
+      --base-url "http://localhost:$FAMA_VERIFY_API_PORT" \
+      --token "dev-api-token"
+
+    if [ "$KEEP_STACK" -eq 0 ]; then
+      (cd "$REPO_ROOT" && "$VERIFY" down)
+      STACK_UP=0
+    fi
+
+    echo "fama-demo: synthesizing local Kokoro voiceover..."
+    (cd "$REPO_ROOT/worker" && uv run python "$SCRIPT_DIR/voiceover.py" vo "$OUT_DIR/spec.json" "$OUT_DIR")
+
+    echo "fama-demo: rendering studio video ($FORMAT)..."
+    node "$SCRIPT_DIR/render.mjs" --out "$OUT_DIR" --format "$FORMAT"
+    ;;
+
+  vo)
+    RUN_DIR="$1"
+    shift
+    [ -f "$RUN_DIR/spec.json" ] || { echo "No spec.json in $RUN_DIR" >&2; exit 1; }
+    (cd "$REPO_ROOT/worker" && uv run python "$SCRIPT_DIR/voiceover.py" vo "$RUN_DIR/spec.json" "$RUN_DIR")
+    ;;
+
+  render)
+    RUN_DIR="$1"
+    shift
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --format) FORMAT="$2"; shift 2 ;;
+        *) echo "Unknown flag: $1" >&2; usage ;;
+      esac
+    done
+    [ -f "$RUN_DIR/spec.json" ] || { echo "No spec.json in $RUN_DIR" >&2; exit 1; }
+    node "$SCRIPT_DIR/render.mjs" --out "$RUN_DIR" --format "$FORMAT"
+    ;;
+
+  *)
+    usage
+    ;;
+esac
