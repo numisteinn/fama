@@ -17,9 +17,11 @@ type Library = {
   readonly refreshing: boolean
   readonly error: string | null
   refresh(): Promise<void>
+  changeVoice(id: string, voice: VoiceRef, speed: number): Promise<void>
   create(source: SourceInput, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
   upload(file: PickedFile, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
   remove(id: string): Promise<void>
+  saveDocument(id: string, document: Document): Promise<void>
   saveReviewVoice(id: string, voice: VoiceRef, speed: number): Promise<void>
   start(id: string, document: Document, voice?: VoiceRef | null): Promise<void>
   retry(id: string): Promise<void>
@@ -135,6 +137,13 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         await load()
         setRefreshing(false)
       },
+      async changeVoice(id, voice, speed) {
+        await requireApi().changeVoice(id, voice, speed)
+        setEpisodes((list) =>
+          list.map((e) => (e.id === id ? { ...e, voice, speed, job: { _tag: "Queued" }, bookUrl: null } : e)),
+        )
+        void load()
+      },
       async create(source, voice, speed, review) {
         const episode = await requireApi().createEpisode(source, voice, speed, review)
         prepend(episode)
@@ -154,6 +163,11 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           setEpisodes(before)
           throw cause
         }
+      },
+      async saveDocument(id, document) {
+        await requireApi().saveDocument(id, document)
+        setEpisodes((list) => list.map((e) => (e.id === id ? { ...e, job: { _tag: "Queued" }, bookUrl: null } : e)))
+        void load()
       },
       async saveReviewVoice(id, voice, speed) {
         await requireApi().changeVoice(id, voice, speed)

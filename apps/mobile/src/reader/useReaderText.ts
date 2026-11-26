@@ -52,7 +52,7 @@ export function useReaderText(episode: Episode, playing: number) {
       if (!chapter?.timingUrl || state?._tag !== "Idle") continue
       const { key } = state
       dispatch({ _tag: "Started", index, key })
-      readTiming(api.mediaUrl(chapter.timingUrl), localTimingUri(episode.id, chapter.index)).then(
+      readTiming(api.mediaUrl(chapter.timingUrl), localTimingUri(episode.id, chapter.index, chapter.timingUrl)).then(
         (segments) => dispatch({ _tag: "Loaded", index, key, segments }),
         () => dispatch({ _tag: "Failed", index, key }),
       )

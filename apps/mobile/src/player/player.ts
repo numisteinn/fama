@@ -25,12 +25,12 @@ const statusListeners = new Set<() => void>()
 
 export type TrackSource = {
   mediaUrl(path: string): string
-  localUri(episodeId: string, index: number): string | null
+  localUri(episodeId: string, index: number, url: string): string | null
 }
 
 function tracksOf(episode: Episode, from: TrackSource): Track[] {
   return episode.chapters.map((chapter) => ({
-    url: from.localUri(episode.id, chapter.index) ?? from.mediaUrl(chapter.url),
+    url: from.localUri(episode.id, chapter.index, chapter.url) ?? from.mediaUrl(chapter.url),
     title: chapter.title,
     durationMs: chapter.durationMs,
   }))

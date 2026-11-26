@@ -12,15 +12,17 @@ import { Icon, Tap } from "./ui"
 
 type Props = {
   episode: Episode
+  onNarrateAgain(episode: Episode): void
   onReview(episode: Episode): void
   onPlay(episode: Episode): void
   onRetry(episode: Episode): Promise<void>
   onDelete(episode: Episode): void
 }
 
-export function EpisodeRow({ episode, onReview, onPlay, onRetry, onDelete }: Props) {
+export function EpisodeRow({ episode, onNarrateAgain, onReview, onPlay, onRetry, onDelete }: Props) {
   const swipeable = useRef<SwipeableMethods>(null)
   const playable = isPlayable(episode)
+  const editable = episode.job._tag === "Ready" || episode.job._tag === "Failed"
   return (
     <ReanimatedSwipeable
       ref={swipeable}
@@ -42,21 +44,33 @@ export function EpisodeRow({ episode, onReview, onPlay, onRetry, onDelete }: Pro
         </Tap>
       )}
     >
-      <Tap
-        style={styles.row}
-        accessibilityRole="button"
-        accessibilityLabel={episode.job._tag === "Review" ? `Review ${episode.title}` : episode.title}
-        onPress={() => episode.job._tag === "Review" ? onReview(episode) : playable && onPlay(episode)}
-      >
-        <Artwork episode={episode} size={56} rounded={radius.sm} />
-        <View style={styles.body}>
-          <Text style={styles.title} numberOfLines={2}>
-            {episode.title}
-          </Text>
-          <Meta episode={episode} />
-        </View>
+      <View style={styles.row}>
+        <Tap
+          style={styles.main}
+          accessibilityRole="button"
+          accessibilityLabel={episode.job._tag === "Review" ? `Review ${episode.title}` : episode.title}
+          onPress={() => episode.job._tag === "Review" ? onReview(episode) : playable && onPlay(episode)}
+        >
+          <Artwork episode={episode} size={56} rounded={radius.sm} />
+          <View style={styles.body}>
+            <Text style={styles.title} numberOfLines={2}>
+              {episode.title}
+            </Text>
+            <Meta episode={episode} />
+          </View>
+        </Tap>
+        {editable ? (
+          <Tap
+            accessibilityRole="button"
+            accessibilityLabel={`Edit ${episode.title}`}
+            style={styles.edit}
+            onPress={() => onNarrateAgain(episode)}
+          >
+            <Icon name="pencil" size={18} color={colors.textSecondary} />
+          </Tap>
+        ) : null}
         {episode.job._tag === "Failed" ? <RetryButton onRetry={() => onRetry(episode)} /> : null}
-      </Tap>
+      </View>
       {episode.job._tag === "Running" && episode.job.total > 0 ? (
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${(episode.job.done / episode.job.total) * 100}%` }]} />
@@ -133,12 +147,14 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: space.md,
+    gap: space.sm,
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
     minHeight: 80,
     backgroundColor: colors.background,
   },
+  main: { flex: 1, flexDirection: "row", alignItems: "center", gap: space.md },
+  edit: { width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center" },
   body: { flex: 1, gap: 4 },
   title: { fontFamily: fonts.medium, fontSize: 17, lineHeight: 22, color: colors.text },
   meta: { flexDirection: "row", alignItems: "center", gap: 6 },

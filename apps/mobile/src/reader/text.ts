@@ -17,7 +17,7 @@ type Listed = { readonly id: string; readonly chapters: ReadonlyArray<Chapter> }
 
 /** The timing file of a chapter, or null for a chapter made before timing files. */
 export const timingKey = (chapter: Chapter): string | null =>
-  chapter.timingUrl === null ? null : `${chapter.timingUrl}#${chapter.durationMs}`
+  chapter.timingUrl === null ? null : `${chapter.url}#${chapter.timingUrl}#${chapter.durationMs}`
 
 /** The episode has text to read: the reader's entry point shows only then. */
 export const hasText = (episode: Listed): boolean => episode.chapters.some((chapter) => chapter.timingUrl !== null)

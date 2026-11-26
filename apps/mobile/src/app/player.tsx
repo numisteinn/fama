@@ -55,6 +55,12 @@ export default function PlayerScreen() {
             <Icon name="book" color={reading ? colors.accent : colors.text} />
           </Tap>
         )}
+        {(episode.job._tag === "Ready" || episode.job._tag === "Failed") && (
+          <Tap style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Narrate again"
+            onPress={() => { router.dismiss(); router.navigate({ pathname: "/library/narrate-again", params: { id: episode.id } }) }}>
+            <Icon name="pencil" size={20} />
+          </Tap>
+        )}
         <Tap
           style={[styles.iconButton, showChapters && styles.iconButtonOn]}
           accessibilityRole="button"
