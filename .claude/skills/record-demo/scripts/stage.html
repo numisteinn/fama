@@ -1,0 +1,692 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fama Demo Stage</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    overflow: hidden;
+    background: #060608;
+    font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+    color: #ededed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #stage {
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(1100px 680px at 50% 18%, rgba(236, 180, 128, 0.11), transparent 65%),
+      radial-gradient(900px 600px at 82% 85%, rgba(120, 140, 180, 0.08), transparent 65%),
+      linear-gradient(180deg, #0b0b0e 0%, #050507 100%);
+  }
+
+  #stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(ellipse 75% 75% at 50% 50%, black 30%, transparent 100%);
+    pointer-events: none;
+  }
+
+  #top-meta {
+    position: absolute;
+    top: 32px;
+    left: 64px;
+    right: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 30;
+    pointer-events: none;
+  }
+
+  body.vertical #top-meta {
+    top: 56px;
+    left: 44px;
+    right: 44px;
+  }
+
+  #brand-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 15px;
+    border-radius: 999px;
+    background: rgba(10, 10, 14, 0.88);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: rgba(237, 237, 237, 0.92);
+  }
+  #brand-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e9b485;
+    box-shadow: 0 0 12px rgba(233, 180, 133, 0.75);
+  }
+
+  #feature-pill {
+    padding: 7px 16px;
+    border-radius: 999px;
+    background: rgba(10, 10, 14, 0.88);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 14px;
+    font-weight: 500;
+    color: #f3e4d3;
+    letter-spacing: 0.01em;
+  }
+
+  #camera {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+
+  #window {
+    position: absolute;
+    border-radius: 18px;
+    background: #0a0a0a;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    box-shadow:
+      0 42px 110px rgba(0, 0, 0, 0.82),
+      0 10px 30px rgba(0, 0, 0, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.09);
+    overflow: hidden;
+  }
+
+  #chrome {
+    height: 44px;
+    background: #111114;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    position: relative;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic span {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+  }
+  .traffic span:nth-child(1) { background: #ff5f57; opacity: 0.78; }
+  .traffic span:nth-child(2) { background: #febc2e; opacity: 0.78; }
+  .traffic span:nth-child(3) { background: #28c840; opacity: 0.78; }
+
+  #urlbar {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 16px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 13px;
+    color: rgba(237, 237, 237, 0.55);
+  }
+
+  #viewport {
+    position: relative;
+    overflow: hidden;
+    background: #0a0a0a;
+  }
+
+  .shot {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+  }
+
+  /* Optional iPhone Simulator bezel overlay */
+  #iphone-bezel {
+    position: absolute;
+    width: 344px;
+    height: 712px;
+    border-radius: 48px;
+    padding: 12px;
+    background: linear-gradient(160deg, #27272c, #0f0f12);
+    border: 1.5px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 36px 90px rgba(0, 0, 0, 0.85), inset 0 0 0 2px #050507;
+    opacity: 0;
+    z-index: 28;
+    pointer-events: none;
+  }
+  #iphone-bezel img {
+    width: 100%;
+    height: 100%;
+    border-radius: 38px;
+    object-fit: cover;
+    display: block;
+  }
+
+  /* Floating attachment card (e.g. scanned PDF preview) */
+  #attach-card {
+    position: absolute;
+    width: 390px;
+    border-radius: 12px;
+    background: #fbfaf7;
+    padding: 12px;
+    box-shadow: 0 26px 70px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(255, 255, 255, 0.25);
+    opacity: 0;
+    z-index: 15;
+    transform-origin: center center;
+  }
+  #attach-card img {
+    display: block;
+    width: 100%;
+    border-radius: 6px;
+  }
+  #attach-card-tag {
+    margin-top: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: #27272a;
+    padding: 2px 4px;
+  }
+  #attach-card-badge {
+    background: #fee2e2;
+    color: #991b1b;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+  }
+
+  #ripple {
+    position: absolute;
+    width: 56px;
+    height: 56px;
+    margin-left: -28px;
+    margin-top: -28px;
+    border-radius: 50%;
+    border: 2.5px solid rgba(255, 255, 255, 0.92);
+    background: rgba(233, 180, 133, 0.22);
+    opacity: 0;
+    z-index: 22;
+    pointer-events: none;
+  }
+
+  #cursor {
+    position: absolute;
+    width: 30px;
+    height: 36px;
+    left: 0;
+    top: 0;
+    z-index: 25;
+    pointer-events: none;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.65));
+    transform-origin: 4px 3px;
+  }
+
+  #live-audio-pill {
+    position: absolute;
+    bottom: 72px;
+    right: 64px;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: rgba(18, 16, 14, 0.93);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(233, 180, 133, 0.45);
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65), 0 0 24px rgba(233, 180, 133, 0.16);
+    z-index: 35;
+    opacity: 0;
+  }
+  body.vertical #live-audio-pill {
+    right: 50%;
+    transform: translateX(50%);
+    bottom: 196px;
+  }
+
+  .bars {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    height: 18px;
+  }
+  .bars i {
+    display: block;
+    width: 3px;
+    height: 8px;
+    border-radius: 2px;
+    background: #e9b485;
+  }
+  #live-audio-label {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f6e7d8;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  #caption-bar {
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 88%;
+    padding: 8px 19px;
+    border-radius: 999px;
+    background: rgba(9, 9, 12, 0.92);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 16px;
+    font-weight: 500;
+    color: rgba(245, 245, 245, 0.96);
+    text-align: center;
+    z-index: 34;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+    opacity: 0;
+  }
+  body.vertical #caption-bar {
+    bottom: 92px;
+    font-size: 22px;
+    line-height: 1.35;
+    border-radius: 20px;
+    padding: 14px 24px;
+  }
+
+  #end-card {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(700px 420px at 50% 48%, rgba(233, 180, 133, 0.12), rgba(6, 6, 8, 0.94));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 48px;
+    text-align: center;
+    opacity: 0;
+    z-index: 40;
+    pointer-events: none;
+  }
+  #end-card h1 {
+    font-size: 64px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: #f4f4f5;
+  }
+  #end-card p {
+    font-size: 23px;
+    color: rgba(237, 237, 237, 0.72);
+    max-width: 780px;
+  }
+  #end-tags {
+    margin-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+  }
+  #end-tags span {
+    padding: 8px 16px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 15px;
+    color: #e9b485;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="top-meta">
+    <div id="brand-pill"><span id="brand-dot"></span><span id="brand-text">Fama</span></div>
+    <div id="feature-pill"></div>
+  </div>
+
+  <div id="camera">
+    <div id="window">
+      <div id="chrome">
+        <div class="traffic"><span></span><span></span><span></span></div>
+        <div id="urlbar">fama.app</div>
+      </div>
+      <div id="viewport">
+        <div id="attach-card">
+          <img id="attach-img" alt="" />
+          <div id="attach-card-tag">
+            <span id="attach-name"></span>
+            <span id="attach-card-badge"></span>
+          </div>
+        </div>
+        <div id="ripple"></div>
+        <svg id="cursor" viewBox="0 0 28 34" fill="none">
+          <path d="M3 2.5L3 27.5L9.2 21.6L14.2 31.2L17.9 29.3L12.9 19.7L22.2 19.4L3 2.5Z"
+                fill="#ffffff" stroke="#09090b" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <div id="iphone-bezel"><img id="iphone-img" alt="" /></div>
+  <div id="caption-bar"></div>
+
+  <div id="live-audio-pill">
+    <span class="bars"><i></i><i></i><i></i><i></i><i></i></span>
+    <span id="live-audio-label"></span>
+  </div>
+
+  <div id="end-card">
+    <h1 id="end-title">fama</h1>
+    <p id="end-subtitle"></p>
+    <div id="end-tags"></div>
+  </div>
+</div>
+
+<script>
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const easeInOut = (t) => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const smoothstep = (a, b, t) => easeInOut(clamp((t - a) / (b - a), 0, 1));
+
+  let MANIFEST = null;
+  let TIMELINE = null;
+  let LAYOUT = null;
+  const shotEls = new Map();
+  const extraImgs = new Map();
+
+  function setupLayout(tl, manifest) {
+    const W = tl.width;
+    const H = tl.height;
+    const isVertical = H > W;
+    document.body.classList.toggle("vertical", isVertical);
+    document.documentElement.style.width = `${W}px`;
+    document.documentElement.style.height = `${H}px`;
+    document.body.style.width = `${W}px`;
+    document.body.style.height = `${H}px`;
+
+    const stage = document.getElementById("stage");
+    stage.style.width = `${W}px`;
+    stage.style.height = `${H}px`;
+
+    const camEl = document.getElementById("camera");
+    camEl.style.width = `${W}px`;
+    camEl.style.height = `${H}px`;
+
+    const vpW = manifest.viewport.width;
+    const vpH = manifest.viewport.height;
+    const chromeH = 44;
+
+    // Fit window comfortably in either 16:9 or 9:16
+    const scale = isVertical ? 980 / vpW : 1322 / vpW;
+    const winW = Math.round(vpW * scale);
+    const contentH = Math.round(vpH * scale);
+    const winH = contentH + chromeH;
+    const winX = Math.round((W - winW) / 2);
+    const winY = isVertical ? Math.round((H - winH) / 2 - 40) : 94;
+
+    const winEl = document.getElementById("window");
+    winEl.style.left = `${winX}px`;
+    winEl.style.top = `${winY}px`;
+    winEl.style.width = `${winW}px`;
+    winEl.style.height = `${winH}px`;
+
+    const vpEl = document.getElementById("viewport");
+    vpEl.style.width = `${winW}px`;
+    vpEl.style.height = `${contentH}px`;
+
+    // Position optional iPhone bezel
+    const phone = document.getElementById("iphone-bezel");
+    if (isVertical) {
+      phone.style.left = `${Math.round((W - 344) / 2)}px`;
+      phone.style.top = `${Math.round((H - 712) / 2 - 40)}px`;
+    } else {
+      phone.style.right = "110px";
+      phone.style.top = "184px";
+    }
+
+    LAYOUT = { W, H, isVertical, scale, winX, winY: winY + chromeH, winW, contentH };
+  }
+
+  async function init() {
+    [MANIFEST, TIMELINE] = await Promise.all([
+      fetch("assets/manifest.json").then((r) => r.json()),
+      fetch("assets/timeline.json").then((r) => r.json()),
+    ]);
+
+    setupLayout(TIMELINE, MANIFEST);
+
+    const meta = TIMELINE.meta || {};
+    document.getElementById("brand-text").textContent = meta.brandBadge || "Fama";
+    document.getElementById("urlbar").textContent = meta.urlLabel || "fama.app";
+    document.getElementById("end-title").textContent = meta.endTitle || "fama";
+    document.getElementById("end-subtitle").textContent = meta.endSubtitle || "";
+    const tagsEl = document.getElementById("end-tags");
+    for (const tag of meta.endTags || []) {
+      const sp = document.createElement("span");
+      sp.textContent = tag;
+      tagsEl.appendChild(sp);
+    }
+
+    const viewport = document.getElementById("viewport");
+    const attachCard = document.getElementById("attach-card");
+    const loadPromises = [];
+
+    for (const [key, filename] of Object.entries(MANIFEST.shots)) {
+      const img = document.createElement("img");
+      img.className = "shot";
+      img.src = `assets/${filename}`;
+      viewport.insertBefore(img, attachCard);
+      shotEls.set(key, img);
+      loadPromises.push(img.decode().catch(() => {}));
+    }
+
+    // Preload any attachment cards or iPhone screenshots referenced in timeline
+    for (const card of TIMELINE.attachmentCards || []) {
+      const pre = new Image();
+      pre.src = `assets/${card.image}`;
+      extraImgs.set(card.image, pre);
+      loadPromises.push(pre.decode().catch(() => {}));
+    }
+    for (const ip of TIMELINE.iphoneOverlays || []) {
+      const pre = new Image();
+      pre.src = `assets/${ip.image}`;
+      extraImgs.set(ip.image, pre);
+      loadPromises.push(pre.decode().catch(() => {}));
+    }
+
+    await Promise.all(loadPromises);
+    window.__READY__ = true;
+  }
+
+  function evalKeyframes(kfs, t) {
+    if (t <= kfs[0].t) return kfs[0];
+    if (t >= kfs[kfs.length - 1].t) return kfs[kfs.length - 1];
+    for (let i = 0; i < kfs.length - 1; i++) {
+      const a = kfs[i], b = kfs[i + 1];
+      if (t >= a.t && t <= b.t) {
+        const u = easeInOut(clamp((t - a.t) / Math.max(0.0001, b.t - a.t), 0, 1));
+        return {
+          x: lerp(a.x, b.x, u),
+          y: lerp(a.y, b.y, u),
+          zoom: lerp(a.zoom ?? 1, b.zoom ?? 1, u),
+        };
+      }
+    }
+    return kfs[kfs.length - 1];
+  }
+
+  window.renderAt = function renderAt(t) {
+    const tl = TIMELINE;
+    const { W, H, isVertical, scale, winX, winY } = LAYOUT;
+
+    // 1. Active shot with crisp crossfade
+    let activeShot = tl.shots[0].shot;
+    let prevShot = null;
+    let fade = 1;
+    for (let i = 0; i < tl.shots.length; i++) {
+      const s = tl.shots[i];
+      if (t >= s.t) {
+        activeShot = s.shot;
+        prevShot = i > 0 ? tl.shots[i - 1].shot : null;
+        const fadeDur = s.fade ?? 0.12;
+        fade = fadeDur > 0 ? clamp((t - s.t) / fadeDur, 0, 1) : 1;
+      }
+    }
+    for (const [key, img] of shotEls.entries()) {
+      if (key === activeShot) {
+        img.style.opacity = String(fade);
+        img.style.zIndex = "2";
+      } else if (key === prevShot && fade < 1) {
+        img.style.opacity = "1";
+        img.style.zIndex = "1";
+      } else {
+        img.style.opacity = "0";
+        img.style.zIndex = "0";
+      }
+    }
+
+    // 2. Camera pan & zoom (vertical format boosts zoom slightly so UI fills portrait frame cleanly)
+    const cam = evalKeyframes(tl.camera, t);
+    const z = isVertical ? lerp(1.0, cam.zoom * 1.18, clamp((cam.zoom - 1) / 0.35, 0, 1)) : cam.zoom;
+    const stageFocalX = winX + cam.x * scale;
+    const stageFocalY = winY + cam.y * scale;
+    const targetCX = W / 2;
+    const targetCY = isVertical ? H * 0.44 : H * 0.49;
+    const blend = clamp((z - 1) / 0.16, 0, 1);
+
+    // Optional shift left when iPhone bezel is active in landscape
+    const phoneMatch = (tl.iphoneOverlays || []).find((p) => t >= p.start && t <= p.end);
+    const phoneShiftX = phoneMatch && !isVertical ? -190 : 0;
+
+    const zoomedShiftX = targetCX - stageFocalX * z;
+    const zoomedShiftY = targetCY - stageFocalY * z;
+    const tx = lerp(phoneShiftX, clamp(zoomedShiftX, W - W * z, 0) + phoneShiftX, blend);
+    const ty = lerp(0, clamp(zoomedShiftY, H - H * z, 0), blend);
+    document.getElementById("camera").style.transform = `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${z.toFixed(4)})`;
+
+    // 3. Optional iPhone bezel overlay
+    const phoneEl = document.getElementById("iphone-bezel");
+    if (phoneMatch) {
+      const fadeIn = clamp((t - phoneMatch.start) / 0.25, 0, 1);
+      const fadeOut = clamp((phoneMatch.end - t) / 0.25, 0, 1);
+      const img = document.getElementById("iphone-img");
+      if (!img.src.endsWith(phoneMatch.image)) img.src = `assets/${phoneMatch.image}`;
+      phoneEl.style.opacity = String(Math.min(fadeIn, fadeOut));
+    } else {
+      phoneEl.style.opacity = "0";
+    }
+
+    // 4. Cursor & click ripples
+    const cur = evalKeyframes(tl.cursor, t);
+    let pressScale = 1;
+    let rippleOpacity = 0;
+    let rippleScale = 0.2;
+    let rippleX = cur.x * scale;
+    let rippleY = cur.y * scale;
+
+    for (const clk of tl.clicks) {
+      const dt = t - clk.t;
+      if (dt >= -0.06 && dt <= 0.14) {
+        const p = dt < 0 ? (dt + 0.06) / 0.06 : 1 - dt / 0.14;
+        pressScale = 1 - 0.18 * clamp(p, 0, 1);
+      }
+      if (dt >= 0 && dt <= 0.45) {
+        const u = easeOut(dt / 0.45);
+        rippleOpacity = (1 - u) * 0.9;
+        rippleScale = 0.25 + u * 1.35;
+        rippleX = clk.x * scale;
+        rippleY = clk.y * scale;
+      }
+    }
+
+    const cursorEl = document.getElementById("cursor");
+    const endFadeStart = tl.endCard ? tl.endCard.start - 0.3 : tl.duration;
+    cursorEl.style.opacity = String(1 - smoothstep(endFadeStart - 0.4, endFadeStart, t));
+    cursorEl.style.transform = `translate3d(${(cur.x * scale - 4).toFixed(1)}px, ${(cur.y * scale - 3).toFixed(1)}px, 0) scale(${pressScale.toFixed(3)})`;
+
+    const rippleEl = document.getElementById("ripple");
+    rippleEl.style.opacity = String(rippleOpacity);
+    rippleEl.style.left = `${rippleX.toFixed(1)}px`;
+    rippleEl.style.top = `${rippleY.toFixed(1)}px`;
+    rippleEl.style.transform = `scale(${rippleScale.toFixed(3)})`;
+
+    // 5. Floating attachment preview card
+    const cardEl = document.getElementById("attach-card");
+    const activeCard = (tl.attachmentCards || []).find((c) => t >= c.enter && t <= c.exit);
+    if (activeCard) {
+      const img = document.getElementById("attach-img");
+      if (!img.src.endsWith(activeCard.image)) img.src = `assets/${activeCard.image}`;
+      document.getElementById("attach-name").textContent = activeCard.title || "";
+      document.getElementById("attach-card-badge").textContent = activeCard.badge || "";
+      const enterU = easeOut(clamp((t - activeCard.enter) / 0.42, 0, 1));
+      const dropU = easeInOut(clamp((t - activeCard.dropStart) / Math.max(0.05, activeCard.exit - activeCard.dropStart), 0, 1));
+      const x = lerp(80 * scale, 380 * scale, dropU);
+      const y = lerp((285 - (1 - enterU) * 38) * scale, 95 * scale, dropU);
+      const s = lerp(0.92 + 0.08 * enterU, 0.34, dropU) * (isVertical ? 0.78 : 1);
+      const rot = lerp(-3.5, 0, dropU);
+      const op = enterU * (1 - clamp((dropU - 0.72) / 0.28, 0, 1));
+      cardEl.style.opacity = String(op);
+      cardEl.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${s.toFixed(3)}) rotate(${rot.toFixed(2)}deg)`;
+    } else {
+      cardEl.style.opacity = "0";
+    }
+
+    // 6. Feature pill
+    let feat = tl.features[0]?.label || "";
+    for (const f of tl.features) {
+      if (t >= f.t) feat = f.label;
+    }
+    document.getElementById("feature-pill").textContent = feat;
+
+    // 7. Live audio waveform pill
+    const livePill = document.getElementById("live-audio-pill");
+    const liveMatch = (tl.liveAudio || []).find((la) => t >= la.start && t <= la.end);
+    if (liveMatch) {
+      const fadeIn = clamp((t - liveMatch.start) / 0.18, 0, 1);
+      const fadeOut = clamp((liveMatch.end - t) / 0.2, 0, 1);
+      livePill.style.opacity = String(Math.min(fadeIn, fadeOut));
+      document.getElementById("live-audio-label").textContent = liveMatch.label;
+      livePill.querySelectorAll(".bars i").forEach((b, i) => {
+        const h = 6 + 11 * Math.abs(Math.sin(t * 11 + i * 1.35));
+        b.style.height = `${h.toFixed(1)}px`;
+      });
+    } else {
+      livePill.style.opacity = "0";
+    }
+
+    // 8. Caption bar
+    const capEl = document.getElementById("caption-bar");
+    const activeCap = (tl.captions || []).find((c) => t >= c.start && t <= c.end);
+    if (activeCap) {
+      const fadeIn = clamp((t - activeCap.start) / 0.16, 0, 1);
+      const fadeOut = clamp((activeCap.end - t) / 0.18, 0, 1);
+      capEl.style.opacity = String(Math.min(fadeIn, fadeOut));
+      capEl.textContent = activeCap.text;
+    } else {
+      capEl.style.opacity = "0";
+    }
+
+    // 9. End card
+    const endEl = document.getElementById("end-card");
+    if (tl.endCard) {
+      endEl.style.opacity = String(smoothstep(tl.endCard.start, tl.endCard.full, t));
+    } else {
+      endEl.style.opacity = "0";
+    }
+  };
+
+  init();
+</script>
+</body>
+</html>

@@ -1,0 +1,271 @@
+{
+  "meta": {
+    "name": "round4-showcase",
+    "brandBadge": "Fama · Round 4 Demo",
+    "urlLabel": "fama.app",
+    "endTitle": "fama",
+    "endSubtitle": "Links, files & scanned PDFs — narrated with live read-along.",
+    "endTags": ["Offline OCR", "Voice Samples", "Read-along", "Narrate Again"],
+    "voice": "af_heart",
+    "voiceSpeed": 1.06,
+    "fps": 30,
+    "colorScheme": "dark",
+    "viewport": { "width": 1120, "height": 740, "scale": 2 }
+  },
+  "fixtures": {
+    "scanPdfs": [
+      {
+        "file": "scan-is.pdf",
+        "preview": "scan-is-preview.png",
+        "blocks": [
+          { "kind": "title", "lines": ["Þingvellir og höfnin"] },
+          {
+            "kind": "body",
+            "lines": [
+              "Þingvellir liggja við Öxará í heiðskíru veðri.",
+              "Hafnarstjórinn vaknaði snemma fyrir sólarupprás."
+            ]
+          },
+          { "kind": "body", "lines": ["Bátarnir lágu kyrrir við bryggjuna í morgunblíðunni."] }
+        ]
+      }
+    ]
+  },
+  "capture": [
+    { "op": "wait", "selector": "img[src*=\"pan-sleeping\"]", "label": "Empty Library (Pan)", "delayMs": 450 },
+    { "op": "box", "as": "reviewSwitch", "role": "switch", "nameContains": "Review" },
+    { "op": "box", "as": "addBtn", "role": "button", "name": "Add" },
+    { "op": "snap", "as": "empty", "blur": true },
+
+    { "op": "click", "box": "reviewSwitch", "waitAriaChecked": "true", "delayMs": 200 },
+    { "op": "snap", "as": "reviewOn" },
+
+    { "op": "upload", "selector": "input[type=\"file\"]", "file": "scan-is.pdf" },
+    { "op": "box", "as": "addBtn", "role": "button", "name": "Add" },
+    { "op": "snap", "as": "fileAttached" },
+
+    { "op": "click", "box": "addBtn", "delayMs": 550 },
+    { "op": "snap", "as": "extracting" },
+
+    { "op": "wait", "role": "button", "nameStartsWith": "Review ", "label": "OCR Review ready", "delayMs": 400 },
+    { "op": "box", "as": "reviewRowBtn", "role": "button", "nameStartsWith": "Review " },
+    { "op": "snap", "as": "reviewReady" },
+
+    { "op": "click", "box": "reviewRowBtn" },
+    { "op": "wait", "role": "button", "name": "Hear voices", "label": "Hear voices button", "delayMs": 400 },
+    { "op": "box", "as": "hearVoicesBtn", "role": "button", "name": "Hear voices" },
+    { "op": "box", "as": "ocrTextarea", "selector": "textarea" },
+    { "op": "snap", "as": "reviewOpen" },
+
+    { "op": "click", "box": "hearVoicesBtn", "delayMs": 450 },
+    { "op": "snap", "as": "samplesGenerating" },
+
+    { "op": "wait", "role": "button", "name": "Play Ugla sample", "label": "All 4 samples ready", "delayMs": 350 },
+    { "op": "box", "as": "playSalkaBtn", "role": "button", "name": "Play Salka sample" },
+    { "op": "box", "as": "salkaRadio", "role": "radio", "nameStartsWith": "Salka" },
+    { "op": "box", "as": "startBtn", "role": "button", "nameStartsWith": "Start" },
+    { "op": "snap", "as": "samplesReady" },
+    { "op": "downloadSample", "voiceContains": "salka", "as": "salkaSample" },
+
+    { "op": "click", "box": "playSalkaBtn" },
+    { "op": "wait", "role": "button", "name": "Pause Salka sample", "label": "Pause Salka sample", "delayMs": 200 },
+    { "op": "snap", "as": "samplePlaying" },
+
+    { "op": "click", "box": "salkaRadio", "delayMs": 300 },
+    { "op": "snap", "as": "salkaSelected" },
+
+    { "op": "click", "box": "startBtn" },
+    { "op": "wait", "role": "button", "nameStartsWith": "Narrate again ", "label": "Episode Ready", "delayMs": 450 },
+    { "op": "box", "as": "playEpBtn", "role": "button", "nameStartsWith": "Play " },
+    { "op": "box", "as": "narrateAgainBtn", "role": "button", "nameStartsWith": "Narrate again " },
+    { "op": "snap", "as": "episodeReady" },
+    { "op": "downloadChapter", "index": 0, "audioAs": "ch0V1", "timingAs": "v1" },
+
+    { "op": "click", "box": "playEpBtn" },
+    { "op": "wait", "role": "button", "name": "Text", "label": "Player Text button", "delayMs": 250 },
+    { "op": "box", "as": "textBtn", "role": "button", "name": "Text" },
+    { "op": "click", "box": "textBtn" },
+    { "op": "wait", "selector": "#reader [role=\"button\"]", "nameContains": "Öxará", "label": "Read-along sentences", "delayMs": 300 },
+    { "op": "box", "as": "readerArticle", "selector": "#reader" },
+    { "op": "snapReaderSentences", "selector": "#reader [role=\"button\"]", "prefix": "readerV1_", "max": 4 },
+
+    { "op": "click", "box": "textBtn" },
+    { "op": "wait", "role": "button", "nameStartsWith": "Narrate again ", "label": "Library return", "delayMs": 250 },
+    { "op": "box", "as": "narrateAgainBtn", "role": "button", "nameStartsWith": "Narrate again " },
+    { "op": "hover", "box": "narrateAgainBtn" },
+    { "op": "snap", "as": "libraryHoverEdit" },
+
+    { "op": "click", "box": "narrateAgainBtn" },
+    { "op": "wait", "role": "button", "name": "Narrate chapter edits", "label": "Narrate again editor", "delayMs": 400 },
+    { "op": "box", "as": "narrateTextarea", "selector": "textarea" },
+    { "op": "box", "as": "narrateSubmitBtn", "role": "button", "name": "Narrate chapter edits" },
+    { "op": "snap", "as": "narrateAgainOpen" },
+
+    { "op": "typeSequence", "box": "narrateTextarea", "text": " Sól skín yfir höfnina.", "prefix": "type_", "as": "typingEdit", "finalAs": "narrateAgainEdited", "stepChars": 2 },
+    { "op": "box", "as": "narrateSubmitBtn", "role": "button", "name": "Narrate chapter edits" },
+
+    { "op": "click", "box": "narrateSubmitBtn", "delayMs": 450 },
+    { "op": "snap", "as": "renarrating" },
+    { "op": "wait", "role": "button", "nameStartsWith": "Narrate again ", "label": "Re-narration Ready", "delayMs": 400 },
+    { "op": "downloadChapter", "index": 0, "audioAs": "ch0V2", "timingAs": "v2" },
+
+    { "op": "box", "as": "textBtn", "role": "button", "name": "Text" },
+    { "op": "click", "box": "textBtn" },
+    { "op": "wait", "selector": "#reader [role=\"button\"]", "nameContains": "Sól skín", "label": "Updated Read-along", "delayMs": 250 },
+    { "op": "snapLastReaderSentence", "selector": "#reader [role=\"button\"]", "as": "readerV2New", "boxAs": "newSentenceBtn" }
+  ],
+  "voiceover": [
+    { "id": "vo_01_intro", "text": "Fama turns anything into narrated audio. Even an image-only Icelandic scan." },
+    { "id": "vo_02_ocr", "text": "Offline OCR reads every Icelandic letter right inside Review." },
+    { "id": "vo_03_samples", "text": "Compare real voice samples on your own text before narrating." },
+    { "id": "vo_04_readalong", "text": "Pick Salka, hit start, and read along with live sentence timing." },
+    { "id": "vo_05_edit", "text": "Spot a missing line later? Edit the chapter and narrate again." },
+    { "id": "vo_06_outro", "text": "Only changed chapters re-synthesize, and read-along updates live." }
+  ],
+  "beats": [
+    {
+      "type": "vo",
+      "id": "vo_01_intro",
+      "leadIn": 0.25,
+      "pauseAfter": 0.25,
+      "feature": "Scanned PDF · Offline OCR",
+      "camera": [
+        { "at": 0.18, "x": 560, "y": 370, "zoom": 1.0 },
+        { "at": 0.34, "x": 560, "y": 155, "zoom": 1.2 },
+        { "at": 0.92, "x": 560, "y": 175, "zoom": 1.18 }
+      ],
+      "events": [
+        { "at": 0.0, "shot": "empty", "fade": 0 },
+        { "at": 0.28, "click": "reviewSwitch", "shot": "reviewOn", "fade": 0.1 },
+        {
+          "at": 0.36,
+          "attachmentCard": {
+            "image": "scan-is-preview.png",
+            "title": "scan-is.pdf",
+            "badge": "Image-only · No text layer",
+            "enterAt": 0.36,
+            "dropAt": 0.56,
+            "exitAt": 0.70
+          }
+        },
+        { "at": 0.68, "shot": "fileAttached", "fade": 0.14 },
+        { "at": 0.84, "click": "addBtn", "shot": "extracting", "fade": 0.12 },
+        { "at": 0.96, "shot": "reviewReady", "fade": 0.16 }
+      ]
+    },
+    {
+      "type": "vo",
+      "id": "vo_02_ocr",
+      "pauseAfter": 0.25,
+      "feature": "Review · tesseract isl+eng",
+      "camera": [
+        { "at": 0.08, "x": 560, "y": 320, "zoom": 1.08 },
+        { "at": 0.35, "x": 560, "y": 615, "zoom": 1.38 },
+        { "at": 0.92, "x": 560, "y": 615, "zoom": 1.38 }
+      ],
+      "events": [
+        { "at": 0.0, "click": "reviewRowBtn", "shot": "reviewOpen", "fade": 0.18 },
+        { "at": 0.28, "moveTo": { "x": 640, "y": 630 } }
+      ]
+    },
+    {
+      "type": "vo",
+      "id": "vo_03_samples",
+      "pauseAfter": 0.18,
+      "feature": "Review · Voice Samples",
+      "camera": [
+        { "at": 0.18, "x": 560, "y": 290, "zoom": 1.32 },
+        { "at": 0.95, "x": 560, "y": 290, "zoom": 1.32 }
+      ],
+      "events": [
+        { "at": 0.22, "click": "hearVoicesBtn", "shot": "samplesGenerating", "fade": 0.14 },
+        { "at": 0.56, "shot": "samplesReady", "fade": 0.16 }
+      ]
+    },
+    {
+      "type": "liveAudio",
+      "audio": "salkaSample",
+      "click": "playSalkaBtn",
+      "shot": "samplePlaying",
+      "liveLabel": "Salka · Icelandic — Live Voice Sample",
+      "caption": "“Þingvellir og höfnin…” (Salka)",
+      "pauseAfter": 0.45,
+      "camera": { "x": 560, "y": 290, "zoom": 1.32 },
+      "events": [
+        { "at": 1.08, "click": "salkaRadio", "shot": "salkaSelected", "fade": 0.1 }
+      ]
+    },
+    {
+      "type": "vo",
+      "id": "vo_04_readalong",
+      "pauseAfter": 0.15,
+      "feature": "Read-along · Synced Timing",
+      "camera": [
+        { "at": 0.18, "x": 560, "y": 220, "zoom": 1.04 },
+        { "at": 0.58, "x": 560, "y": 240, "zoom": 1.04 },
+        { "at": 0.92, "x": 530, "y": 145, "zoom": 1.38 }
+      ],
+      "events": [
+        { "at": 0.20, "click": "startBtn", "shot": "episodeReady", "fade": 0.16 },
+        { "at": 0.44, "click": "playEpBtn" },
+        { "at": 0.62, "click": "textBtn", "shot": "readerV1_0", "fade": 0.16 },
+        { "at": 0.92, "moveTo": { "x": 760, "y": 260 } }
+      ]
+    },
+    {
+      "type": "liveReadAlong",
+      "audio": "ch0V1",
+      "timing": "v1",
+      "segments": [1, 2],
+      "truncateLastSec": 1.45,
+      "shotPrefix": "readerV1_",
+      "liveLabel": "Salka · Icelandic — Live Read-along",
+      "pauseAfter": 0.35,
+      "camera": { "x": 530, "y": 145, "zoom": 1.38 }
+    },
+    {
+      "type": "vo",
+      "id": "vo_05_edit",
+      "pauseAfter": 1.05,
+      "feature": "Narrate Again · Delta Re-synthesis",
+      "camera": [
+        { "at": 0.12, "x": 560, "y": 220, "zoom": 1.12 },
+        { "at": 0.38, "x": 560, "y": 420, "zoom": 1.32 },
+        { "at": 0.95, "x": 480, "y": 520, "zoom": 1.28 }
+      ],
+      "events": [
+        { "at": 0.0, "shot": "libraryHoverEdit", "fade": 0.16 },
+        { "at": 0.24, "click": "narrateAgainBtn", "shot": "narrateAgainOpen", "fade": 0.16 },
+        { "at": 0.44, "moveTo": { "box": "narrateTextarea", "dx": 85, "dy": 15 }, "typeSequence": "typingEdit", "endAt": 0.95 },
+        { "at": 1.06, "click": "narrateSubmitBtn", "shot": "renarrating", "fade": 0.14 }
+      ]
+    },
+    {
+      "type": "liveReadAlong",
+      "audio": "ch0V2",
+      "timing": "v2",
+      "segments": [4],
+      "shot": "readerV2New",
+      "click": "newSentenceBtn",
+      "feature": "Read-along · Live Update",
+      "liveLabel": "Salka · Icelandic — Newly Synthesized Line",
+      "leadIn": 0.25,
+      "pauseAfter": 0.25,
+      "camera": { "x": 560, "y": 175, "zoom": 1.4 }
+    },
+    {
+      "type": "vo",
+      "id": "vo_06_outro",
+      "pauseAfter": 0.15,
+      "camera": [
+        { "at": 0.35, "x": 560, "y": 370, "zoom": 1.0 }
+      ]
+    },
+    {
+      "type": "hold",
+      "duration": 2.0,
+      "endCard": true,
+      "camera": { "x": 560, "y": 370, "zoom": 1.0 }
+    }
+  ]
+}
