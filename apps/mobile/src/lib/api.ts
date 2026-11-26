@@ -1,4 +1,5 @@
 import {
+  ChangeVoice,
   CreateEpisode,
   Document,
   Episode,
@@ -6,7 +7,10 @@ import {
   EpisodeProgress,
   FeedInfo,
   Me,
+  SampleList,
+  SamplesRequest,
   VoiceList,
+  type Sample,
   type SourceInput,
   type Voice,
   type VoiceRef,
@@ -97,6 +101,12 @@ export function createApi(connection: Connection) {
     mediaUrl: (path: string) => `${base}${path}`,
     me: (): Promise<Me> => json(Me, "/api/me"),
     listEpisodes: async (): Promise<ReadonlyArray<Episode>> => (await json(EpisodeList, "/api/episodes")).episodes,
+    changeVoice: async (id: string, voice: VoiceRef, speed: number): Promise<void> => {
+      await send(`/api/episodes/${encodeURIComponent(id)}/voice`, {
+        ...jsonBody(Schema.encodeSync(ChangeVoice)({ voice, speed })),
+        method: "PUT",
+      })
+    },
     createEpisode: (source: SourceInput, voice: VoiceRef | null, speed: number, review = false): Promise<Episode> => {
       const create = () => json(Episode, "/api/episodes", jsonBody(Schema.encodeSync(CreateEpisode)({ source, voice, speed, review })))
       if (source._tag !== "Url") return create()
@@ -118,8 +128,11 @@ export function createApi(connection: Connection) {
     saveDocument: async (id: string, document: Document): Promise<void> => {
       await send(`/api/episodes/${encodeURIComponent(id)}/document`, { ...jsonBody(document), method: "PUT" })
     },
-    start: (id: string, document: Document): Promise<Episode> =>
-      json(Episode, `/api/episodes/${encodeURIComponent(id)}/start`, jsonBody({ document })),
+    requestSamples: (id: string, voices: ReadonlyArray<Sample["voice"]> | null): Promise<ReadonlyArray<Sample>> =>
+      json(SampleList, `/api/episodes/${encodeURIComponent(id)}/samples`, jsonBody(Schema.encodeSync(SamplesRequest)({ voices }))).then((list) => list.samples),
+    samples: async (id: string): Promise<ReadonlyArray<Sample>> => (await json(SampleList, `/api/episodes/${encodeURIComponent(id)}/samples`)).samples,
+    start: (id: string, document: Document, voice: VoiceRef | null = null): Promise<Episode> =>
+      json(Episode, `/api/episodes/${encodeURIComponent(id)}/start`, jsonBody(voice === null ? { document } : { document, voice })),
     deleteEpisode: async (id: string): Promise<void> => {
       await send(`/api/episodes/${encodeURIComponent(id)}`, { method: "DELETE" })
     },
