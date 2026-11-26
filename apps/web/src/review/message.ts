@@ -2,11 +2,13 @@ import { Document, Episode, EpisodeId } from "@fama/contracts"
 import { Schema } from "effect"
 import { defineMessageUnion } from "foldkit/message"
 import { ApiFailure } from "~/api"
+import { SamplesMessage } from "~/review/samples"
 
 export const ReviewMessage = defineMessageUnion({
   ClickedEpisode: { episodeId: EpisodeId },
   ClickedBack: {},
   ClickedTryAgain: {},
+  GotSamplesMessage: { message: SamplesMessage },
   SucceededFetchDocument: { episodeId: EpisodeId, request: Schema.Number, document: Document },
   FailedFetchDocument: { episodeId: EpisodeId, request: Schema.Number, failure: ApiFailure },
   UpdatedTitle: { value: Schema.String },

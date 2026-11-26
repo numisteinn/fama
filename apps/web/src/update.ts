@@ -807,14 +807,15 @@ const readerStep = (message: ReaderMessage): Step => (model) => {
   ])
 }
 
-/** A message of the review screen. Starting narration updates the episode in the library. */
+/** A message of the review screen. Starting narration updates the episode; playing a sample pauses main playback. */
 const reviewStep = (message: ReviewMessage): Step => (model) => {
   const { model: next, commands, outMessage } = Review.update(model, message)
   return Update.combine(next, [
     (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
-    outMessage
-      ? withEpisodes((list) => list.map((item) => (item.id === outMessage.episode.id ? outMessage.episode : item)))
+    outMessage?.episode
+      ? withEpisodes((list) => list.map((item) => (item.id === outMessage.episode!.id ? outMessage.episode! : item)))
       : unchanged,
+    outMessage?.pausePlayback ? askPause : unchanged,
   ])
 }
 

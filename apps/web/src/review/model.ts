@@ -1,6 +1,7 @@
 import { Document, EpisodeId } from "@fama/contracts"
 import { Option, Schema } from "effect"
 import { defineTaggedUnion } from "foldkit/schema"
+import { Samples } from "~/review/samples"
 
 /** One chapter in the Review editor, aligned by `index` with `loaded.chapters`. */
 export const ReviewChapter = Schema.Struct({
@@ -43,6 +44,7 @@ export const ReviewView = defineTaggedUnion({
     maybeExpandedIndex: Schema.Option(Schema.Number),
     /** Lines that repeat across kept chapters, ready to remove in one click. */
     repeatedLines: Schema.Array(Schema.String),
+    samples: Samples,
     save: SaveState,
     start: StartState,
   },
