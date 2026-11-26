@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, execFileSync } from "node:child_process"
 import fs from "node:fs/promises"
 import fsSync from "node:fs"
 import path from "node:path"
@@ -102,6 +102,7 @@ async function launchChrome() {
 
   let nextId = 1
   const pending = new Map()
+  const listeners = new Map()
   ws.addEventListener("message", (ev) => {
     const msg = JSON.parse(ev.data)
     if (msg.id && pending.has(msg.id)) {
@@ -109,6 +110,8 @@ async function launchChrome() {
       pending.delete(msg.id)
       if (msg.error) reject(new Error(`${msg.error.message} (${msg.error.code})`))
       else resolve(msg.result)
+    } else if (msg.method && listeners.has(msg.method)) {
+      for (const fn of listeners.get(msg.method)) fn(msg.params)
     }
   })
 
@@ -119,6 +122,12 @@ async function launchChrome() {
       ws.send(JSON.stringify({ id, method, params }))
     })
 
+  const onEvent = (method, fn) => {
+    if (!listeners.has(method)) listeners.set(method, new Set())
+    listeners.get(method).add(fn)
+    return () => listeners.get(method)?.delete(fn)
+  }
+
   const close = async () => {
     try {
       ws.close()
@@ -127,7 +136,7 @@ async function launchChrome() {
     await fs.rm(userDataDir, { recursive: true, force: true }).catch(() => {})
   }
 
-  return { cdp, close }
+  return { cdp, onEvent, close }
 }
 
 async function evalJs(cdp, expression) {
@@ -245,13 +254,14 @@ async function main() {
   const manifest = {
     viewport,
     shots: {},
+    clips: {},
     sequences: {},
     boxes: {},
     audio: {},
     timing: {},
   }
 
-  const { cdp, close } = await launchChrome()
+  const { cdp, onEvent, close } = await launchChrome()
   try {
     await cdp("Page.enable")
     await cdp("DOM.enable")
@@ -272,7 +282,7 @@ async function main() {
     await cdp("Page.reload", { ignoreCache: true })
     await sleep(500)
 
-    for (const step of spec.capture || []) {
+    async function runStep(step) {
       switch (step.op) {
         case "wait": {
           const expr = buildMatcherExpr(step)
@@ -309,6 +319,33 @@ async function main() {
             )
           }
           if (step.delayMs) await sleep(step.delayMs)
+          break
+        }
+
+        case "clickReaderSentence": {
+          const sel = step.selector || '#reader [role="button"]'
+          const btns = await evalJs(
+            cdp,
+            `() => [...document.querySelectorAll(${JSON.stringify(sel)})].map((b, i) => {
+              const r = b.getBoundingClientRect();
+              return { i, text: b.textContent.trim(), x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width/2, cy: r.top + r.height/2 };
+            })`,
+          )
+          const idx = step.index < 0 ? btns.length + step.index : (step.index ?? 0)
+          const target = btns[idx]
+          if (!target) throw new Error(`Reader sentence index ${step.index} not found`)
+          if (step.boxAs) manifest.boxes[step.boxAs] = target
+          await clickBox(cdp, target)
+          if (step.pause) {
+            await sleep(200)
+            await evalJs(cdp, `() => { const a = document.querySelector("audio"); if (a) a.pause(); }`)
+          }
+          if (step.delayMs) await sleep(step.delayMs)
+          break
+        }
+
+        case "pauseAudio": {
+          await evalJs(cdp, `() => { const a = document.querySelector("audio"); if (a) a.pause(); }`)
           break
         }
 
@@ -359,6 +396,98 @@ async function main() {
           }
           manifest.sequences[step.as || step.prefix] = frames
           if (step.finalAs) manifest.shots[step.finalAs] = manifest.shots[frames[frames.length - 1]]
+          break
+        }
+
+        case "recordClip": {
+          // Record continuous live tab motion via CDP Page.startScreencast and encode an all-intraframe MP4 for instant seeking.
+          const clipTmp = await fs.mkdtemp(path.join(os.tmpdir(), "fama-clip-"))
+          const frames = []
+          let writing = Promise.resolve()
+          const t0 = performance.now()
+
+          const recordFrame = (b64, tsMs) => {
+            const idx = frames.length
+            const fpath = path.join(clipTmp, `f_${String(idx).padStart(5, "0")}.png`)
+            frames.push({ fpath, tsMs })
+            writing = writing.then(() => fs.writeFile(fpath, Buffer.from(b64, "base64")))
+          }
+
+          // Capture frame 0 immediately so clip starts with crisp visual state
+          const first = await cdp("Page.captureScreenshot", { format: "png" })
+          recordFrame(first.data, 0)
+
+          const off = onEvent("Page.screencastFrame", (params) => {
+            const nowMs = Math.max(0, performance.now() - t0)
+            recordFrame(params.data, nowMs)
+            cdp("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {})
+          })
+
+          await cdp("Page.startScreencast", {
+            format: "png",
+            maxWidth: viewport.width * viewport.scale,
+            maxHeight: viewport.height * viewport.scale,
+            everyNthFrame: 1,
+          })
+
+          try {
+            for (const sub of step.steps || []) {
+              await runStep(sub)
+            }
+            if (step.durationMs) await sleep(step.durationMs)
+          } finally {
+            await cdp("Page.stopScreencast").catch(() => {})
+            off()
+          }
+
+          // Capture closing frame at exact end time
+          const endMs = Math.max(100, performance.now() - t0)
+          const last = await cdp("Page.captureScreenshot", { format: "png" })
+          recordFrame(last.data, endMs)
+          await writing
+
+          // Build FFmpeg concat list with exact wall-clock durations per frame
+          const concatLines = []
+          for (let i = 0; i < frames.length; i++) {
+            const nextMs = i + 1 < frames.length ? frames[i + 1].tsMs : endMs + 40
+            const durSec = Math.max(0.02, (nextMs - frames[i].tsMs) / 1000)
+            concatLines.push(`file '${frames[i].fpath.replace(/'/g, "'\\''")}'`)
+            concatLines.push(`duration ${durSec.toFixed(4)}`)
+          }
+          concatLines.push(`file '${frames[frames.length - 1].fpath.replace(/'/g, "'\\''")}'`)
+          const listPath = path.join(clipTmp, "frames.txt")
+          await fs.writeFile(listPath, concatLines.join("\n") + "\n")
+
+          const clipFilename = `${step.as}.mp4`
+          const clipOut = path.join(assetsDir, clipFilename)
+          execFileSync("ffmpeg", [
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            listPath,
+            "-vf",
+            "fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-g",
+            "1",
+            "-bf",
+            "0",
+            "-crf",
+            "16",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            clipOut,
+          ])
+          await fs.rm(clipTmp, { recursive: true, force: true }).catch(() => {})
+          manifest.clips[step.as] = clipFilename
+          console.log(`capture: recorded clip ${clipFilename} (${frames.length} raw frames, ${(endMs / 1000).toFixed(2)}s)`)
           break
         }
 
@@ -435,6 +564,10 @@ async function main() {
         default:
           throw new Error(`Unknown capture op: ${step.op}`)
       }
+    }
+
+    for (const step of spec.capture || []) {
+      await runStep(step)
     }
 
     await fs.writeFile(path.join(assetsDir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n")

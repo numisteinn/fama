@@ -88,6 +88,15 @@
     { "op": "wait", "selector": "#reader [role=\"button\"]", "nameContains": "Öxará", "label": "Read-along sentences", "delayMs": 300 },
     { "op": "box", "as": "readerArticle", "selector": "#reader" },
     { "op": "snapReaderSentences", "selector": "#reader [role=\"button\"]", "prefix": "readerV1_", "max": 4 },
+    {
+      "op": "recordClip",
+      "as": "readAlongLive",
+      "steps": [
+        { "op": "clickReaderSentence", "index": 1, "pause": false },
+        { "op": "sleep", "ms": 5300 },
+        { "op": "pauseAudio" }
+      ]
+    },
 
     { "op": "click", "box": "textBtn" },
     { "op": "wait", "role": "button", "nameStartsWith": "Narrate again ", "label": "Library return", "delayMs": 250 },
@@ -218,10 +227,10 @@
       "timing": "v1",
       "segments": [1, 2],
       "truncateLastSec": 1.45,
-      "shotPrefix": "readerV1_",
+      "clip": { "file": "readAlongLive", "trimStart": 0.15, "speed": 1.0, "fade": 0.12 },
       "liveLabel": "Salka · Icelandic — Live Read-along",
       "pauseAfter": 0.35,
-      "camera": { "x": 530, "y": 145, "zoom": 1.38 }
+      "camera": { "x": 530, "y": 145, "zoom": 1.32 }
     },
     {
       "type": "vo",
