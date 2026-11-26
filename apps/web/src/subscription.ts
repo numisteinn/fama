@@ -5,6 +5,8 @@ import { SETTING_KEYS, storedSettings } from "~/flags"
 import { Message } from "~/message"
 import { type Model, POLL_MS, SKIP_BACK_MS, SKIP_FORWARD_MS, current, episodes, isWorking } from "~/model"
 import { readerSubscriptions } from "~/reader/subscription"
+import { ReviewMessage } from "~/review/message"
+import { makeSampleSubscriptions } from "~/review/samples"
 import { chapterStartMs, totalMs } from "~/timeline"
 
 /** Focused controls keep their own keys. */
@@ -358,4 +360,12 @@ const appSubscriptions = Subscription.make<Model, Message, AudioPlayer>()((entry
   ),
 }))
 
-export const subscriptions = Subscription.aggregate(appSubscriptions, readerSubscriptions)
+const sampleSubscriptions = makeSampleSubscriptions<Model, Message>(
+  (model) =>
+    model.review.view._tag === "Editing"
+      ? Option.some({ episodeId: model.review.view.episodeId, samples: model.review.view.samples })
+      : Option.none(),
+  (message) => Message.GotReviewMessage({ message: ReviewMessage.GotSamplesMessage({ message }) }),
+)
+
+export const subscriptions = Subscription.aggregate(appSubscriptions, readerSubscriptions, sampleSubscriptions)

@@ -20,7 +20,8 @@ type Library = {
   create(source: SourceInput, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
   upload(file: PickedFile, voice: VoiceRef | null, speed: number, review?: boolean): Promise<Episode>
   remove(id: string): Promise<void>
-  start(id: string, document: Document): Promise<void>
+  saveReviewVoice(id: string, voice: VoiceRef, speed: number): Promise<void>
+  start(id: string, document: Document, voice?: VoiceRef | null): Promise<void>
   retry(id: string): Promise<void>
 }
 
@@ -154,8 +155,12 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
           throw cause
         }
       },
-      async start(id, document) {
-        const episode = await requireApi().start(id, document)
+      async saveReviewVoice(id, voice, speed) {
+        await requireApi().changeVoice(id, voice, speed)
+        setEpisodes((list) => list.map((e) => (e.id === id && e.job._tag === "Review" ? { ...e, voice, speed } : e)))
+      },
+      async start(id, document, voice) {
+        const episode = await requireApi().start(id, document, voice ?? null)
         setEpisodes((list) => list.map((e) => (e.id === id ? episode : e)))
       },
       async retry(id) {

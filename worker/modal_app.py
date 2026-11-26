@@ -121,7 +121,11 @@ HERE = Path(__file__).parent
 
 worker_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("ffmpeg")  # chapter encoding and book assembly; espeak-ng ships inside piper-tts and espeakng-loader
+    .apt_install(
+        "ffmpeg",
+        "tesseract-ocr",
+        "tesseract-ocr-isl",
+    )  # audio encoding/assembly + offline OCR (English and Icelandic); espeak-ng ships inside piper-tts
     .pip_install(f"uv=={UV_VERSION}")
     .env({
         # The image's own Python, which Modal runs. `--inexact` keeps what uv did not install (uv itself).

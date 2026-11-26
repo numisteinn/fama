@@ -36,6 +36,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Empty Library](./empty-library.md): see folded Pan when the Library has no Episodes.
 - [Narrate again](./narrate-again.md) checks Chapter reuse, new timing and Book files, and the feed transcript through the API.
 - [Narrate again on the web](./narrate-again-web.md) edits Chapter text, Voice and speed, and checks replacement audio and Read-along timing.
+- [OCR for scanned PDFs](./ocr-pdf.md): scanned PDF pages with no text layer are read offline with tesseract (or Apple Vision on macOS), so they narrate like any PDF.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
 - [Read along on iPhone](./reader-ios.md) covers the mark, sentence taps, scrolling and offline text.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
@@ -46,6 +47,6 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Web review](./review-web.md) adds the Review switch and chapter editor in the web app.
 - [Review on iPhone](./review-ios.md) covers chapter selection, text edits and Start from the Library.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
-- [Voice Samples](./voice-samples.md): request and play clips from the first paragraph of a stored Document.
+- [Voice Samples](./voice-samples.md): request, play, and compare Voice Sample clips from the first paragraph of a stored Document in web Review or via the API.
 - [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.

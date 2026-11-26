@@ -1,4 +1,4 @@
-import { Document, Episode, EpisodeId, StartReview } from "@fama/contracts"
+import { Document, Episode, EpisodeId, StartReview, VoiceRef } from "@fama/contracts"
 import { Effect, Schema } from "effect"
 import { HttpClientRequest } from "effect/http"
 import { Command } from "foldkit"
@@ -33,11 +33,14 @@ export const SaveDocument = Command.define("SaveDocument", {
 })
 
 export const StartReviewNarration = Command.define("StartReviewNarration", {
-  args: { connection: Connection, episodeId: EpisodeId, document: Document },
+  args: { connection: Connection, episodeId: EpisodeId, document: Document, voice: Schema.optionalKey(VoiceRef) },
   messages: [Message.GotReviewMessage],
-  execute: ({ connection, episodeId, document }) =>
+  execute: ({ connection, episodeId, document, voice }) =>
     sendJson(Episode, connection, "POST", `${episodePath(episodeId)}/start`, (request) =>
-      HttpClientRequest.bodyJsonUnsafe(request, encodeStartReview({ document })),
+      HttpClientRequest.bodyJsonUnsafe(
+        request,
+        encodeStartReview({ document, ...(voice !== undefined ? { voice } : {}) }),
+      ),
     ).pipe(
       Effect.map((episode) => toParent(ReviewMessage.SucceededStartReview({ episode }))),
       Effect.catch((failure) => Effect.succeed(toParent(ReviewMessage.FailedStartReview({ episodeId, failure })))),
