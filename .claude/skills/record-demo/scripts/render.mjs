@@ -1,5 +1,6 @@
 import { spawn, execFileSync } from "node:child_process"
 import fs from "node:fs/promises"
+import fsSync from "node:fs"
 import http from "node:http"
 import path from "node:path"
 import os from "node:os"
@@ -45,6 +46,51 @@ function resolvePoint(target, boxes, viewport) {
   return { x: target.x ?? viewport.width / 2, y: target.y ?? viewport.height / 2 }
 }
 
+function ensureSeekableClip(clipRef, manifest, assetsDir) {
+  const rawName = typeof clipRef === "string" ? clipRef : clipRef.file
+  const mapped = manifest.clips?.[rawName] || rawName
+  const fullPath = path.isAbsolute(mapped) ? mapped : path.join(assetsDir, mapped)
+  if (!fsSync.existsSync(fullPath)) {
+    throw new Error(`Video clip not found: ${fullPath}`)
+  }
+  // Clips recorded by capture.mjs are already all-intraframe H.264 MP4s in assetsDir.
+  // External clips (e.g. OpenCode Browse .webm/.mp4 or iPhone recordings) are transcoded
+  // once to an intraframe seek-cache MP4 so Chrome frame-by-frame seeking is instant.
+  if (manifest.clips?.[rawName] && path.dirname(fullPath) === assetsDir) {
+    return mapped
+  }
+  const cacheDir = path.join(assetsDir, ".seekcache")
+  fsSync.mkdirSync(cacheDir, { recursive: true })
+  const base = path.basename(fullPath, path.extname(fullPath))
+  const cachedRel = path.join(".seekcache", `${base}-intra.mp4`)
+  const cachedFull = path.join(assetsDir, cachedRel)
+  if (!fsSync.existsSync(cachedFull)) {
+    console.log(`render: preparing fast-seek copy of external clip ${path.basename(fullPath)}...`)
+    execFileSync("ffmpeg", [
+      "-y",
+      "-v",
+      "error",
+      "-i",
+      fullPath,
+      "-vf",
+      "fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+      "-c:v",
+      "libx264",
+      "-g",
+      "1",
+      "-bf",
+      "0",
+      "-crf",
+      "16",
+      "-pix_fmt",
+      "yuv420p",
+      "-an",
+      cachedFull,
+    ])
+  }
+  return cachedRel.replace(/\\/g, "/")
+}
+
 function compileTimeline(spec, manifest, vo, assetsDir, format) {
   const isVertical = format === "9:16"
   const width = isVertical ? 1080 : 1920
@@ -54,6 +100,7 @@ function compileTimeline(spec, manifest, vo, assetsDir, format) {
   const boxes = manifest.boxes
 
   const shots = []
+  const clips = []
   const camera = []
   const clicks = []
   const cursor = []
@@ -143,8 +190,10 @@ function compileTimeline(spec, manifest, vo, assetsDir, format) {
         const segAt = beatStart + (seg.startMs / 1000 - trimStart)
         const nextSeg = i + 1 < segIndices.length ? timing.segments[segIndices[i + 1]] : null
         const segEnd = nextSeg ? beatStart + (nextSeg.startMs / 1000 - trimStart) : beatStart + beatDur
-        const shotKey = beat.shot ?? `${beat.shotPrefix}${idx}`
-        shots.push({ t: i === 0 ? Math.max(0, segAt - 0.08) : segAt, shot: shotKey, fade: 0.1 })
+        if (!beat.clip) {
+          const shotKey = beat.shot ?? `${beat.shotPrefix}${idx}`
+          shots.push({ t: i === 0 ? Math.max(0, segAt - 0.08) : segAt, shot: shotKey, fade: 0.1 })
+        }
         captions.push({ start: segAt, end: segEnd, text: `“${seg.text}”` })
       }
 
@@ -160,8 +209,32 @@ function compileTimeline(spec, manifest, vo, assetsDir, format) {
 
     const beatSpan = beatDur + (beat.pauseAfter ?? 0)
 
-    // Optional iPhone bezel overlay on this beat
-    if (beat.iphoneShot) {
+    // Optional continuous video clip spanning this beat (CDP-recorded or OpenCode Browse / external MP4)
+    if (beat.clip) {
+      const cfg = typeof beat.clip === "string" ? { file: beat.clip } : beat.clip
+      const file = ensureSeekableClip(cfg, manifest, assetsDir)
+      clips.push({
+        file,
+        start: beatStart,
+        end: beatStart + (cfg.duration ?? beatSpan),
+        trimStart: cfg.trimStart ?? 0,
+        speed: cfg.speed ?? 1,
+        fade: cfg.fade ?? 0.12,
+      })
+    }
+
+    // Optional iPhone bezel overlay on this beat (static PNG or continuous video clip)
+    if (beat.iphoneClip) {
+      const cfg = typeof beat.iphoneClip === "string" ? { file: beat.iphoneClip } : beat.iphoneClip
+      const file = ensureSeekableClip(cfg, manifest, assetsDir)
+      iphoneOverlays.push({
+        start: beatStart,
+        end: beatStart + beatSpan,
+        clip: file,
+        trimStart: cfg.trimStart ?? 0,
+        speed: cfg.speed ?? 1,
+      })
+    } else if (beat.iphoneShot) {
       iphoneOverlays.push({ start: beatStart, end: beatStart + beatSpan, image: beat.iphoneShot })
     }
 
@@ -190,6 +263,19 @@ function compileTimeline(spec, manifest, vo, assetsDir, format) {
       }
       if (ev.shot) {
         shots.push({ t: et, shot: ev.shot, fade: ev.fade ?? 0.14 })
+      }
+      if (ev.clip) {
+        const cfg = typeof ev.clip === "string" ? { file: ev.clip } : ev.clip
+        const file = ensureSeekableClip(cfg, manifest, assetsDir)
+        const clipEnd = ev.endAt !== undefined ? beatStart + ev.endAt * beatDur : beatStart + beatSpan
+        clips.push({
+          file,
+          start: et,
+          end: cfg.duration ? et + cfg.duration : clipEnd,
+          trimStart: cfg.trimStart ?? 0,
+          speed: cfg.speed ?? 1,
+          fade: cfg.fade ?? 0.12,
+        })
       }
       if (ev.typeSequence) {
         const seqFrames = manifest.sequences[ev.typeSequence]
@@ -238,6 +324,7 @@ function compileTimeline(spec, manifest, vo, assetsDir, format) {
     duration,
     meta: spec.meta || {},
     shots,
+    clips,
     camera,
     clicks,
     cursor,
@@ -257,14 +344,38 @@ async function startStaticServer(outDir) {
     ".json": "application/json",
     ".png": "image/png",
     ".svg": "image/svg+xml",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
   }
   const server = http.createServer(async (req, res) => {
-    const rel = (req.url || "/").split("?")[0].replace(/^\/+/, "") || "stage.html"
+    const rel = decodeURIComponent((req.url || "/").split("?")[0]).replace(/^\/+/, "") || "stage.html"
     const full = rel === "stage.html" ? path.join(SCRIPT_DIR, "stage.html") : path.join(outDir, rel)
     try {
-      const data = await fs.readFile(full)
-      res.writeHead(200, { "Content-Type": mime[path.extname(full)] || "application/octet-stream" })
-      res.end(data)
+      const stat = await fs.stat(full)
+      const contentType = mime[path.extname(full)] || "application/octet-stream"
+      const range = req.headers.range
+      if (range) {
+        const m = range.match(/bytes=(\d+)-(\d*)/)
+        if (m) {
+          const start = Number(m[1])
+          const end = m[2] ? Math.min(Number(m[2]), stat.size - 1) : stat.size - 1
+          const len = end - start + 1
+          res.writeHead(206, {
+            "Content-Type": contentType,
+            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+            "Accept-Ranges": "bytes",
+            "Content-Length": len,
+          })
+          fsSync.createReadStream(full, { start, end }).pipe(res)
+          return
+        }
+      }
+      res.writeHead(200, {
+        "Content-Type": contentType,
+        "Accept-Ranges": "bytes",
+        "Content-Length": stat.size,
+      })
+      fsSync.createReadStream(full).pipe(res)
     } catch {
       res.writeHead(404)
       res.end("not found")
@@ -481,7 +592,7 @@ async function main() {
     const t0 = Date.now()
     for (let f = 0; f < totalFrames; f++) {
       const t = f / timeline.fps
-      await cdp("Runtime.evaluate", { expression: `window.renderAt(${t.toFixed(4)})` })
+      await cdp("Runtime.evaluate", { expression: `window.renderAt(${t.toFixed(4)})`, awaitPromise: true })
       const { data } = await cdp("Page.captureScreenshot", { format: "png" })
       const buf = Buffer.from(data, "base64")
       if (!ff.stdin.write(buf)) {

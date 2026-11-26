@@ -74,6 +74,9 @@ Every step runs sequentially against the live `fama-verify` web app (isolated po
 | `hover` | `box`, `delayMs?` | Move pointer over `manifest.boxes[box]` (reveals hover controls like Narrate again). |
 | `upload` | `selector`, `file` | Attach a file from `assets/` via `DOM.setFileInputFiles`. |
 | `typeSequence` | `box`, `text`, `prefix`, `stepChars?` | Focus textarea, move caret to end, insert `text` in chunks, snapping `prefix + 0..N` for smooth live typing frames. |
+| `recordClip` | `as`, `steps?`, `durationMs?` | Record continuous live tab video via CDP `Page.startScreencast` while running nested `steps` (e.g. live Read-along playback + scrubber movement, smooth scrolling, or spinners) and encode an all-intraframe H.264 `.mp4` into `manifest.clips[as]`. |
+| `clickReaderSentence` | `index`, `pause?`, `boxAs?` | Click a Read-along sentence (`index` supports negative indexing like `-1`); set `pause: false` inside `recordClip` to record real continuous audio playback + live highlight transitions. |
+| `pauseAudio` | — | Pause `<audio>` playback cleanly after a `recordClip`. |
 | `downloadSample` | `voiceContains`, `as`, `episodeIndex?` | Fetch ready sample audio from `/api/episodes/:id/samples`. |
 | `downloadChapter` | `index`, `audioAs`, `timingAs`, `episodeIndex?` | Fetch chapter `.m4a` and `timingUrl` JSON from `/api/episodes`. |
 | `snapReaderSentences` | `selector`, `prefix`, `max?` | Click each visible Read-along sentence, pause audio, snap `prefix + i`, and store sentence boxes. |
@@ -93,8 +96,25 @@ Beats are **relative** — `render.mjs` automatically computes exact timestamps 
 | `liveReadAlong` | Plays a slice of a real chapter `.m4a` (`audio` + `timing` JSON) across `segments: [i, j, ...]`, automatically jumping `shotPrefix + segIdx` on the exact `startMs` of each segment! Supports `truncateLastSec` so long second sentences fade out cleanly right after the highlight jumps. |
 | `hold` | Quiet beat (e.g. final end-card settle) with `duration`, optional `endCard: true`, and `camera` ease-out. |
 
-### Side-by-side iPhone frames (optional)
-To include real iPhone Simulator screens (captured via `agent-device screenshot` into `<out-dir>/assets/<name>.png`), add `"iphoneShot": "<name>.png"` on any `vo`, `liveAudio`, or `liveReadAlong` beat. In `16:9`, the web window shifts neatly left and a sleek iPhone bezel slides in on the right; in `9:16`, the iPhone bezel centers cleanly in the frame.
+### Continuous video clips & OpenCode Browse imports
+Any beat or beat event can display a continuous `.mp4`/`.webm` video clip instead of a static screenshot via `"clip"`:
+
+```json
+{
+  "type": "liveReadAlong",
+  "audio": "ch0V1",
+  "timing": "v1",
+  "segments": [1, 2],
+  "clip": { "file": "readAlongLive", "trimStart": 0.15, "speed": 1.0, "fade": 0.12 }
+}
+```
+
+- `file` can be a `manifest.clips` key recorded by `recordClip`, OR any external `.mp4`/`.webm` filename placed in `<run-dir>/assets/` (including **OpenCode Browse** tab recordings!).
+- External clips are automatically transcoded once into `assets/.seekcache/` as all-intraframe H.264 so deterministic frame-by-frame seeking stays instant and glitch-free.
+- Use `speed` (e.g. `2.5` during loading/spinners) and `trimStart` to tighten pacing cleanly.
+
+### Side-by-side iPhone frames & recordings (optional)
+To include real iPhone Simulator screens or recordings (captured via `agent-device screenshot` or `agent-device record` into `<run-dir>/assets/`), add `"iphoneShot": "<name>.png"` or `"iphoneClip": { "file": "<name>.mp4", "trimStart": 0, "speed": 1 }` on any beat. In `16:9`, the web window shifts neatly left and a sleek iPhone bezel slides in on the right; in `9:16`, the iPhone bezel centers cleanly in the frame.
 
 ## Verification checklist (always run before sharing)
 

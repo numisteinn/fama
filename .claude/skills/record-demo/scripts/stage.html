@@ -164,12 +164,17 @@
     z-index: 28;
     pointer-events: none;
   }
-  #iphone-bezel img {
+  #iphone-bezel img,
+  #iphone-bezel video {
     width: 100%;
     height: 100%;
     border-radius: 38px;
     object-fit: cover;
     display: block;
+    position: absolute;
+    inset: 12px;
+    width: calc(100% - 24px);
+    height: calc(100% - 24px);
   }
 
   /* Floating attachment card (e.g. scanned PDF preview) */
@@ -403,7 +408,43 @@
   let TIMELINE = null;
   let LAYOUT = null;
   const shotEls = new Map();
+  const clipEls = new Map();
+  const phoneClipEls = new Map();
   const extraImgs = new Map();
+
+  function loadVideo(src) {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = "auto";
+    v.src = src;
+    const ready = new Promise((resolve) => {
+      const done = () => resolve();
+      v.addEventListener("loadeddata", done, { once: true });
+      v.addEventListener("error", done, { once: true });
+      setTimeout(done, 5000);
+    });
+    v.load();
+    return { v, ready };
+  }
+
+  async function seekVideo(v, targetSec) {
+    const maxSec = Number.isFinite(v.duration) && v.duration > 0.04 ? v.duration - 0.02 : targetSec;
+    const clamped = clamp(targetSec, 0, Math.max(0, maxSec));
+    if (Math.abs(v.currentTime - clamped) < 0.008 && v.readyState >= 2) return;
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        v.removeEventListener("seeked", done);
+        resolve();
+      };
+      v.addEventListener("seeked", done, { once: true });
+      v.currentTime = clamped;
+      setTimeout(done, 300);
+    });
+  }
 
   function setupLayout(tl, manifest) {
     const W = tl.width;
@@ -491,18 +532,38 @@
       loadPromises.push(img.decode().catch(() => {}));
     }
 
-    // Preload any attachment cards or iPhone screenshots referenced in timeline
+    // Preload any continuous video clips (CDP-recorded or OpenCode Browse / external MP4s)
+    for (const clip of TIMELINE.clips || []) {
+      if (clipEls.has(clip.file)) continue;
+      const { v, ready } = loadVideo(`assets/${clip.file}`);
+      v.className = "shot";
+      viewport.insertBefore(v, attachCard);
+      clipEls.set(clip.file, v);
+      loadPromises.push(ready);
+    }
+
+    // Preload any attachment cards or iPhone screenshots/clips referenced in timeline
     for (const card of TIMELINE.attachmentCards || []) {
       const pre = new Image();
       pre.src = `assets/${card.image}`;
       extraImgs.set(card.image, pre);
       loadPromises.push(pre.decode().catch(() => {}));
     }
+    const phoneBezel = document.getElementById("iphone-bezel");
     for (const ip of TIMELINE.iphoneOverlays || []) {
-      const pre = new Image();
-      pre.src = `assets/${ip.image}`;
-      extraImgs.set(ip.image, pre);
-      loadPromises.push(pre.decode().catch(() => {}));
+      if (ip.clip) {
+        if (phoneClipEls.has(ip.clip)) continue;
+        const { v, ready } = loadVideo(`assets/${ip.clip}`);
+        v.style.opacity = "0";
+        phoneBezel.appendChild(v);
+        phoneClipEls.set(ip.clip, v);
+        loadPromises.push(ready);
+      } else if (ip.image) {
+        const pre = new Image();
+        pre.src = `assets/${ip.image}`;
+        extraImgs.set(ip.image, pre);
+        loadPromises.push(pre.decode().catch(() => {}));
+      }
     }
 
     await Promise.all(loadPromises);
@@ -526,12 +587,13 @@
     return kfs[kfs.length - 1];
   }
 
-  window.renderAt = function renderAt(t) {
+  window.renderAt = async function renderAt(t) {
     const tl = TIMELINE;
     const { W, H, isVertical, scale, winX, winY } = LAYOUT;
 
-    // 1. Active shot with crisp crossfade
-    let activeShot = tl.shots[0].shot;
+    // 1. Active shot or continuous video clip with crisp crossfade
+    const activeClip = (tl.clips || []).find((c) => t >= c.start && t <= c.end);
+    let activeShot = tl.shots[0]?.shot || null;
     let prevShot = null;
     let fade = 1;
     for (let i = 0; i < tl.shots.length; i++) {
@@ -556,6 +618,19 @@
       }
     }
 
+    for (const [file, v] of clipEls.entries()) {
+      if (activeClip && activeClip.file === file) {
+        const clipFade = activeClip.fade > 0 ? clamp((t - activeClip.start) / activeClip.fade, 0, 1) : 1;
+        const clipTime = (activeClip.trimStart ?? 0) + (t - activeClip.start) * (activeClip.speed ?? 1);
+        await seekVideo(v, clipTime);
+        v.style.opacity = String(clipFade);
+        v.style.zIndex = "4";
+      } else {
+        v.style.opacity = "0";
+        v.style.zIndex = "0";
+      }
+    }
+
     // 2. Camera pan & zoom (vertical format boosts zoom slightly so UI fills portrait frame cleanly)
     const cam = evalKeyframes(tl.camera, t);
     const z = isVertical ? lerp(1.0, cam.zoom * 1.18, clamp((cam.zoom - 1) / 0.35, 0, 1)) : cam.zoom;
@@ -575,14 +650,29 @@
     const ty = lerp(0, clamp(zoomedShiftY, H - H * z, 0), blend);
     document.getElementById("camera").style.transform = `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${z.toFixed(4)})`;
 
-    // 3. Optional iPhone bezel overlay
+    // 3. Optional iPhone bezel overlay (static PNG or continuous video clip)
     const phoneEl = document.getElementById("iphone-bezel");
+    const phoneImg = document.getElementById("iphone-img");
     if (phoneMatch) {
       const fadeIn = clamp((t - phoneMatch.start) / 0.25, 0, 1);
       const fadeOut = clamp((phoneMatch.end - t) / 0.25, 0, 1);
-      const img = document.getElementById("iphone-img");
-      if (!img.src.endsWith(phoneMatch.image)) img.src = `assets/${phoneMatch.image}`;
       phoneEl.style.opacity = String(Math.min(fadeIn, fadeOut));
+      if (phoneMatch.clip) {
+        phoneImg.style.opacity = "0";
+        for (const [file, v] of phoneClipEls.entries()) {
+          if (file === phoneMatch.clip) {
+            const ct = (phoneMatch.trimStart ?? 0) + (t - phoneMatch.start) * (phoneMatch.speed ?? 1);
+            await seekVideo(v, ct);
+            v.style.opacity = "1";
+          } else {
+            v.style.opacity = "0";
+          }
+        }
+      } else if (phoneMatch.image) {
+        for (const v of phoneClipEls.values()) v.style.opacity = "0";
+        if (!phoneImg.src.endsWith(phoneMatch.image)) phoneImg.src = `assets/${phoneMatch.image}`;
+        phoneImg.style.opacity = "1";
+      }
     } else {
       phoneEl.style.opacity = "0";
     }
