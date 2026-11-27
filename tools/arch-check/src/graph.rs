@@ -538,18 +538,41 @@ fn strip_py_suite_prefix(mut stmt: &str) -> &str {
         if !HEADERS.contains(&first_word) {
             return trimmed;
         }
+        let bytes = trimmed.as_bytes();
         let mut depth = 0usize;
+        let mut pending_lambda = 0usize;
         let mut colon_idx = None;
-        for (idx, ch) in trimmed.char_indices() {
-            match ch {
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => depth = depth.saturating_sub(1),
-                ':' if depth == 0 => {
-                    colon_idx = Some(idx);
-                    break;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b':' if depth == 0 => {
+                    if bytes.get(i + 1) == Some(&b'=') {
+                        i += 2;
+                        continue;
+                    }
+                    if pending_lambda > 0 {
+                        pending_lambda -= 1;
+                    } else {
+                        colon_idx = Some(i);
+                        break;
+                    }
+                }
+                b if depth == 0 && (b.is_ascii_alphabetic() || b == b'_') => {
+                    let start = i;
+                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+                    {
+                        i += 1;
+                    }
+                    if &bytes[start..i] == b"lambda" {
+                        pending_lambda += 1;
+                    }
+                    continue;
                 }
                 _ => {}
             }
+            i += 1;
         }
         match colon_idx {
             Some(idx) => stmt = &trimmed[idx + 1..],
@@ -1363,12 +1386,17 @@ async def _private():
 
     #[test]
     fn scans_one_line_python_suite_imports() {
-        let source = "if True: import fama_worker.logging\ntry: from .b import helper\n";
+        let source = "\
+if True: import fama_worker.logging
+if enabled := True: import fama_worker.a
+try: from .b import helper
+";
         let (_loc, _total, _exports, imports) = parse_py(source);
         assert_eq!(
             imports,
             vec![
                 PyImport::Module("fama_worker.logging".to_owned()),
+                PyImport::Module("fama_worker.a".to_owned()),
                 PyImport::From {
                     module: ".b".to_owned(),
                     names: vec!["helper".to_owned()],

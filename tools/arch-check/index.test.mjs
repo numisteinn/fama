@@ -159,6 +159,16 @@ test('does not confuse stdlib imports with sibling Python modules and catches on
         assert.deepEqual(cycles.violations, [
             'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
         ])
+
+        // One-line suite with walrus operator `:=` MUST also form a cycle.
+        writeFileSync(path.join(pkg, 'a.py'), 'if enabled := True: import fama_worker.logging\n')
+        const walrus = run(['--json'], { cwd: dir, capture: true })
+        assert.equal(walrus.status, 1, walrus.stderr)
+        const walrusReport = JSON.parse(walrus.stdout)
+        const walrusCycles = walrusReport.rules.find(rule => rule.kind === 'no-file-cycles')
+        assert.deepEqual(walrusCycles.violations, [
+            'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
+        ])
     })
 })
 
