@@ -3,10 +3,10 @@ import { Button, Dialog } from "@effect/ui-kit"
 import { Html } from "@effect/ui/html"
 import { Cause, Duration, Effect, Option, Redacted, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { type ApiFailure, ApiToken, Connection, apiToken } from "~/api"
-import { FeedQuery } from "~/queries"
-import { buttonClass } from "~/view/button"
-import * as Icon from "~/view/icon"
+import { type ApiFailure, ApiToken, Connection, apiToken } from "~/core/api"
+import { FeedQuery } from "~/core/queries"
+import { buttonClass } from "~/ui/button"
+import * as Icon from "~/ui/icon"
 
 export const RESET_COPIED_MS = 1500
 

@@ -11,16 +11,17 @@ import { Html } from "@effect/ui/html"
 import { Cause, Context, Effect, Layer, Option, Queue, Redacted, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/http"
 import { AsyncResult } from "effect/reactivity"
-import { ApiFailure, episodePath } from "~/api"
+import { ApiFailure, episodePath } from "~/core/api"
 import {
   type RedactedSample,
   RedactedSampleList,
   SamplesQuery,
   redactSampleList,
-} from "~/queries"
-import { FamaApi } from "~/services"
-import { buttonClass, cx } from "~/view/button"
-import * as Icon from "~/view/icon"
+} from "~/core/queries"
+import { FamaApi } from "~/core/services"
+import { languageName, languageOf } from "~/core/voices"
+import { buttonClass, cx } from "~/ui/button"
+import * as Icon from "~/ui/icon"
 
 // --- Scoped sample audio service (replaces module-level mutable globals) ---
 
@@ -56,19 +57,6 @@ const isInterrupted = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
 
 // --- Pure helpers ---
-
-/** Base language tag (`en-US` / `is_IS` -> `en` / `is`), matching the API's sample language filter. */
-export const languageOf = (language: string): string =>
-  language.toLowerCase().split(/[-_]/)[0] ?? language.toLowerCase()
-
-const languageNames = new Intl.DisplayNames(undefined, { type: "language" })
-const languageName = (code: string): string => {
-  try {
-    return languageNames.of(code) ?? code
-  } catch {
-    return code
-  }
-}
 
 export interface ReviewVoiceOption {
   readonly id: VoiceRef

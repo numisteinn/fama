@@ -4,17 +4,16 @@ import { Button } from "@effect/ui-kit"
 import { Html } from "@effect/ui/html"
 import { Effect, Option, Queue, Redacted, Schema, Stream } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { AudioPlayer } from "~/audio"
-import { TimingQuery, publicMediaPath } from "~/queries"
-import { chapterStartMs } from "~/timeline"
-import { buttonClass, cx } from "~/view/button"
+import { AudioPlayer } from "~/core/audio"
+import { TimingQuery, publicMediaPath } from "~/core/queries"
+import { chapterStartMs } from "~/core/timeline"
+import { buttonClass, cx } from "~/ui/button"
 
 export const Mark = Schema.Struct({ chapter: Schema.Number, segment: Schema.Number })
 export type Mark = typeof Mark.Type
 
 export const isSameMark = (a: Mark, b: Mark): boolean => a.chapter === b.chapter && a.segment === b.segment
 export const segmentId = (mark: Mark): string => `segment-${mark.chapter}-${mark.segment}`
-export const hasText = (episode: Episode): boolean => episode.chapters.some((chapter) => chapter.timingUrl !== null)
 
 export const MARK_SELECTOR = '#reader [aria-current="true"]'
 const INTERACTIVE = "input, textarea, select, [contenteditable], button, a, [role=slider], [role^=menuitem], [role=menu]"

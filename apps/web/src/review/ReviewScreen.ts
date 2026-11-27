@@ -4,7 +4,7 @@ import { Button, Checkbox, Collapsible } from "@effect/ui-kit"
 import { Html } from "@effect/ui/html"
 import { Cause, Effect, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { DocumentQuery } from "~/queries"
+import { DocumentQuery } from "~/core/queries"
 import {
   type ReviewChapter,
   ReviewChapter as ReviewChapterSchema,
@@ -13,8 +13,8 @@ import {
   startButtonLabel,
 } from "~/review/model"
 import { VoiceSamples } from "~/review/VoiceSamples"
-import { buttonClass, cx } from "~/view/button"
-import * as Icon from "~/view/icon"
+import { buttonClass, cx } from "~/ui/button"
+import * as Icon from "~/ui/icon"
 
 // --- Editor sub-component (mounts once DocumentQuery succeeds) ---
 

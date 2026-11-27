@@ -1,7 +1,30 @@
-import { EpisodeProgress, type VoiceRef } from "@fama/contracts"
+import { EpisodeProgress, VoiceRef } from "@fama/contracts"
+import { UiSchema } from "@effect/ui"
 import { Effect, Option, Schema } from "effect"
-import { type Connection, apiToken } from "~/api"
-import { type Flags, StoredProgress } from "~/model"
+import { ApiToken, type Connection, apiToken } from "~/core/api"
+
+/**
+ * What storage holds for an episode's progress when it starts. `NotSaved` has no local entry, as after the
+ * user cleared site data: the server's progress decides. Only `Unreadable` storage falls back to the entry
+ * this tab knows.
+ */
+export const StoredProgress = UiSchema.TaggedEnum({
+  Saved: { progress: EpisodeProgress },
+  NotSaved: {},
+  Unreadable: {},
+})
+export type StoredProgress = typeof StoredProgress.Type
+
+/** Settings read from localStorage at boot. */
+export const Flags = Schema.Struct({
+  token: ApiToken,
+  origin: Schema.String,
+  voice: Schema.NullOr(VoiceRef),
+  speed: Schema.Number,
+  rate: Schema.Number,
+  localProgress: Schema.Record(Schema.String, EpisodeProgress),
+})
+export type Flags = typeof Flags.Type
 
 /** `fama.progress.<episodeId>` holds that episode's `EpisodeProgress` as JSON. */
 export const PROGRESS_PREFIX = "fama.progress."

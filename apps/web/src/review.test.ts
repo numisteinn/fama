@@ -6,7 +6,7 @@ import { Locator, Story, TestHost } from "@effect/ui/testing"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Schema } from "effect"
 import { AppComponent } from "~/App"
-import { apiToken } from "~/api"
+import { apiToken } from "~/core/api"
 import {
   CreateEpisodeFromSource,
   FetchEpisodes,
@@ -18,8 +18,9 @@ import {
 } from "~/command"
 import { baseModel, connection, defaultFlags, harbourDays, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
 import { AppMessage } from "~/message"
-import { Playback, Screen } from "~/model"
-import { InvalidateDocument, SamplesQuery } from "~/queries"
+import { Screen } from "~/model"
+import { Playback } from "~/playback/model"
+import { InvalidateDocument, SamplesQuery } from "~/core/queries"
 import {
   ReviewEditor,
   ReviewEditorEvents,
@@ -28,7 +29,7 @@ import {
   ReviewScreenEvents,
 } from "~/review/ReviewScreen"
 import { detectRepeatedLines, removeLineFromText } from "~/review/model"
-import { FamaApi } from "~/services"
+import { FamaApi } from "~/core/services"
 import { OpenFilePickerOnKey } from "~/view/addBar"
 
 const reviewEpisode: Episode = {

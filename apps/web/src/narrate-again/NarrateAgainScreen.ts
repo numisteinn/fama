@@ -5,10 +5,11 @@ import { Html } from "@effect/ui/html"
 import { Cause, Effect, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { formatRate } from "~/lib/format"
-import { NarrateAgainSubmitTarget, SPEEDS, languageName, sortedVoices } from "~/model"
-import { NarrateAgainDocumentQuery } from "~/queries"
-import { buttonClass } from "~/view/button"
-import * as Icon from "~/view/icon"
+import { NarrateAgainSubmitTarget } from "~/narrate-again/model"
+import { NarrateAgainDocumentQuery } from "~/core/queries"
+import { SPEEDS, languageName, sortedVoices } from "~/core/voices"
+import { buttonClass } from "~/ui/button"
+import * as Icon from "~/ui/icon"
 
 // --- Editor sub-component ---
 

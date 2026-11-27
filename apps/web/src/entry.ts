@@ -3,9 +3,9 @@ import { BrowserHost } from "@effect/ui/html"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { App } from "~/App"
-import { AudioPlayer } from "~/audio"
-import { flags } from "~/flags"
-import { FamaApi, FamaConnection } from "~/services"
+import { AudioPlayer } from "~/core/audio"
+import { flags } from "~/core/flags"
+import { FamaApi, FamaConnection } from "~/core/services"
 import "~/index.css"
 
 const initialFlags = Effect.runSync(flags)

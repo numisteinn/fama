@@ -2,7 +2,7 @@ import { UiSchema } from "@effect/ui"
 import { Menu } from "@effect/ui-kit"
 import { Html } from "@effect/ui/html"
 import { Schema } from "effect"
-import * as Icon from "~/view/icon"
+import * as Icon from "~/ui/icon"
 
 export const PickerOption = Schema.Struct({
   value: Schema.String,

@@ -5,7 +5,7 @@ import { Story } from "@effect/ui/testing"
 import { Effect, Layer, Option, Redacted } from "effect"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { AppComponent } from "~/App"
-import { apiToken } from "~/api"
+import { apiToken } from "~/core/api"
 import {
   AudioPlayer,
   LoadChapter,
@@ -15,7 +15,7 @@ import {
   SetAudioRate,
   StopAudio,
   audioCommandsLayer,
-} from "~/audio"
+} from "~/core/audio"
 import {
   CreateEpisodeFromSource,
   DeleteEpisode,
@@ -41,7 +41,8 @@ import {
   withPlayback,
 } from "~/fixture"
 import { AppMessage as Message } from "~/message"
-import { type AppModel as Model, Playback } from "~/model"
+import { type AppModel as Model } from "~/model"
+import { Playback } from "~/playback/model"
 import { storageEventMessage } from "~/subscription"
 import { updateApp as update } from "~/update"
 
