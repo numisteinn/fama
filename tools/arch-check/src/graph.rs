@@ -532,40 +532,41 @@ fn strip_py_suite_prefix(mut stmt: &str) -> &str {
     loop {
         let trimmed = stmt.trim_start();
         let first_word = trimmed
-            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
             .next()
             .unwrap_or_default();
         if !HEADERS.contains(&first_word) {
             return trimmed;
         }
-        let bytes = trimmed.as_bytes();
+        let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
         let mut depth = 0usize;
         let mut pending_lambda = 0usize;
         let mut colon_idx = None;
         let mut i = 0usize;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'(' | b'[' | b'{' => depth += 1,
-                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
-                b':' if depth == 0 => {
-                    if bytes.get(i + 1) == Some(&b'=') {
+        while i < chars.len() {
+            let (byte_idx, ch) = chars[i];
+            match ch {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ':' if depth == 0 => {
+                    if chars.get(i + 1).map(|&(_, next)| next) == Some('=') {
                         i += 2;
                         continue;
                     }
                     if pending_lambda > 0 {
                         pending_lambda -= 1;
                     } else {
-                        colon_idx = Some(i);
+                        colon_idx = Some(byte_idx);
                         break;
                     }
                 }
-                b if depth == 0 && (b.is_ascii_alphabetic() || b == b'_') => {
-                    let start = i;
-                    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-                    {
+                c if depth == 0 && (c.is_alphabetic() || c == '_') => {
+                    let start_byte = byte_idx;
+                    while i < chars.len() && (chars[i].1.is_alphanumeric() || chars[i].1 == '_') {
                         i += 1;
                     }
-                    if &bytes[start..i] == b"lambda" {
+                    let end_byte = chars.get(i).map(|&(b, _)| b).unwrap_or(trimmed.len());
+                    if &trimmed[start_byte..end_byte] == "lambda" {
                         pending_lambda += 1;
                     }
                     continue;
@@ -1389,6 +1390,8 @@ async def _private():
         let source = "\
 if True: import fama_worker.logging
 if enabled := True: import fama_worker.a
+if λlambda := True: import fama_worker.b
+if lambda x: x: import fama_worker.c
 try: from .b import helper
 ";
         let (_loc, _total, _exports, imports) = parse_py(source);
@@ -1397,6 +1400,8 @@ try: from .b import helper
             vec![
                 PyImport::Module("fama_worker.logging".to_owned()),
                 PyImport::Module("fama_worker.a".to_owned()),
+                PyImport::Module("fama_worker.b".to_owned()),
+                PyImport::Module("fama_worker.c".to_owned()),
                 PyImport::From {
                     module: ".b".to_owned(),
                     names: vec!["helper".to_owned()],
