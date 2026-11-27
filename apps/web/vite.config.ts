@@ -11,5 +11,13 @@ export default defineConfig({
     port: Number(process.env.PORT ?? 5173),
     proxy: { "/api": api, "/feed": api, "/media": api },
   },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: { groups: [{ name: "effect", test: /[\\/]node_modules[\\/]effect[\\/]/ }] },
+      },
+    },
+  },
 })

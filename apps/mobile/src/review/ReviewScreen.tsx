@@ -35,7 +35,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
     setError("")
     api.document(id).then(
       doc => { if (current) setReview(reviewDocument(doc)) },
-      cause => { if (current) setError(cause.message) },
+      (cause: unknown) => { if (current) setError(cause instanceof Error ? cause.message : "Could not load document.") },
     )
     return () => { current = false }
   }, [api, id, attempt])
@@ -69,7 +69,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
     latestPicked.current = voice
     const speed = episode?.speed ?? 1
     voiceSaveChain.current = voiceSaveChain.current.then(async () => {
-      if (latestPicked.current !== voice) return
+      if (latestPicked.current !== voice) return undefined
       try {
         await library.saveReviewVoice(id, voice, speed)
       } catch (cause) {
@@ -77,6 +77,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
           Alert.alert("Voice", cause instanceof Error ? cause.message : "Could not save voice.")
         }
       }
+      return undefined
     })
   }
   const start = () => run("starting", async () => {
@@ -132,7 +133,7 @@ function ReviewEpisode({ id, api }: { id: string; api: Api }) {
 }
 
 function ChapterEditor({ title, initial, busy, onSave, onCancel }: {
-  title: string; initial: string; busy: boolean; onSave(text: string): void; onCancel(): void
+  title: string; initial: string; busy: boolean; onSave: (text: string) => void; onCancel: () => void
 }) {
   const [text, setText] = useState(initial)
   return <Modal visible animationType="slide" onRequestClose={() => { if (!busy) onCancel() }}>

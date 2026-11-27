@@ -29,7 +29,7 @@ export function MiniPlayer() {
           ) : null}
         </View>
       </Tap>
-      <Tap style={styles.button} accessibilityRole="button" accessibilityLabel={status.playing ? "Pause" : "Play"} onPress={() => void player.toggle()}>
+      <Tap style={styles.button} accessibilityRole="button" accessibilityLabel={status.playing ? "Pause" : "Play"} onPress={() => player.toggle()}>
         {isWaiting(status, episode) ? (
           <ActivityIndicator color={colors.text} />
         ) : (
@@ -37,7 +37,7 @@ export function MiniPlayer() {
         )}
       </Tap>
       {placement === "regular" ? (
-        <Tap style={styles.button} accessibilityRole="button" accessibilityLabel="Forward 30 seconds" onPress={() => void player.skip(30)}>
+        <Tap style={styles.button} accessibilityRole="button" accessibilityLabel="Forward 30 seconds" onPress={() => player.skip(30)}>
           <Icon name="goforward.30" size={22} />
         </Tap>
       ) : null}

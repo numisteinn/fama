@@ -11,8 +11,10 @@ import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import * as SampleRepo from "./sample-repo.ts"
 import { sha256Hex } from "./secrets.ts"
-import { migrations } from "./test-app.ts"
+import { migrations, readJson, readNarrateJob } from "./test-app.ts"
 import * as Wake from "./wake.ts"
+import { Episode, EpisodeList, FeedInfo, EpisodeProgress } from "@fama/contracts"
+import { required } from "../../../test/required.ts"
 
 const WORKER_TOKEN = "test-worker-token"
 const users = {
@@ -39,7 +41,7 @@ const WAKE_TIMEOUT_MS = 200
 const fakeWakeFetch: typeof fetch = async (input, init) => {
   const { results } = await env.DB.prepare("SELECT job_state FROM episodes").all<{ job_state: string }>()
   wakeCalls.push({
-    url: String(input),
+    url: input instanceof Request ? input.url : String(input),
     method: init?.method ?? "GET",
     authorization: new Headers(init?.headers).get("authorization"),
     jobStates: results.map((row) => row.job_state),
@@ -75,7 +77,7 @@ beforeAll(async () => {
   handler = (request) => app.handler(request)
 })
 
-afterAll(() => proxy?.dispose())
+afterAll(() => proxy.dispose())
 
 const statements = (sql: string) =>
   sql
@@ -140,7 +142,7 @@ const bob = asClient(users.bob)
 const asWorker = (method: string, path: string, init?: Parameters<typeof call>[3]) =>
   call(WORKER_TOKEN, method, path, init)
 
-const allKeys = async () => (await env.MEDIA.list()).objects.map((object) => object.key).sort()
+const allKeys = async () => (await env.MEDIA.list()).objects.map((object) => object.key).toSorted()
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 
@@ -150,9 +152,9 @@ const readyEpisode = async () => {
     json: { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 },
   })
   expect(created.status).toBe(201)
-  const episode = (await created.json()) as { id: string }
+  const episode = await readJson(Episode, created)
   const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [voice] } })
-  const { work: job } = (await claim.json()) as { work: { episodeId: string; leaseToken: string } }
+  const job = await readNarrateJob(claim)
   expect(job.episodeId).toBe(episode.id)
   const lease = job.leaseToken
   const put = (path: string, body: string) =>
@@ -163,12 +165,8 @@ const readyEpisode = async () => {
     json: { workerId: "w1", leaseToken: lease, durationMs: 1000 },
   })
   expect(complete.status).toBe(204)
-  const ready = (await (await alice("GET", `/api/episodes/${episode.id}`)).json()) as {
-    id: string
-    bookUrl: string
-    chapters: Array<{ url: string }>
-  }
-  return { ...ready, lease }
+  const ready = await readJson(Episode, await alice("GET", `/api/episodes/${episode.id}`))
+  return { ...ready, bookUrl: required(ready.bookUrl), lease }
 }
 
 describe("ownership", () => {
@@ -176,7 +174,7 @@ describe("ownership", () => {
     const episode = await readyEpisode()
     expect(await allKeys()).toEqual([
       episode.bookUrl.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`),
-      episode.chapters[0]!.url.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`),
+      required(episode.chapters[0]).url.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`),
     ])
     expect(episode.bookUrl).toMatch(new RegExp(`^/media/${users.alice.feed}/episodes/${episode.id}/books/[a-f0-9]{64}/book\\.m4b$`))
     const media = await call(null, "GET", episode.bookUrl)
@@ -186,7 +184,7 @@ describe("ownership", () => {
 
   it("a second user cannot list, read, retry or delete the first user's episode", async () => {
     const episode = await readyEpisode()
-    const list = (await (await bob("GET", "/api/episodes")).json()) as { episodes: Array<unknown> }
+    const list = await readJson(EpisodeList, await bob("GET", "/api/episodes"))
     expect(list.episodes).toEqual([])
     expect((await bob("GET", `/api/episodes/${episode.id}`)).status).toBe(404)
     expect((await bob("POST", `/api/episodes/${episode.id}/retry`)).status).toBe(404)
@@ -208,7 +206,7 @@ describe("ownership", () => {
     const episode = await readyEpisode()
     const asBob = episode.bookUrl.replace(users.alice.feed, users.bob.feed)
     expect((await call(null, "GET", asBob)).status).toBe(404)
-    expect((await call(null, "GET", episode.chapters[0]!.url.replace(users.alice.feed, users.bob.feed))).status).toBe(404)
+    expect((await call(null, "GET", required(episode.chapters[0]).url.replace(users.alice.feed, users.bob.feed))).status).toBe(404)
     const bobFeed = await (await call(null, "GET", `/feed/${users.bob.feed}/rss.xml`)).text()
     expect(bobFeed).not.toContain("<item>")
     const aliceFeed = await (await call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).text()
@@ -218,7 +216,7 @@ describe("ownership", () => {
   it("media paths outside episodes/ are refused", async () => {
     const form = new FormData()
     form.set("file", new Blob(["secret upload"], { type: "text/plain" }), "notes.txt")
-    const created = (await (await alice("POST", "/api/episodes/upload", { body: form })).json()) as { id: string }
+    const created = await readJson(Episode, await alice("POST", "/api/episodes/upload", { body: form }))
     const feed = users.alice.feed
     for (const path of [
       `/media/${feed}/uploads/${created.id}/notes.txt`,
@@ -255,8 +253,8 @@ describe("auth boundaries", () => {
     })
     const claim = await alice("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
     expect(claim.status).toBe(401)
-    const list = (await (await alice("GET", "/api/episodes")).json()) as { episodes: Array<{ job: { _tag: string } }> }
-    expect(list.episodes[0]!.job._tag).toBe("Queued")
+    const list = await readJson(EpisodeList, await alice("GET", "/api/episodes"))
+    expect(required(list.episodes[0]).job._tag).toBe("Queued")
   })
 
   it("the worker token cannot call client routes", async () => {
@@ -272,16 +270,16 @@ describe("auth boundaries", () => {
 
   it("rotating the feed token closes the old feed and media URLs", async () => {
     const episode = await readyEpisode()
-    const rotated = (await (await alice("POST", "/api/feed/rotate")).json()) as { url: string }
+    const rotated = await readJson(FeedInfo, await alice("POST", "/api/feed/rotate"))
     const token = /\/feed\/([^/]+)\/rss\.xml$/.exec(rotated.url)?.[1]
     expect(token).toBeDefined()
     expect(token).not.toBe(users.alice.feed)
-    expect(((await (await alice("GET", "/api/feed")).json()) as { url: string }).url).toBe(rotated.url)
+    expect((await readJson(FeedInfo, await alice("GET", "/api/feed"))).url).toBe(rotated.url)
     expect((await call(null, "GET", episode.bookUrl)).status).toBe(401)
     expect((await call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).status).toBe(401)
-    const fresh = (await (await alice("GET", `/api/episodes/${episode.id}`)).json()) as { bookUrl: string }
+    const fresh = await readJson(Episode, await alice("GET", `/api/episodes/${episode.id}`))
     expect(fresh.bookUrl).toBe(episode.bookUrl.replace(`/media/${users.alice.feed}/`, `/media/${token}/`))
-    expect((await call(null, "GET", fresh.bookUrl)).status).toBe(200)
+    expect((await call(null, "GET", required(fresh.bookUrl))).status).toBe(200)
   })
 })
 
@@ -289,9 +287,9 @@ describe("leases", () => {
   const claimFile = async () => {
     const form = new FormData()
     form.set("file", new Blob(["file body"], { type: "text/plain" }), "notes.txt")
-    const created = (await (await alice("POST", "/api/episodes/upload", { body: form })).json()) as { id: string }
+    const created = await readJson(Episode, await alice("POST", "/api/episodes/upload", { body: form }))
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { work: job } = (await claim.json()) as { work: { episodeId: string; leaseToken: string; sourcePath: string } }
+    const job = await readNarrateJob(claim)
     expect(job.episodeId).toBe(created.id)
     return job
   }
@@ -315,7 +313,7 @@ describe("leases", () => {
       fail: await asWorker("POST", `/api/worker/jobs/${id}/fail`, { json: { workerId: "w1", leaseToken: wrong, reason: "x" } }),
     }
     for (const [route, response] of Object.entries(responses)) expect(response.status, route).toBe(409)
-    expect((await asWorker("GET", job.sourcePath)).status, "source without a lease").toBe(400)
+    expect((await asWorker("GET", required(job.sourcePath))).status, "source without a lease").toBe(400)
     const source = await asWorker("GET", `${job.sourcePath}?leaseToken=${job.leaseToken}`)
     expect(source.status).toBe(200)
     expect(await source.text()).toBe("file body")
@@ -332,7 +330,7 @@ describe("leases", () => {
     expect((await alice("POST", `/api/episodes/${id}/retry`)).status).toBe(200)
     expect((await fail(first.leaseToken)).status, "old lease after retry").toBe(409)
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const second = ((await claim.json()) as { work: { leaseToken: string } }).work
+    const second = (await readNarrateJob(claim))
     expect(second.leaseToken).not.toBe(first.leaseToken)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${first.leaseToken}`)).status).toBe(409)
     expect((await asWorker("GET", `${first.sourcePath}?leaseToken=${second.leaseToken}`)).status).toBe(200)
@@ -342,14 +340,14 @@ describe("leases", () => {
 describe("time left", () => {
   it("shows the worker's estimate on the running job, and takes a worker that sends none", async () => {
     const createBody = { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 }
-    const created = (await (await alice("POST", "/api/episodes", { json: createBody })).json()) as { id: string }
+    const created = await readJson(Episode, await alice("POST", "/api/episodes", { json: createBody }))
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const job = await readNarrateJob(claim)
     const report = (extra: Record<string, unknown>) =>
       asWorker("POST", `/api/worker/jobs/${created.id}/progress`, {
         json: { workerId: "w1", leaseToken: job.leaseToken, stage: "synthesizing", done: 4, total: 9, title: null, author: null, language: null, voice: null, ...extra },
       })
-    const jobOf = async () => ((await (await alice("GET", `/api/episodes/${created.id}`)).json()) as { job: unknown }).job
+    const jobOf = async () => (await readJson(Episode, await alice("GET", `/api/episodes/${created.id}`))).job
 
     expect((await report({ remainingMs: 95_000 })).status).toBe(204)
     expect(await jobOf()).toMatchObject({ _tag: "Running", stage: "synthesizing", done: 4, total: 9, remainingMs: 95_000 })
@@ -360,11 +358,10 @@ describe("time left", () => {
 })
 
 describe("progress", () => {
-  type Progress = { positionMs: number; updatedAt: string }
   const putProgress = (client: typeof alice, id: string, body: unknown) =>
     client("PUT", `/api/episodes/${id}/progress`, { json: body })
   const progressOf = async (id: string) =>
-    ((await (await alice("GET", `/api/episodes/${id}`)).json()) as { progress: Progress | null }).progress
+    (await readJson(Episode, await alice("GET", `/api/episodes/${id}`))).progress
   const stamp = (offsetMs: number) => new Date(Date.now() + offsetMs).toISOString()
 
   it("stores a write, returns it, and shows it on the episode", async () => {
@@ -375,8 +372,8 @@ describe("progress", () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual(write)
     expect(await progressOf(episode.id)).toEqual(write)
-    const list = (await (await alice("GET", "/api/episodes")).json()) as { episodes: Array<{ progress: Progress }> }
-    expect(list.episodes[0]!.progress).toEqual(write)
+    const list = await readJson(EpisodeList, await alice("GET", "/api/episodes"))
+    expect(required(list.episodes[0]).progress).toEqual(write)
   })
 
   it("an older write loses: it changes nothing and gets the stored value back", async () => {
@@ -398,7 +395,7 @@ describe("progress", () => {
     const before = Date.now()
     const response = await putProgress(alice, episode.id, { positionMs: 30_000, updatedAt: "2100-01-01T00:00:00.000Z" })
     const after = Date.now()
-    const stored = (await response.json()) as Progress
+    const stored = await readJson(EpisodeProgress, response)
     expect(stored.positionMs).toBe(30_000)
     expect(Date.parse(stored.updatedAt)).toBeGreaterThanOrEqual(before)
     expect(Date.parse(stored.updatedAt)).toBeLessThanOrEqual(after)
@@ -483,9 +480,9 @@ describe("worker wake", () => {
   })
 
   it("retry sends one wake with the secret, after the job is Queued again", async () => {
-    const { id } = (await (await uploadFile()).json()) as { id: string }
+    const { id } = await readJson(Episode, await uploadFile())
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const job = await readNarrateJob(claim)
     const fail = await asWorker("POST", `/api/worker/jobs/${id}/fail`, {
       json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" },
     })
@@ -498,9 +495,9 @@ describe("worker wake", () => {
 
   it("start wakes the worker after queuing the reviewed Document, once", async () => {
     const created = await alice("POST", "/api/episodes", { json: { ...textEpisode, review: true } })
-    const { id } = (await created.json()) as { id: string }
+    const { id } = await readJson(Episode, created)
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const job = await readNarrateJob(claim)
     const document = {
       title: "Harbour", author: null, language: "en",
       chapters: [{ title: "Morning", text: "The harbour is quiet." }],
@@ -518,7 +515,7 @@ describe("worker wake", () => {
 
   it("a refused retry sends no wake", async () => {
     setWake(WAKE_URL, WAKE_SECRET)
-    const { id } = (await (await createText()).json()) as { id: string }
+    const { id } = await readJson(Episode, await createText())
     await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
     await settled()
     wakeCalls = []
@@ -592,9 +589,9 @@ describe("worker wake", () => {
   })
 
   it("a retry with a slow wake still returns 200", async () => {
-    const { id } = (await (await uploadFile()).json()) as { id: string }
+    const { id } = await readJson(Episode, await uploadFile())
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const job = await readNarrateJob(claim)
     await asWorker("POST", `/api/worker/jobs/${id}/fail`, { json: { workerId: "w1", leaseToken: job.leaseToken, reason: "boom" } })
     setWake(WAKE_URL, WAKE_SECRET)
     wakeAnswer = (signal) => new Promise((_, reject) => signal?.addEventListener("abort", () => reject(signal.reason)))
@@ -622,9 +619,9 @@ describe("timing files", () => {
     const created = await alice("POST", "/api/episodes", {
       json: { source: { _tag: "Text", title: "Harbour", text: "The harbour has 3 boats." }, voice: null, speed: 1 },
     })
-    const { id } = (await created.json()) as { id: string }
+    const { id } = await readJson(Episode, created)
     const claim = await asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [voice] } })
-    const { work: job } = (await claim.json()) as { work: { leaseToken: string } }
+    const job = await readNarrateJob(claim)
     return { id, lease: job.leaseToken }
   }
   const putTiming = (id: string, lease: string, json: unknown, token: string | null = WORKER_TOKEN) =>
@@ -635,7 +632,7 @@ describe("timing files", () => {
       headers: { "content-type": "audio/mp4", "content-length": "7" },
     })
   const chaptersOf = async (id: string) =>
-    ((await (await alice("GET", `/api/episodes/${id}`)).json()) as { chapters: Array<{ timingUrl: string | null }> }).chapters
+    (await readJson(Episode, await alice("GET", `/api/episodes/${id}`))).chapters
 
   it("a chapter lists the timing file the worker uploaded before it, and the media route serves it", async () => {
     const { id, lease } = await claimed()
@@ -643,16 +640,14 @@ describe("timing files", () => {
     expect(await chaptersOf(id), "no chapter before its audio").toEqual([])
     expect((await putChapter(id, lease)).status).toBe(204)
     const [chapter] = await chaptersOf(id)
-    expect(chapter!.timingUrl).toMatch(new RegExp(`^/media/${users.alice.feed}/episodes/${id}/chapters/[a-f0-9]{64}-${inputHash}/000\\.json$`))
-    const listed = (await (await alice("GET", "/api/episodes")).json()) as {
-      episodes: Array<{ chapters: Array<{ timingUrl: string | null }> }>
-    }
-    expect(listed.episodes[0]!.chapters[0]!.timingUrl).toBe(chapter!.timingUrl)
-    const served = await call(null, "GET", chapter!.timingUrl!)
+    expect(required(chapter).timingUrl).toMatch(new RegExp(`^/media/${users.alice.feed}/episodes/${id}/chapters/[a-f0-9]{64}-${inputHash}/000\\.json$`))
+    const listed = await readJson(EpisodeList, await alice("GET", "/api/episodes"))
+    expect(required(required(listed.episodes[0]).chapters[0]).timingUrl).toBe(required(chapter).timingUrl)
+    const served = await call(null, "GET", required(required(chapter).timingUrl))
     expect(served.status).toBe(200)
     expect(served.headers.get("content-type")).toBe("application/json")
     expect(await served.json()).toEqual(timing)
-    expect(await allKeys()).toContain(chapter!.timingUrl!.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`))
+    expect(await allKeys()).toContain(required(required(chapter).timingUrl).replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`))
   })
 
   it("a chapter without a timing file has timingUrl null", async () => {
@@ -667,7 +662,7 @@ describe("timing files", () => {
     const shorter = { segments: [timing.segments[0]] }
     expect((await putTiming(id, lease, shorter)).status).toBe(204)
     const [chapter] = await chaptersOf(id)
-    expect(await (await call(null, "GET", chapter!.timingUrl!)).json()).toEqual(timing)
+    expect(await (await call(null, "GET", required(required(chapter).timingUrl))).json()).toEqual(timing)
   })
 
   it("refuses a wrong lease, a client token, and a body that is not a timing file", async () => {

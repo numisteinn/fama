@@ -2,6 +2,7 @@ import type { Episode, EpisodeProgress } from "@fama/contracts"
 import { describe, expect, test } from "vitest"
 import { IDLE_STATUS, type PlayerEvent, initialCore, isWaitingForChapter, step } from "./core"
 import type { NativeStatus } from "./native"
+import { required } from "../../../../test/required.ts"
 
 const at = (positionMs: number, updatedAt: string): EpisodeProgress => ({ positionMs, updatedAt })
 const older = at(10_000, "2026-11-23T09:00:00.000Z")
@@ -16,7 +17,7 @@ const chapters = [
 const running = {
   id: "e1",
   title: "Harbour Days",
-  chapters: [chapters[0]!],
+  chapters: [required(chapters[0])],
   job: { _tag: "Running", workerId: "w", stage: "synthesizing", done: 1, total: 2, heartbeatAt: "x", remainingMs: null },
   progress: older,
 } as unknown as Episode
@@ -49,7 +50,9 @@ const phone = (entries: Record<string, EpisodeProgress> = {}) => {
         case "Skip":
           calls.push(`Skip ${effect.deltaMs}`)
           break
-        default:
+        case "Pause":
+        case "Play":
+        case "Unload":
           calls.push(effect._tag)
       }
     }
@@ -267,7 +270,7 @@ describe("the native calls of one event, in order", () => {
     device.send({ _tag: "Toggle" })
     expect(device.calls).toEqual([])
     // The answer: the job is Ready, with no new chapter. The episode is finished now, so the Play starts at 0.
-    device.answer(foreground, [{ ...ready, chapters: [chapters[0]!], progress: end }])
+    device.answer(foreground, [{ ...ready, chapters: [required(chapters[0])], progress: end }])
     expect(device.calls).toEqual(["UpdateTracks 1 chapters, Ready", "Seek 0", "Play"])
   })
 
@@ -458,7 +461,7 @@ describe("re-narrated chapters with replaced URLs", () => {
     const device = paused()
     const renarrated: Episode = {
       ...ready,
-      chapters: [chapters[0]!, { ...chapters[1]!, url: "/rev2/001.m4a", durationMs: 14_000 }],
+      chapters: [required(chapters[0]), { ...required(chapters[1]), url: "/rev2/001.m4a", durationMs: 14_000 }],
     }
     device.library([renarrated])
     expect(device.calls).toEqual(["Load e1, 2 chapters, at 10000, paused"])
@@ -469,7 +472,7 @@ describe("re-narrated chapters with replaced URLs", () => {
     const remapped = at(32_000, newer.updatedAt)
     const renarrated: Episode = {
       ...ready,
-      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 18_825 }, chapters[1]!],
+      chapters: [{ ...required(chapters[0]), url: "/rev2/000.m4a", durationMs: 18_825 }, required(chapters[1])],
       progress: remapped,
     }
     device.library([renarrated])
@@ -484,7 +487,7 @@ describe("re-narrated chapters with replaced URLs", () => {
     // Chapter 1 shortens from 26,825 ms to 20,000 ms while playing Chapter 2 at 30,000 ms -> 23,175 ms.
     const renarrated: Episode = {
       ...ready,
-      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 20_000 }, chapters[1]!],
+      chapters: [{ ...required(chapters[0]), url: "/rev2/000.m4a", durationMs: 20_000 }, required(chapters[1])],
       progress: at(23_175, newer.updatedAt),
     }
     device.library([renarrated])
@@ -498,9 +501,9 @@ describe("re-narrated chapters with replaced URLs", () => {
     device.calls.length = 0
     const renarrated: Episode = {
       ...ready,
-      chapters: [{ ...chapters[0]!, url: "/rev2/000.m4a", durationMs: 17_883 }, chapters[1]!],
+      chapters: [{ ...required(chapters[0]), url: "/rev2/000.m4a", durationMs: 17_883 }, required(chapters[1])],
     }
-    const expected = Math.round((20_000 / chapters[0]!.durationMs) * 17_883)
+    const expected = Math.round((20_000 / required(chapters[0]).durationMs) * 17_883)
     device.library([renarrated])
     expect(device.calls).toEqual([`Load e1, 2 chapters, at ${expected}, play`])
   })
@@ -510,7 +513,7 @@ describe("re-narrated chapters with replaced URLs", () => {
     device.send({ _tag: "Seek", positionMs: 30_000, play: true })
     device.status({ position: 30, playing: true })
     device.calls.length = 0
-    const staleList: Episode = { ...running, chapters: [chapters[0]!] }
+    const staleList: Episode = { ...running, chapters: [required(chapters[0])] }
     device.library([staleList])
     expect(device.calls).toEqual(["UpdateTracks 1 chapters, Running"])
   })

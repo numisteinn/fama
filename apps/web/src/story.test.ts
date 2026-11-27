@@ -45,6 +45,7 @@ import { type AppModel as Model } from "~/model"
 import { Playback } from "~/playback/model"
 import { storageEventMessage } from "~/subscription"
 import { updateApp as update } from "~/update"
+import { required } from "../../../test/required.ts"
 
 type AppCursor = Story.Steps<typeof AppComponent>
 type Step = (s: AppCursor) => void
@@ -74,14 +75,14 @@ const Command = {
     const remaining = [...targets]
     const ordered: Array<Story.Target> = []
     const targetName = (t: Story.Target): string =>
-      "key" in t ? String((t as { readonly key: string }).key) : "name" in t ? String(t.name) : ""
+      "key" in t ? (t as { readonly key: string }).key : "name" in t ? t.name : ""
     for (const item of pending) {
       const idx = remaining.findIndex((t) => targetName(t) === item.command.name)
       if (idx === -1) {
         s.expectExact(...targets)
         return
       }
-      ordered.push(remaining.splice(idx, 1)[0]!)
+      ordered.push(required(remaining.splice(idx, 1)[0]))
     }
     s.expectExact(...ordered)
   },
@@ -493,14 +494,14 @@ describe("player", () => {
   })
   /** Runs the audio Commands of one `update` on `audio`, and gives the Messages/Noop they answer with. */
   const runAudio = async (commands: ReturnType<typeof update>["commands"], audio: ReturnType<typeof fakeAudio>) => {
-    const names: ReadonlyArray<string> = [LoadChapter.key, PlayAudio.key, PauseAudio.key, SeekAudio.key, StopAudio.key]
+    const names = new Set<string>([LoadChapter.key, PlayAudio.key, PauseAudio.key, SeekAudio.key, StopAudio.key])
     const layer = audioCommandsLayer.pipe(
       Layer.provide(Layer.succeed(AudioPlayer, audio as unknown as HTMLAudioElement)),
     )
     const answers: Array<Message | Component.Noop> = []
-    for (const command of commands.filter((item) => names.includes(item.name))) {
-      const effect = (command as unknown as { readonly effect: Effect.Effect<Message | Component.Noop, never, never> }).effect
-      answers.push(await Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<Message | Component.Noop>))
+    for (const command of commands.filter((item) => names.has(item.name))) {
+      const effect = (command as unknown as { readonly effect: Effect.Effect<Message | Component.Noop> }).effect
+      answers.push(await Effect.runPromise(effect.pipe(Effect.provide(layer))))
     }
     return answers
   }
@@ -643,7 +644,7 @@ describe("player", () => {
   test("dragging the paused slider fully right reaches the very end, so the next Play starts from the top", () => {
     const paused = withPlayback(
       withEpisodes(baseModel(), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
     )
     // The range input steps in whole seconds, so its full right for 46,525 ms is the extra stop at 47,000.
     const released = update(paused, Message.CommittedScrub({ value: "47000" }))
@@ -651,7 +652,7 @@ describe("player", () => {
       Playback.Loaded({
         episodeId: harbourDays.id,
         chapter: 1,
-        url: harbourDays.chapters[1]!.url,
+        url: required(harbourDays.chapters[1]).url,
         offsetMs: 19_700,
         isPlaying: false,
         isWaiting: false,
@@ -666,14 +667,14 @@ describe("player", () => {
   test("the slider's last whole second before the end stays a stop of its own", () => {
     const paused = withPlayback(
       withEpisodes(baseModel(), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 1_000, isPlaying: false, isWaiting: false }),
     )
     const released = update(paused, Message.CommittedScrub({ value: "46000" })).model
     expect(released.playback).toEqual(
       Playback.Loaded({
         episodeId: harbourDays.id,
         chapter: 1,
-        url: harbourDays.chapters[1]!.url,
+        url: required(harbourDays.chapters[1]).url,
         offsetMs: 46_000 - 26_825,
         isPlaying: false,
         isWaiting: false,
@@ -685,7 +686,7 @@ describe("player", () => {
     const tideTables = { ...harbourDays, id: "tide-tables" as EpisodeId, title: "Tide Tables" }
     const playingA = withPlayback(
       withEpisodes(baseModel(), [harbourDays, tideTables]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 1_000, isPlaying: true, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 1_000, isPlaying: true, isWaiting: false }),
     )
     // Play on B. Its storage read is still running when the user clicks Pause on A.
     const clickedB = update(playingA, Message.ClickedPlayEpisode({ episodeId: tideTables.id }))
@@ -740,7 +741,7 @@ describe("player", () => {
     }
     const playing = withPlayback(
       withEpisodes(baseModel({ [harbourDays.id]: progressAt(42_500) }), [encoding]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 1, url: harbourDays.chapters[1]!.url, offsetMs: 19_700, isPlaying: true, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 1, url: required(harbourDays.chapters[1]).url, offsetMs: 19_700, isPlaying: true, isWaiting: false }),
     )
     story(
       update,
@@ -764,7 +765,7 @@ describe("player", () => {
           Playback.Loaded({
             episodeId: harbourDays.id,
             chapter: 1,
-            url: harbourDays.chapters[1]!.url,
+            url: required(harbourDays.chapters[1]).url,
             offsetMs: 19_700,
             isPlaying: false,
             isWaiting: false,
@@ -796,7 +797,7 @@ describe("player", () => {
       ),
       model((next) => {
         expect(next.localProgress[harbourDays.id]).toEqual(progressAt(15_000, T))
-        expect(Option.getOrThrow(next.maybeEpisodes)[0]!.progress).toEqual(progressAt(15_000, T))
+        expect(required(Option.getOrThrow(next.maybeEpisodes)[0]).progress).toEqual(progressAt(15_000, T))
       }),
       Command.expectNone(),
     )
@@ -805,7 +806,7 @@ describe("player", () => {
   test("while playing, a save goes out about every 5 s, not on every time update", () => {
     const playing = withPlayback(
       withEpisodes(baseModel(), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 0, isPlaying: true, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 0, isPlaying: true, isWaiting: false }),
     )
     story(
       update,
@@ -826,7 +827,7 @@ describe("player", () => {
     const at12s = Playback.Loaded({
       episodeId: harbourDays.id,
       chapter: 0,
-      url: harbourDays.chapters[0]!.url,
+      url: required(harbourDays.chapters[0]).url,
       offsetMs: 12_000,
       isPlaying: false,
       isWaiting: false,
@@ -897,7 +898,7 @@ describe("player", () => {
     const phone = progressAt(40_000, "2026-11-23T10:01:00.000Z")
     const paused = withPlayback(
       withEpisodes(baseModel({ [id]: old }), [{ ...harbourDays, progress: old }]),
-      Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
     )
     /** The tab came back to the foreground: its library request, number 2, is in flight. */
     const refreshing = update(paused, Message.BecameVisible()).model
@@ -905,7 +906,7 @@ describe("player", () => {
       Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [{ ...harbourDays, progress }] })
     const unavailable = { status: 503, message: "Server unavailable" }
     const secondChapter = (offsetMs: number, isAutoplay: boolean) =>
-      LoadChapter.make({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
+      LoadChapter.make({ src: required(harbourDays.chapters[1]).url, offsetMs, rate: 1, isAutoplay })
 
     test("Play waits for the answer, starts at the phone's newer position, and saves only from there", () => {
       story(
@@ -928,7 +929,7 @@ describe("player", () => {
             Playback.Loaded({
               episodeId: id,
               chapter: 1,
-              url: harbourDays.chapters[1]!.url,
+              url: required(harbourDays.chapters[1]).url,
               offsetMs: 40_000 - 26_825,
               isPlaying: true,
               isWaiting: false,
@@ -1138,7 +1139,7 @@ describe("player", () => {
       const growing = { ...runningHarbourDays, progress: old }
       /** The answer lists the job Ready with both chapters, and the phone played the episode to the end. */
       const finishedElsewhere = progressAt(46_525, phone.updatedAt)
-      const firstChapter = LoadChapter.make({ src: harbourDays.chapters[0]!.url, offsetMs: 0, rate: 1, isAutoplay: true })
+      const firstChapter = LoadChapter.make({ src: required(harbourDays.chapters[0]).url, offsetMs: 0, rate: 1, isAutoplay: true })
       const listedGrowing = update(withEpisodes(baseModel({ [id]: old }), [growing]), Message.BecameVisible()).model
       const loadedGrowing = update(withEpisodes(paused, [growing]), Message.BecameVisible()).model
       const answerWithout = Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [queuedArticle] })
@@ -1158,7 +1159,7 @@ describe("player", () => {
               Playback.Loaded({
                 episodeId: id,
                 chapter: 0,
-                url: harbourDays.chapters[0]!.url,
+                url: required(harbourDays.chapters[0]).url,
                 offsetMs: 0,
                 isPlaying: true,
                 isWaiting: false,
@@ -1215,13 +1216,13 @@ describe("player", () => {
       Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [episode] })
     const paused = withPlayback(
       withEpisodes(baseModel({ [id]: old }), [{ ...runningHarbourDays, progress: old }]),
-      Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
     )
     const chapter = (index: number, offsetMs: number, isAutoplay: boolean) =>
-      LoadChapter.make({ src: harbourDays.chapters[index]!.url, offsetMs, rate: 1, isAutoplay })
+      LoadChapter.make({ src: required(harbourDays.chapters[index]).url, offsetMs, rate: 1, isAutoplay })
     const atEndOfChapterOne = (isWaiting: boolean) =>
-      Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting })
-    const inChapterTwo = Playback.Loaded({ episodeId: id, chapter: 1, url: harbourDays.chapters[1]!.url, offsetMs: 0, isPlaying: true, isWaiting: false })
+      Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_825, isPlaying: false, isWaiting })
+    const inChapterTwo = Playback.Loaded({ episodeId: id, chapter: 1, url: required(harbourDays.chapters[1]).url, offsetMs: 0, isPlaying: true, isWaiting: false })
     /** Five seconds of chapter 2 play: the save that goes out is after the phone's 26,825, in chapter 2. */
     const fiveSecondsOn = steps(
       Command.resolve(LoadChapter, Component.noop),
@@ -1302,7 +1303,7 @@ describe("player", () => {
     test("a wait the listener paused goes on in chapter 2 at the next Play, when it is listed by then", () => {
       const playing = withPlayback(
         withEpisodes(baseModel(), [runningHarbourDays]),
-        Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_000, isPlaying: true, isWaiting: false }),
+        Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_000, isPlaying: true, isWaiting: false }),
       )
       story(
         update,
@@ -1329,7 +1330,7 @@ describe("player", () => {
       // Review round 4, finding 3: the wait went on at 26,825 and stamped 31,825 over the phone's 40,000.
       const waiting = withPlayback(
         withEpisodes(baseModel({ [id]: phone }), [growing]),
-        Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+        Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
       )
       const ahead = progressAt(40_000, "2026-11-23T10:02:00.000Z")
       story(
@@ -1339,7 +1340,7 @@ describe("player", () => {
         model((next) => {
           expect(next.localProgress[id]).toEqual(ahead)
           expect(next.playback).toEqual(
-            Playback.Loaded({ episodeId: id, chapter: 1, url: harbourDays.chapters[1]!.url, offsetMs: 40_000 - 26_825, isPlaying: true, isWaiting: false }),
+            Playback.Loaded({ episodeId: id, chapter: 1, url: required(harbourDays.chapters[1]).url, offsetMs: 40_000 - 26_825, isPlaying: true, isWaiting: false }),
           )
         }),
         // One audio Command. Nothing is stamped: the player took the phone's entry.
@@ -1355,7 +1356,7 @@ describe("player", () => {
 
     test("keeps the phone's position when the listener leaves an episode that waits for its next chapter", () => {
       const ahead = progressAt(40_000, "2026-11-23T10:02:00.000Z")
-      const otherChapter = { ...harbourDays.chapters[0]!, url: "/media/t/episodes/other/chapters/000.m4a" }
+      const otherChapter = { ...required(harbourDays.chapters[0]), url: "/media/t/episodes/other/chapters/000.m4a" }
       const other = { ...harbourDays, id: queuedArticle.id, chapters: [otherChapter] }
       story(
         update,
@@ -1379,7 +1380,7 @@ describe("player", () => {
     test("a Play that waits for a chapter takes a finished entry of a job that is Ready now: it starts at 0:00", () => {
       const waiting = withPlayback(
         withEpisodes(baseModel({ [id]: phone }), [growing]),
-        Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+        Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
       )
       const finished = progressAt(46_525, "2026-11-23T10:02:00.000Z")
       story(
@@ -1395,7 +1396,7 @@ describe("player", () => {
     test("a seek back while the Play waits for a chapter plays from there, in the same chapter too", () => {
       const waiting = withPlayback(
         withEpisodes(baseModel({ [id]: phone }), [growing]),
-        Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+        Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
       )
       story(
         update,
@@ -1403,7 +1404,7 @@ describe("player", () => {
         message(Message.ClickedSkip({ deltaMs: -15_000 })),
         model((next) =>
           expect(next.playback).toEqual(
-            Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 11_825, isPlaying: true, isWaiting: false }),
+            Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 11_825, isPlaying: true, isWaiting: false }),
           ),
         ),
         Command.expectExact(chapter(0, 11_825, true), SaveProgress.make({ episodeId: id, positionMs: 11_825 })),
@@ -1415,7 +1416,7 @@ describe("player", () => {
     test("the Pause key takes a wait for a chapter back, and the Play key leaves it", () => {
       const waiting = withPlayback(
         withEpisodes(baseModel({ [id]: phone }), [growing]),
-        Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
+        Playback.Loaded({ episodeId: id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 26_825, isPlaying: false, isWaiting: true }),
       )
       story(
         update,
@@ -1439,7 +1440,7 @@ describe("player", () => {
         job: { ...runningHarbourDays.job, stage: "encoding" as const },
       }
       const atEnd = (isWaiting: boolean) =>
-        Playback.Loaded({ episodeId: id, chapter: 1, url: harbourDays.chapters[1]!.url, offsetMs: 19_700, isPlaying: false, isWaiting })
+        Playback.Loaded({ episodeId: id, chapter: 1, url: required(harbourDays.chapters[1]).url, offsetMs: 19_700, isPlaying: false, isWaiting })
       story(
         update,
         given({ ...paused, maybeEpisodes: Option.some([encoding]) }),
@@ -1466,18 +1467,18 @@ describe("player", () => {
   describe("the audio Commands", () => {
     const paused = withPlayback(
       withEpisodes(baseModel({ [harbourDays.id]: progressAt(10_000) }), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
     )
 
     test("are absolute: a repeated Play or Pause changes nothing", async () => {
       const audio = fakeAudio()
       const play = update(paused, Message.ClickedPlayPause())
-      expect(play.commands?.map((command) => command.name)).toEqual([PlayAudio.key])
+      expect(play.commands.map((command) => command.name)).toEqual([PlayAudio.key])
       await runAudio(play.commands, audio)
       await runAudio(play.commands, audio)
       expect(audio.paused).toBe(false)
       const pause = update(play.model, Message.ClickedPlayPause())
-      expect(pause.commands?.map((command) => command.name)).toEqual([PauseAudio.key])
+      expect(pause.commands.map((command) => command.name)).toEqual([PauseAudio.key])
       await runAudio(pause.commands, audio)
       await runAudio(pause.commands, audio)
       expect(audio.paused).toBe(true)
@@ -1508,14 +1509,14 @@ describe("player", () => {
       const mine = progressAt(15_000, T)
       // A Story sends no Message while a Command is out. This one must: the list lands before the stamp does.
       const sought = update(paused, Message.ClickedSkip({ deltaMs: 5_000 }))
-      expect(sought.commands?.map((command) => command.name)).toEqual([SaveProgress.name, SeekAudio.key])
+      expect(sought.commands.map((command) => command.name)).toEqual([SaveProgress.name, SeekAudio.key])
       expect(sought.model.stamping).toEqual({ [harbourDays.id]: 15_000 })
       const listed = update(
         sought.model,
         Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [{ ...harbourDays, progress: phone }] }),
       )
       // The phone's entry is older than the stamp that is on its way: it is not taken, and the player stays.
-      expect(listed.commands ?? []).toEqual([])
+      expect(listed.commands).toEqual([])
       expect(listed.model.localProgress[harbourDays.id]).toEqual(progressAt(10_000))
       expect(listed.model.playback._tag === "Loaded" && listed.model.playback.offsetMs).toBe(15_000)
       story(
@@ -1658,7 +1659,7 @@ describe("progress sync", () => {
       message(Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: first, stored: first })),
       model((next) => {
         expect(next.localProgress[harbourDays.id]).toEqual(second)
-        expect(Option.getOrThrow(next.maybeEpisodes)[0]!.progress).toEqual(first)
+        expect(required(Option.getOrThrow(next.maybeEpisodes)[0]).progress).toEqual(first)
       }),
       Command.expectNone(),
     )
@@ -1667,7 +1668,7 @@ describe("progress sync", () => {
   test("a newer server entry moves a loaded, paused episode there, without a save", () => {
     const paused = withPlayback(
       withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
     )
     story(
       update,
@@ -1690,7 +1691,7 @@ describe("progress sync", () => {
   test("a newer server entry leaves a playing episode where it is", () => {
     const playing = withPlayback(
       withEpisodes(baseModel({ [harbourDays.id]: older }), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 12_000, isPlaying: true, isWaiting: false }),
+      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: required(harbourDays.chapters[0]).url, offsetMs: 12_000, isPlaying: true, isWaiting: false }),
     )
     story(
       update,
@@ -1705,7 +1706,6 @@ describe("progress sync", () => {
   test("a save stamps the device clock and stores whole milliseconds under fama.progress.<id>", () => {
     const result = Effect.runSync(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 1234.6 }).effect)
     expect(result._tag).toBe("SavedProgress")
-    if (result._tag !== "SavedProgress") return
     expect(result.progress.positionMs).toBe(1235)
     expect(Math.abs(Date.parse(result.progress.updatedAt) - Date.now())).toBeLessThan(1000)
     expect(JSON.parse(localStorage.getItem(`fama.progress.${harbourDays.id}`) ?? "null")).toEqual(result.progress)

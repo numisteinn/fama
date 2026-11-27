@@ -18,7 +18,8 @@ import {
 import { Context, Effect, Layer, Result, Schema } from "effect"
 import { Bindings } from "./bindings.ts"
 import { remapChapterProgress } from "./chapter-progress.ts"
-import { DatabaseError, query } from "./db.ts"
+import type { DatabaseError } from "./db.ts"
+import { query } from "./db.ts"
 import type { FeedItem } from "./feed.ts"
 import * as Job from "./job.ts"
 import { keys, mediaPath, MediaStore, type StorageError } from "./media-store.ts"
@@ -470,15 +471,15 @@ export const layer = Layer.effect(
     const editDocument = Effect.fn("EpisodeRepo.editDocument")(function* (
       userId: UserId, id: string, document: StoredDocument, version: number,
     ) {
-      const { row, job } = yield* transition(
+      const { row, job: next } = yield* transition(
         id,
-        (job, _at, row) => row.job_version === version
+        (job, _at, current) => current.job_version === version
           ? Job.editDocument(job)
           : Result.fail(new Job.NotEditable({ state: job._tag })),
         documentColumns(document),
         userId,
       )
-      return { queued: job._tag === "Queued", finishedAt: row.finished_at }
+      return { queued: next._tag === "Queued", finishedAt: row.finished_at }
     })
 
     const changeVoice = Effect.fn("EpisodeRepo.changeVoice")(function* (
@@ -552,7 +553,7 @@ export const layer = Layer.effect(
           (source._tag === "Url" && (yield* mediaStore.head(keys.linkedUpload(user_id, id))) !== null)
         const leaseToken = randomToken()
         const leaseHash = yield* leaseOf(leaseToken)
-        const claimed = yield* transition(id, (job, at) => Job.claim(job, { workerId, now: at }), {
+        const claimed = yield* transition(id, (job, claimedAt) => Job.claim(job, { workerId, now: claimedAt }), {
           lease_hash: leaseHash,
         }).pipe(
           Effect.map(({ row }) => row),
@@ -654,12 +655,11 @@ export const layer = Layer.effect(
       metadata: Pick<EpisodeUpdate, "title" | "author" | "language" | "voice">,
     ) {
       const leaseHash = yield* leaseOf(lease)
-      const { job } = yield* transition(
+      return yield* transition(
         id,
         (job, _at, row) => Job.storeDocument(job, { held: holds(row, leaseHash), review: row.review === "Wanted" }),
         { ...documentColumns(document), ...metadata },
-      )
-      return job
+      ).pipe(Effect.map(({ job }) => job))
     })
 
     const feedItems = Effect.fn("EpisodeRepo.feedItems")(function* (userId: UserId, origin: string) {
@@ -676,9 +676,9 @@ export const layer = Layer.effect(
       ).pipe(Effect.flatMap(decodeRows(ChapterRow)))
       const timed = new Map<string, Array<{ hasTiming: boolean }>>()
       for (const chapter of chapters) {
-        const list = timed.get(chapter.episode_id) ?? []
-        list.push({ hasTiming: chapter.timed === 1 })
-        timed.set(chapter.episode_id, list)
+        const timing = timed.get(chapter.episode_id) ?? []
+        timing.push({ hasTiming: chapter.timed === 1 })
+        timed.set(chapter.episode_id, timing)
       }
       return rows.flatMap((row): ReadonlyArray<FeedItem> =>
         row.finished_at === null || row.book_size === null
@@ -715,10 +715,10 @@ export const layer = Layer.effect(
     const putProgress = Effect.fn("EpisodeRepo.putProgress")(function* (
       userId: UserId,
       id: string,
-      progress: EpisodeProgress,
+      entry: EpisodeProgress,
     ) {
       // A clock ahead of the server's must not win every later write, so the server's clock caps the stamp.
-      const updatedAt = new Date(Math.min(Date.parse(progress.updatedAt), yield* now)).toISOString()
+      const updatedAt = new Date(Math.min(Date.parse(entry.updatedAt), yield* now)).toISOString()
       const [, stored] = yield* query("progress.put", () =>
         db.batch([
           // The insert reads the episode row, so an episode the user does not own writes nothing. An equal or older
@@ -731,7 +731,7 @@ export const layer = Layer.effect(
                  position_ms = excluded.position_ms, updated_at = excluded.updated_at
                WHERE excluded.updated_at > progress.updated_at`,
             )
-            .bind(progress.positionMs, updatedAt, id, userId),
+            .bind(entry.positionMs, updatedAt, id, userId),
           db
             .prepare(
               `SELECT p.position_ms AS positionMs, p.updated_at AS updatedAt FROM progress p

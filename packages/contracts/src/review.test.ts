@@ -14,7 +14,7 @@ describe("CreateEpisode", () => {
   })
 
   test("review must be a boolean", () => {
-    expect(() => decode({ source, voice: null, speed: 1, review: "yes" })).toThrow()
+    expect(() => decode({ source, voice: null, speed: 1, review: "yes" })).toThrow(/boolean/)
   })
 })
 

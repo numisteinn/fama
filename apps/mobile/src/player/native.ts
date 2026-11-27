@@ -1,4 +1,4 @@
-import { NativeModule, requireNativeModule, requireNativeView } from "expo"
+import { type NativeModule, requireNativeModule, requireNativeView } from "expo"
 import type { ColorValue, ViewProps } from "react-native"
 
 export type Track = { url: string; title: string; durationMs: number }

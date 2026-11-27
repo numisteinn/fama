@@ -47,6 +47,20 @@ const octets = (host: string): ReadonlyArray<number> | null => {
   return parts.every((part) => part <= 255) ? parts : null
 }
 
+const isLocalIpv4 = (name: string): boolean | undefined => {
+  const ip = octets(name)
+  if (ip === null) return undefined
+  const [a, b] = ip as [number, number, number, number]
+    return (
+      a === 127 ||
+      a === 10 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    )
+}
+
 /**
  * Hosts a dev or home server can use over plain HTTP: loopback, private and link-local IPv4, the Tailscale range
  * (100.64.0.0/10), IPv6 loopback, unique-local and link-local, `localhost`, single-label LAN names, `.local` and
@@ -58,18 +72,8 @@ export const isLocalHost = (host: string): boolean => {
     const ip = name.slice(1, -1)
     return ip === "::1" || /^f[cd][0-9a-f]{0,2}:/.test(ip) || /^fe[89ab][0-9a-f]?:/.test(ip)
   }
-  const ip = octets(name)
-  if (ip !== null) {
-    const [a, b] = ip as [number, number, number, number]
-    return (
-      a === 127 ||
-      a === 10 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254) ||
-      (a === 100 && b >= 64 && b <= 127)
-    )
-  }
+  const localIpv4 = isLocalIpv4(name)
+  if (localIpv4 !== undefined) return localIpv4
   return (
     name === "localhost" ||
     name.endsWith(".localhost") ||

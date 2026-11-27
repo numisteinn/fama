@@ -19,7 +19,7 @@ export function languageName(code: string): string {
 
 /** Voices in menu order: by language name, then by name. */
 export const sortedVoices = (voices: ReadonlyArray<Voice>): Array<Voice> =>
-  [...voices].sort(
+  [...voices].toSorted(
     (a, b) =>
       languageName(a.language).localeCompare(languageName(b.language)) || a.name.localeCompare(b.name),
   )

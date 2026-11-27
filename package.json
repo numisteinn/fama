@@ -9,12 +9,14 @@
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter @fama/api dev",
     "smoke:api": "pnpm --filter @fama/api smoke",
-    "lint": "oxlint",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives-severity=error",
     "check:arch": "node tools/arch-check/index.mjs",
     "fama": "pnpm --filter @fama/infra fama"
   },
   "devDependencies": {
+    "@types/node": "26.6.6",
     "oxlint": "^1.95.0",
+    "oxlint-tsgolint": "^7.0.2009",
     "typescript": "catalog:"
   }
 }

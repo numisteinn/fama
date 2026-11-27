@@ -12,11 +12,11 @@ import { Icon, Tap } from "./ui"
 
 type Props = {
   episode: Episode
-  onNarrateAgain(episode: Episode): void
-  onReview(episode: Episode): void
-  onPlay(episode: Episode): void
-  onRetry(episode: Episode): Promise<void>
-  onDelete(episode: Episode): void
+  onNarrateAgain: (episode: Episode) => void
+  onReview: (episode: Episode) => void
+  onPlay: (episode: Episode) => void
+  onRetry: (episode: Episode) => Promise<void>
+  onDelete: (episode: Episode) => void
 }
 
 export function EpisodeRow({ episode, onNarrateAgain, onReview, onPlay, onRetry, onDelete }: Props) {
@@ -124,7 +124,7 @@ function Meta({ episode }: { episode: Episode }) {
   )
 }
 
-function RetryButton({ onRetry }: { onRetry(): Promise<void> }) {
+function RetryButton({ onRetry }: { onRetry: () => Promise<void> }) {
   const [busy, setBusy] = useState(false)
   return (
     <Tap
@@ -134,7 +134,7 @@ function RetryButton({ onRetry }: { onRetry(): Promise<void> }) {
       style={styles.retry}
       onPress={() => {
         setBusy(true)
-        onRetry().finally(() => setBusy(false))
+        void onRetry().finally(() => setBusy(false))
       }}
     >
       <Icon name="arrow.clockwise" size={18} color={colors.text} weight="semibold" />

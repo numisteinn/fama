@@ -1,6 +1,7 @@
 // The API for route tests: the real routes on local D1 and R2 (miniflare through wrangler's platform proxy), with
 // two seeded users and the worker token.
-import { Layer } from "effect"
+import { ClaimResponse } from "@fama/contracts"
+import { Layer, Schema } from "effect"
 import { HttpRouter, HttpServer } from "effect/http"
 import { getPlatformProxy } from "wrangler"
 import * as AccountRepo from "./account-repo.ts"
@@ -16,7 +17,7 @@ const files = import.meta.glob("../migrations/*.sql", { query: "?raw", import: "
 
 /** The SQL of every migration, in order. */
 export const migrations = Object.keys(files)
-  .sort()
+  .toSorted()
   .map((path) => files[path])
   .join("\n")
 
@@ -97,11 +98,21 @@ export const startApp = async () => {
 
   return {
     env,
-    call,
+    request: call,
     alice: as(users.alice.client),
     bob: as(users.bob.client),
     asWorker: as(WORKER_TOKEN),
     reset,
     dispose: () => proxy.dispose(),
   }
+}
+
+export async function readJson<S extends Schema.Decoder<unknown>>(schema: S, response: Response): Promise<S["Type"]> {
+  return Schema.decodeUnknownSync(schema)(await response.json())
+}
+
+export async function readNarrateJob(response: Response) {
+  const { work } = await readJson(ClaimResponse, response)
+  if (work._tag !== "Narrate") throw new Error("Expected a Narrate job")
+  return work
 }

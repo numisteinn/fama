@@ -40,7 +40,8 @@ export function locate(
     start += chapter.durationMs
   }
   const last = chapters.length - 1
-  return last < 0 ? { index: 0, offsetMs: 0 } : { index: last, offsetMs: chapters[last]!.durationMs }
+  const chapter = chapters[last]
+  return chapter === undefined ? { index: 0, offsetMs: 0 } : { index: last, offsetMs: chapter.durationMs }
 }
 
 /** Whether the episode has at least one chapter with a timing file, so Read-along can show its text. */

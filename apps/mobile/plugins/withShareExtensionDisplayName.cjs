@@ -9,6 +9,16 @@ const { withDangerousMod, withXcodeProject } = require("expo/config-plugins")
 
 const TARGET = "expo-sharing-extension"
 
+/**
+ * @typedef {{ name: string, buildConfigurationList: string }} NativeTarget
+ * @typedef {{
+ *   PBXNativeTarget: Record<string, NativeTarget | string | null>,
+ *   XCConfigurationList: Record<string, { buildConfigurations: Array<{ value: string }> }>,
+ *   XCBuildConfiguration: Record<string, { buildSettings: Record<string, string> }>
+ * }} XcodeObjects
+ */
+
+/** @param {import("expo/config").ExpoConfig} config */
 module.exports = function withShareExtensionDisplayName(config) {
   const name = config.name
   config = withDangerousMod(config, [
@@ -28,9 +38,10 @@ module.exports = function withShareExtensionDisplayName(config) {
     },
   ])
   return withXcodeProject(config, (cfg) => {
-    const objects = cfg.modResults.hash.project.objects
-    const target = Object.values(objects.PBXNativeTarget).find((t) => t && t.name === TARGET)
-    if (!target) throw new Error(`${TARGET} target missing. Register this plugin before expo-sharing.`)
+    const project = /** @type {{ hash: { project: { objects: XcodeObjects } } }} */ (/** @type {unknown} */ (cfg.modResults))
+    const { objects } = project.hash.project
+    const target = Object.values(objects.PBXNativeTarget).find((t) => t !== null && typeof t !== "string" && t.name === TARGET)
+    if (target === undefined || target === null || typeof target === "string") throw new Error(`${TARGET} target missing. Register this plugin before expo-sharing.`)
     const list = objects.XCConfigurationList[target.buildConfigurationList]
     for (const ref of list.buildConfigurations) {
       const settings = objects.XCBuildConfiguration[ref.value].buildSettings

@@ -504,12 +504,12 @@ const handle = (model: AppModel, message: AppMessage): StepReturn =>
  */
 export const updateApp = (model: AppModel, message: AppMessage): UpdateResult =>
   combine(model, [
-    (model) => handle(model, message),
-    (model) => {
-      const reconciled = runPlayer(model, Player.reconcile)
+    (state) => handle(state, message),
+    (state) => {
+      const reconciled = runPlayer(state, Player.reconcile)
       const stopped =
         reconciled.model.playback._tag === "Stopped" &&
-        (model.playback._tag === "Loaded" || Option.isSome(model.maybeListening))
+        (state.playback._tag === "Loaded" || Option.isSome(state.maybeListening))
       return stopped ? { ...reconciled, model: { ...reconciled.model, maybeScrubMs: Option.none() } } : reconciled
     },
     reconcileScreen,

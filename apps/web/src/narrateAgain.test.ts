@@ -30,6 +30,7 @@ import {
 } from "~/narrate-again/NarrateAgainScreen"
 import { FamaApi } from "~/core/services"
 import { OpenFilePickerOnKey } from "~/view/addBar"
+import { required } from "../../../test/required.ts"
 
 const storedDocument: Document = {
   title: "Harbour Days",
@@ -94,14 +95,14 @@ describe("Narrate again", () => {
       const edited: Document = {
         ...storedDocument,
         chapters: [
-          storedDocument.chapters[0]!,
+          storedDocument.chapters[0],
           { title: "Evening", text: "Orange lanterns guide the last ship home." },
         ],
       }
       const editor = yield* Story.make(NarrateAgainEditor, editorProps())
       editor
         .send(NarrateAgainEditorMessage.ToggledChapterPanel({ index: 1, open: true }))
-        .send(NarrateAgainEditorMessage.UpdatedChapterText({ index: 1, value: edited.chapters[1]!.text }))
+        .send(NarrateAgainEditorMessage.UpdatedChapterText({ index: 1, value: required(edited.chapters[1]).text }))
         .send(NarrateAgainEditorMessage.ClickedNarrateText())
         .emitted(NarrateAgainEditorEvents.SubmittedNarrateText({ episodeId: harbourDays.id, document: edited }))
 
@@ -324,7 +325,7 @@ describe("Narrate again", () => {
       const newerDoc: Document = {
         ...storedDocument,
         chapters: [
-          storedDocument.chapters[0]!,
+          storedDocument.chapters[0],
           { title: "Evening", text: "Changed on server." },
         ],
       }
@@ -353,12 +354,12 @@ describe("Narrate again", () => {
 
   it.effect("A replacement Chapter URL reloads audio at the same place", () =>
     Effect.gen(function* () {
-      const oldChapter = harbourDays.chapters[0]!
+      const oldChapter = required(harbourDays.chapters[0])
       const replacement: Episode = {
         ...harbourDays,
         chapters: [
           { ...oldChapter, url: "/media/t/episodes/harbour-days/chapters/new-000.m4a" },
-          harbourDays.chapters[1]!,
+          required(harbourDays.chapters[1]),
         ],
       }
       const paused = withPlayback(
@@ -377,13 +378,13 @@ describe("Narrate again", () => {
         .send(AppMessage.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [replacement] }))
         .expectExact(
           LoadChapter.make({
-            src: replacement.chapters[0]!.url,
+            src: required(replacement.chapters[0]).url,
             offsetMs: 10_000,
             rate: 1,
             isAutoplay: false,
           }),
         )
-      expect(s.model.playback).toMatchObject({ chapter: 0, offsetMs: 10_000, url: replacement.chapters[0]!.url })
+      expect(s.model.playback).toMatchObject({ chapter: 0, offsetMs: 10_000, url: required(replacement.chapters[0]).url })
       s.resolve(LoadChapter, Component.noop)
     }),
   )
@@ -392,11 +393,11 @@ describe("Narrate again", () => {
     Effect.gen(function* () {
       const oldEpisode: Episode = {
         ...harbourDays,
-        chapters: [{ ...harbourDays.chapters[0]!, url: "/audio/new.m4a", timingUrl: "/timing/old.json" }],
+        chapters: [{ ...required(harbourDays.chapters[0]), url: "/audio/new.m4a", timingUrl: "/timing/old.json" }],
       }
       const newEpisode: Episode = {
         ...harbourDays,
-        chapters: [{ ...harbourDays.chapters[0]!, url: "/audio/new.m4a", timingUrl: "/timing/new.json" }],
+        chapters: [{ ...required(harbourDays.chapters[0]), url: "/audio/new.m4a", timingUrl: "/timing/new.json" }],
       }
       const s = yield* HtmlScene.make(ReaderScreenNoDeps, {
         episode: oldEpisode,
@@ -432,13 +433,13 @@ describe("Narrate again", () => {
         Playback.Loaded({
           episodeId: harbourDays.id,
           chapter: 1,
-          url: harbourDays.chapters[1]!.url,
+          url: required(harbourDays.chapters[1]).url,
           offsetMs: 5_000,
           isPlaying: true,
           isWaiting: false,
         }),
       )
-      const lateList: Episode = { ...harbourDays, chapters: [harbourDays.chapters[0]!] }
+      const lateList: Episode = { ...harbourDays, chapters: [required(harbourDays.chapters[0])] }
       const s = yield* Story.make(AppComponent, defaultFlags())
       s.given(playingChapter1)
         .send(AppMessage.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [lateList] }))
@@ -449,12 +450,12 @@ describe("Narrate again", () => {
 
   it.effect("Replacing a playing Chapter keeps the same fraction through that Chapter", () =>
     Effect.gen(function* () {
-      const oldChapter = harbourDays.chapters[0]!
+      const oldChapter = required(harbourDays.chapters[0])
       const shorter: Episode = {
         ...harbourDays,
         chapters: [
           { ...oldChapter, url: "/media/t/episodes/harbour-days/chapters/v2-000.m4a", durationMs: 17_883 },
-          harbourDays.chapters[1]!,
+          required(harbourDays.chapters[1]),
         ],
       }
       const playing = withPlayback(
@@ -474,7 +475,7 @@ describe("Narrate again", () => {
         .send(AppMessage.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [shorter] }))
         .expectExact(
           LoadChapter.make({
-            src: shorter.chapters[0]!.url,
+            src: required(shorter.chapters[0]).url,
             offsetMs: expectedOffset,
             rate: 1,
             isAutoplay: true,
@@ -483,7 +484,7 @@ describe("Narrate again", () => {
       expect(s.model.playback).toMatchObject({
         chapter: 0,
         offsetMs: expectedOffset,
-        url: shorter.chapters[0]!.url,
+        url: required(shorter.chapters[0]).url,
         isPlaying: true,
       })
       expect(s.model.loadedChapterDurationMs).toBe(17_883)
@@ -495,7 +496,7 @@ describe("Narrate again", () => {
     Effect.gen(function* () {
       const timedHarbour: Episode = {
         ...harbourDays,
-        chapters: [{ ...harbourDays.chapters[0]!, timingUrl: "/timing/000.json" }, harbourDays.chapters[1]!],
+        chapters: [{ ...required(harbourDays.chapters[0]), timingUrl: "/timing/000.json" }, required(harbourDays.chapters[1])],
       }
       const withPlayer = withPlayback(
         {
@@ -505,7 +506,7 @@ describe("Narrate again", () => {
         Playback.Loaded({
           episodeId: timedHarbour.id,
           chapter: 0,
-          url: timedHarbour.chapters[0]!.url,
+          url: required(timedHarbour.chapters[0]).url,
           offsetMs: 0,
           isPlaying: false,
           isWaiting: false,

@@ -121,7 +121,9 @@ export const retry = (state: JobState): Result.Result<JobState, NotRetryable> =>
       return Result.succeed(state)
     case "Failed":
       return Result.succeed(JobState.cases.Queued.make({}))
-    default:
+    case "Ready":
+    case "Review":
+    case "Running":
       return Result.fail(new NotRetryable({ state: state._tag }))
   }
 }

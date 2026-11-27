@@ -24,13 +24,13 @@ describe("resourceNames", () => {
   it("rejects stage names Cloudflare or Alchemy cannot use", () => {
     for (const bad of ["", "Home", "live_sam", "-home", "home-", "a--b", "x".repeat(41), "my stage"]) {
       expect(stageProblem(bad)).toBeTypeOf("string")
-      expect(() => resourceNames(bad)).toThrow()
+      expect(() => resourceNames(bad)).toThrow(/Bad stage/)
     }
     expect(stageProblem("x".repeat(40))).toBeUndefined()
   })
 
   it("keeps every name within the 63-character limit", () => {
     const longest = resourceNames("x".repeat(40))
-    for (const name of Object.values(longest)) expect(name.length).toBeLessThanOrEqual(63)
+    for (const name of [longest.worker, longest.database, longest.bucket]) expect(name.length).toBeLessThanOrEqual(63)
   })
 })

@@ -35,7 +35,7 @@ export const listed = (text: ReaderText | null, episode: Listed): ReaderText => 
     return old && old._tag !== "Absent" && old.key === key ? old : { _tag: "Idle", key }
   })
   const same = text?.episodeId === episode.id && chapters.length === before.length && chapters.every((c, i) => c === before[i])
-  return same && text ? text : { episodeId: episode.id, chapters }
+  return same ? text : { episodeId: episode.id, chapters }
 }
 
 export type TextEvent =
@@ -160,7 +160,8 @@ export const rowOf = (rows: ReadonlyArray<Row>, mark: Mark): number | null => {
   let high = rows.length
   while (low < high) {
     const middle = (low + high) >> 1
-    if (order(rows[middle]!) <= target) low = middle + 1
+    const candidate = rows[middle]
+    if (candidate !== undefined && order(candidate) <= target) low = middle + 1
     else high = middle
   }
   const row = rows[low - 1]

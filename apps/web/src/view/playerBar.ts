@@ -72,7 +72,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
               h.div.class("truncate text-[13px] text-muted-foreground").children(chapter.title),
           ),
           h.div.class("contents sm:flex sm:flex-col sm:items-center sm:gap-1").children(
-            transport(playback, props.isPending, props.skipBackMs, props.skipForwardMs, h, emit),
+            transport(playback, props, h, emit),
             scrubber(props, playback, episode, h, emit),
           ),
           h.div
@@ -143,9 +143,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
 
 const transport = <M>(
   playback: PlayerBarPlayback,
-  isPending: boolean,
-  skipBackMs: number,
-  skipForwardMs: number,
+  { isPending, skipBackMs, skipForwardMs }: Pick<PlayerBarProps, "isPending" | "skipBackMs" | "skipForwardMs">,
   h: Html.H<M>,
   emit: (e: PlayerBarEvents) => M,
 ) =>

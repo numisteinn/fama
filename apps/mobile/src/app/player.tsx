@@ -38,7 +38,6 @@ export default function PlayerScreen() {
   }
 
   const canRead = hasText(episode)
-  const chapter = episode.chapters[status.index]
   const marks = chapterStarts(episode).slice(1)
   // The artwork takes what the controls leave, up to the screen width.
   const art = Math.max(0, Math.min(width - space.xl * 2, stageHeight - space.lg * 2))
@@ -55,12 +54,10 @@ export default function PlayerScreen() {
             <Icon name="book" color={reading ? colors.accent : colors.text} />
           </Tap>
         )}
-        {(episode.job._tag === "Ready" || episode.job._tag === "Failed") && (
-          <Tap style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Narrate again"
-            onPress={() => { router.dismiss(); router.navigate({ pathname: "/library/narrate-again", params: { id: episode.id } }) }}>
-            <Icon name="pencil" size={20} />
-          </Tap>
-        )}
+        <NarrateAgainButton episode={episode} onPress={() => {
+          router.dismiss()
+          router.navigate({ pathname: "/library/narrate-again", params: { id: episode.id } })
+        }} />
         <Tap
           style={[styles.iconButton, showChapters && styles.iconButtonOn]}
           accessibilityRole="button"
@@ -76,37 +73,18 @@ export default function PlayerScreen() {
         {reading && canRead ? (
           <Reader key={episode.id} episode={episode} status={status} />
         ) : showChapters ? (
-          <Chapters episode={episode} current={status.index} onPick={(start) => void player.seek(start)} />
+          <Chapters episode={episode} current={status.index} onPick={(start) => player.seek(start)} />
         ) : (
           art > 0 ? <Artwork episode={episode} size={art} rounded={radius.lg} /> : null
         )}
       </View>
 
-      <View style={styles.info}>
-        <Text style={styles.title} numberOfLines={2}>
-          {episode.title}
-        </Text>
-        {episode.chapters.length > 1 && chapter ? (
-          <Text style={styles.chapter} numberOfLines={1}>
-            {`${status.index + 1}/${episode.chapters.length} · ${chapter.title}`}
-          </Text>
-        ) : episode.author ? (
-          <Text style={styles.chapter} numberOfLines={1}>
-            {episode.author}
-          </Text>
-        ) : null}
-        {episode.job._tag === "Running" || episode.job._tag === "Queued" ? (
-          <View style={styles.job}>
-            <Icon name="waveform" size={14} color={colors.accent} />
-            <Text style={styles.jobText}>{jobLabel(episode.job)}</Text>
-          </View>
-        ) : null}
-      </View>
+      <EpisodeInfo episode={episode} index={status.index} />
 
-      <Scrubber position={status.position} duration={status.duration} marks={marks} onSeek={(position) => void player.seek(position)} />
+      <Scrubber position={status.position} duration={status.duration} marks={marks} onSeek={(position) => player.seek(position)} />
 
       <View style={styles.transport}>
-        <Tap style={styles.skip} accessibilityRole="button" accessibilityLabel="Back 15 seconds" onPress={() => void player.skip(-15)}>
+        <Tap style={styles.skip} accessibilityRole="button" accessibilityLabel="Back 15 seconds" onPress={() => player.skip(-15)}>
           <Icon name="gobackward.15" size={40} weight="regular" />
         </Tap>
         <Tap
@@ -115,7 +93,7 @@ export default function PlayerScreen() {
           accessibilityLabel={status.playing ? "Pause" : "Play"}
           onPress={() => {
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
-            void player.toggle()
+            player.toggle()
           }}
         >
           {isWaiting(status, episode) ? (
@@ -124,7 +102,7 @@ export default function PlayerScreen() {
             <Icon name={status.playing ? "pause.fill" : "play.fill"} size={44} color={colors.onAccent} weight="bold" />
           )}
         </Tap>
-        <Tap style={styles.skip} accessibilityRole="button" accessibilityLabel="Forward 30 seconds" onPress={() => void player.skip(30)}>
+        <Tap style={styles.skip} accessibilityRole="button" accessibilityLabel="Forward 30 seconds" onPress={() => player.skip(30)}>
           <Icon name="goforward.30" size={40} weight="regular" />
         </Tap>
       </View>
@@ -149,7 +127,42 @@ function chapterStarts(episode: Episode): number[] {
   })
 }
 
-function Chapters({ episode, current, onPick }: { episode: Episode; current: number; onPick(start: number): void }) {
+function NarrateAgainButton({ episode, onPress }: { episode: Episode; onPress: () => void }) {
+  if (episode.job._tag !== "Ready" && episode.job._tag !== "Failed") return null
+  return (
+    <Tap style={styles.iconButton} accessibilityRole="button" accessibilityLabel="Narrate again" onPress={onPress}>
+      <Icon name="pencil" size={20} />
+    </Tap>
+  )
+}
+
+function EpisodeInfo({ episode, index }: { episode: Episode; index: number }) {
+  const chapter = episode.chapters[index]
+  return (
+    <View style={styles.info}>
+      <Text style={styles.title} numberOfLines={2}>
+        {episode.title}
+      </Text>
+      {episode.chapters.length > 1 && chapter ? (
+        <Text style={styles.chapter} numberOfLines={1}>
+          {`${index + 1}/${episode.chapters.length} · ${chapter.title}`}
+        </Text>
+      ) : episode.author ? (
+        <Text style={styles.chapter} numberOfLines={1}>
+          {episode.author}
+        </Text>
+      ) : null}
+      {episode.job._tag === "Running" || episode.job._tag === "Queued" ? (
+        <View style={styles.job}>
+          <Icon name="waveform" size={14} color={colors.accent} />
+          <Text style={styles.jobText}>{jobLabel(episode.job)}</Text>
+        </View>
+      ) : null}
+    </View>
+  )
+}
+
+function Chapters({ episode, current, onPick }: { episode: Episode; current: number; onPick: (start: number) => void }) {
   const starts = chapterStarts(episode)
   return (
     <ScrollView style={styles.chapters} contentContainerStyle={{ paddingVertical: space.sm }}>

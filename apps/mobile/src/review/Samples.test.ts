@@ -4,7 +4,7 @@ import { applySampleStatus, hasPending, sampleTapAction, voiceLabel } from "./Sa
 
 // The helpers are pure; the UI around them needs React Native, which Vitest does not load.
 vi.mock("react-native", () => ({
-  Alert: { alert: vi.fn() },
+  Alert: { alert: vi.fn<() => void>() },
   ActivityIndicator: () => null,
   AppState: { currentState: "active", addEventListener: () => ({ remove: () => {} }) },
   StyleSheet: { create: (styles: unknown) => styles },

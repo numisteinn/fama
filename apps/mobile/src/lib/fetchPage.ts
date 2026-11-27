@@ -27,7 +27,7 @@ async function fetchPage(url: string): Promise<FetchedPage | null> {
     const chunks: Uint8Array[] = []
     let size = 0
     try {
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read()
         if (done) break
         size += value.byteLength

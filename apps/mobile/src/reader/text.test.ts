@@ -14,6 +14,7 @@ import {
   seekTargetMs,
   update,
 } from "./text"
+import { required } from "../../../../test/required.ts"
 
 const chapter = (index: number, title: string, durationMs: number, timed = true): Chapter => ({
   index,
@@ -37,7 +38,7 @@ const summerText = [seg("Summer", 300, 1_000, true), seg("Boats slide out.", 1_5
 
 const episode = { id: "e1", chapters: [spring, summer] }
 const load = (text: ReaderText, index: number, segments: ReadonlyArray<Segment>) => {
-  const key = text.chapters[index]!._tag === "Absent" ? "" : (text.chapters[index] as { key: string }).key
+  const key = required(text.chapters[index])._tag === "Absent" ? "" : (text.chapters[index] as { key: string }).key
   const started = update(text, { _tag: "Started", index, key })
   return update(started, { _tag: "Loaded", index, key, segments })
 }
@@ -59,7 +60,7 @@ describe("chapter text state", () => {
     const text = listed(null, episode)
     const key = (text.chapters[0] as { key: string }).key
     const started = update(text, { _tag: "Started", index: 0, key })
-    expect(started.chapters[0]!._tag).toBe("Loading")
+    expect(required(started.chapters[0])._tag).toBe("Loading")
     const done = update(started, { _tag: "Loaded", index: 0, key, segments: springText })
     expect(done.chapters[0]).toEqual({ _tag: "Loaded", key, segments: springText })
   })
@@ -68,7 +69,7 @@ describe("chapter text state", () => {
     const text = listed(null, episode)
     const key = (text.chapters[0] as { key: string }).key
     const failed = update(update(text, { _tag: "Started", index: 0, key }), { _tag: "Failed", index: 0, key })
-    expect(failed.chapters[0]!._tag).toBe("Failed")
+    expect(required(failed.chapters[0])._tag).toBe("Failed")
     expect(update(failed, { _tag: "Retry", index: 0 }).chapters[0]).toEqual({ _tag: "Idle", key })
   })
 
@@ -182,7 +183,7 @@ describe("the mark", () => {
   })
 
   test("a seek lands on a float a hair under the target: the mark is still the tapped Segment", () => {
-    const target = seekTargetMs(episode.chapters, text, { chapter: 1, segment: 2 })!
+    const target = required(seekTargetMs(episode.chapters, text, { chapter: 1, segment: 2 }))
     const landed = (target / 1000) * 1000 - 1e-9
     expect(markAt(episode.chapters, text, { index: 1, positionMs: landed })).toEqual({ chapter: 1, segment: 2 })
   })

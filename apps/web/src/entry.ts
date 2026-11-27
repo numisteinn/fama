@@ -19,7 +19,10 @@ const appServices = Layer.mergeAll(
   AudioPlayer.layer,
 )
 
-const Main = BrowserHost.mount(App, initialFlags, document.getElementById("root")!).pipe(
+const root = document.getElementById("root")
+if (root === null) throw new Error("Missing app root")
+
+const Main = BrowserHost.mount(App, initialFlags, root).pipe(
   Layer.provide(appServices),
   Layer.provide(
     import.meta.env.DEV

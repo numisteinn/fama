@@ -31,6 +31,7 @@ import {
 import { detectRepeatedLines, removeLineFromText } from "~/review/model"
 import { FamaApi } from "~/core/services"
 import { OpenFilePickerOnKey } from "~/view/addBar"
+import { required } from "../../../test/required.ts"
 
 const reviewEpisode: Episode = {
   ...harbourDays,
@@ -496,7 +497,7 @@ describe("review editing, repeated header removal, save, and start", () => {
     Effect.gen(function* () {
       const timedHarbour: Episode = {
         ...harbourDays,
-        chapters: [{ ...harbourDays.chapters[0]!, timingUrl: "/timing/000.json" }, harbourDays.chapters[1]!],
+        chapters: [{ ...required(harbourDays.chapters[0]), timingUrl: "/timing/000.json" }, required(harbourDays.chapters[1])],
       }
       const startModel = withPlayback(
         {
@@ -506,7 +507,7 @@ describe("review editing, repeated header removal, save, and start", () => {
         Playback.Loaded({
           episodeId: timedHarbour.id,
           chapter: 0,
-          url: timedHarbour.chapters[0]!.url,
+          url: required(timedHarbour.chapters[0]).url,
           offsetMs: 0,
           isPlaying: false,
           isWaiting: false,

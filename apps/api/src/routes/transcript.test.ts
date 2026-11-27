@@ -1,14 +1,15 @@
 // The transcript in the feed: one WebVTT file on the book file's timeline, made from the timing files and stored.
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest"
-import type { Episode } from "@fama/contracts"
-import { startApp, users } from "../test-app.ts"
+import { beforeAll, beforeEach, expect, it } from "vitest"
+import { Episode } from "@fama/contracts"
+import { startApp, users, readJson, readNarrateJob } from "../test-app.ts"
+import { required } from "../../../../test/required.ts"
 
 let app: Awaited<ReturnType<typeof startApp>>
 
 beforeAll(async () => {
   app = await startApp()
+  return () => app.dispose()
 })
-afterAll(() => app?.dispose())
 beforeEach(() => app.reset())
 
 const chapters = [
@@ -33,9 +34,9 @@ const made = async ({ untimed = -1, complete = true } = {}) => {
   const created = await app.alice("POST", "/api/episodes", {
     json: { source: { _tag: "Text", title: "Harbour", text: "The harbour is quiet." }, voice: null, speed: 1 },
   })
-  const { id } = (await created.json()) as { id: string }
+  const { id } = await readJson(Episode, created)
   const claim = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
-  const lease = ((await claim.json()) as { work: { leaseToken: string } }).work.leaseToken
+  const lease = (await readNarrateJob(claim)).leaseToken
   const query = `workerId=w1&leaseToken=${lease}&inputHash=${"a".repeat(64)}`
   const put = (path: string, body: string) =>
     app.asWorker("PUT", path, { body: bytes(body), headers: { "content-type": "audio/mp4", "content-length": String(body.length) } })
@@ -59,7 +60,7 @@ const made = async ({ untimed = -1, complete = true } = {}) => {
   return id
 }
 
-const feed = async () => (await app.call(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).text()
+const feed = async () => (await app.request(null, "GET", `/feed/${users.alice.feed}/rss.xml`)).text()
 const transcriptPath = (id: string, feedToken = users.alice.feed) => `/media/${feedToken}/episodes/${id}/transcript.vtt`
 
 const expected = [
@@ -85,28 +86,28 @@ it("a Ready episode with a timing file for each chapter has a transcript tag in 
 
 it("the transcript is WebVTT on the episode timeline, and the API stores it for the Ready", async () => {
   const id = await made()
-  const response = await app.call(null, "GET", transcriptPath(id))
+  const response = await app.request(null, "GET", transcriptPath(id))
   expect(response.status).toBe(200)
   expect(response.headers.get("content-type")).toBe("text/vtt; charset=utf-8")
   expect(await response.text()).toBe(expected)
 
-  const { job, chapters: audio } = (await (await app.alice("GET", `/api/episodes/${id}`)).json()) as Episode
+  const { job, chapters: audio } = await readJson(Episode, await app.alice("GET", `/api/episodes/${id}`))
   expect(job._tag).toBe("Ready")
   if (job._tag !== "Ready") throw new Error("Expected Ready")
   const stored = `users/${users.alice.id}/episodes/${id}/transcript/${Date.parse(job.finishedAt)}.vtt`
   expect((await app.env.MEDIA.list()).objects.map((object) => object.key)).toContain(stored)
 
   // Served from the stored copy: the timing files are no longer read.
-  await app.env.MEDIA.delete(audio[0]!.timingUrl!.replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`))
-  expect(await (await app.call(null, "GET", transcriptPath(id))).text()).toBe(expected)
+  await app.env.MEDIA.delete(required(required(audio[0]).timingUrl).replace(`/media/${users.alice.feed}/`, `users/${users.alice.id}/`))
+  expect(await (await app.request(null, "GET", transcriptPath(id))).text()).toBe(expected)
 })
 
 it("the transcript answers HEAD and Range requests like other media", async () => {
   const id = await made()
-  const head = await app.call(null, "HEAD", transcriptPath(id))
+  const head = await app.request(null, "HEAD", transcriptPath(id))
   expect(head.status).toBe(200)
   expect(head.headers.get("content-length")).toBe(String(bytes(expected).length))
-  const range = await app.call(null, "GET", transcriptPath(id), { headers: { range: "bytes=0-5" } })
+  const range = await app.request(null, "GET", transcriptPath(id), { headers: { range: "bytes=0-5" } })
   expect(range.status).toBe(206)
   expect(await range.text()).toBe("WEBVTT")
 })
@@ -116,16 +117,16 @@ it("an episode with a chapter that has no timing file has no transcript", async 
   const xml = await feed()
   expect(xml).toMatch(new RegExp(`/episodes/${id}/books/[a-f0-9]{64}/book\\.m4b`))
   expect(xml).not.toContain("<podcast:transcript")
-  expect((await app.call(null, "GET", transcriptPath(id))).status).toBe(404)
+  expect((await app.request(null, "GET", transcriptPath(id))).status).toBe(404)
 })
 
 it("an episode that is not Ready has no transcript yet", async () => {
   const id = await made({ complete: false })
-  expect((await app.call(null, "GET", transcriptPath(id))).status).toBe(404)
+  expect((await app.request(null, "GET", transcriptPath(id))).status).toBe(404)
 })
 
 it("the feed token guards the transcript: a wrong token is 401, another user's episode is 404", async () => {
   const id = await made()
-  expect((await app.call(null, "GET", transcriptPath(id, "wrong"))).status).toBe(401)
-  expect((await app.call(null, "GET", transcriptPath(id, users.bob.feed))).status).toBe(404)
+  expect((await app.request(null, "GET", transcriptPath(id, "wrong"))).status).toBe(401)
+  expect((await app.request(null, "GET", transcriptPath(id, users.bob.feed))).status).toBe(404)
 })

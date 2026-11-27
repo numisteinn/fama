@@ -23,7 +23,7 @@ type Settings = {
   /** Why the server could not name the token's user. Null while the app asks, and when the account is known. */
   readonly accountError: string | null
   /** Saves a new connection. With `userId` (already checked with `GET /api/me`) the account is known at once. */
-  save(connection: Connection, userId?: UserId): Promise<void>
+  save: (connection: Connection, userId?: UserId) => Promise<void>
 }
 
 const SettingsContext = createContext<Settings | null>(null)
@@ -56,18 +56,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     setAccountError(null)
     if (!api) return
     let live = true
+    const connected = (me: Awaited<ReturnType<typeof api.me>>) => {
+      if (!live) return
+      setUserId(me.userId)
+      setAccountError(null)
+      void SecureStore.setItemAsync(USER_KEY, me.userId)
+    }
     const ask = () =>
-      api.me().then(
-        (me) => {
-          if (!live) return
-          setUserId(me.userId)
-          setAccountError(null)
-          void SecureStore.setItemAsync(USER_KEY, me.userId)
-        },
-        (error: unknown) => {
-          if (live) setAccountError(error instanceof ApiError ? error.message : "Could not connect.")
-        },
-      )
+      api.me().then(connected, (error: unknown) => {
+        if (live) setAccountError(error instanceof ApiError ? error.message : "Could not connect.")
+      })
     void ask()
     // A server that was out of reach at start can be back when the app comes to the front.
     const subscription = AppState.addEventListener("change", (state) => {

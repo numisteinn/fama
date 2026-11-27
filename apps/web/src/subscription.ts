@@ -38,12 +38,12 @@ const entryFiles = async (entry: FileSystemEntry): Promise<Array<File>> => {
   const reader = entry.createReader()
   const children: Array<FileSystemEntry> = []
   for (let part = await readEntries(reader); part.length > 0; part = await readEntries(reader)) children.push(...part)
-  const visible = children.filter((child) => !child.name.startsWith(".")).sort((a, b) => a.name.localeCompare(b.name))
+  const visible = children.filter((child) => !child.name.startsWith(".")).toSorted((a, b) => a.name.localeCompare(b.name))
   return (await Promise.all(visible.map(entryFiles))).flat()
 }
 
 const droppedFiles = (entries: ReadonlyArray<FileSystemEntry | File>): Promise<Array<File>> =>
-  Promise.all(entries.map((entry) => (entry instanceof File ? [entry] : entryFiles(entry).catch(() => [])))).then(
+  Promise.all(entries.map((entry) => (entry instanceof File ? Promise.resolve([entry]) : entryFiles(entry).catch(() => [])))).then(
     (files) => files.flat(),
   )
 
@@ -64,16 +64,16 @@ const ignoreUnsupported = (run: () => void) => {
   }
 }
 
-const fromDomEvent = <E extends Event, A>(
+const fromDomEvent = <A>(
   target: EventTarget,
   type: string,
-  mapEvent: (event: E) => Option.Option<A>,
+  mapEvent: (event: Event) => Option.Option<A>,
 ): Stream.Stream<A> =>
   Stream.callback<A>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
         const listener = (raw: Event) => {
-          const maybe = mapEvent(raw as E)
+          const maybe = mapEvent(raw)
           if (Option.isSome(maybe)) Queue.offerUnsafe(queue, maybe.value)
         }
         target.addEventListener(type, listener)
@@ -111,7 +111,8 @@ const mediaActionMessage = (action: MediaSessionAction, details: MediaSessionAct
       return Option.some(AppMessage.PressedMediaPreviousTrack())
     case "nexttrack":
       return Option.some(AppMessage.PressedMediaNextTrack())
-    default:
+    case "skipad":
+    case "stop":
       return Option.none()
   }
 }
@@ -187,7 +188,8 @@ export const appSubscriptions = ({
         Stream.unwrap(
           Effect.gen(function* () {
             const connectionService = yield* FamaConnection
-            return fromDomEvent<StorageEvent, AppMessage>(window, "storage", (event) => {
+            return fromDomEvent(window, "storage", (event) => {
+              if (!(event instanceof StorageEvent)) return Option.none()
               const maybe = storageEventMessage(event.key)
               if (Option.isSome(maybe) && maybe.value._tag === "ChangedStoredSettings") {
                 connectionService.set(maybe.value.connection)
@@ -204,18 +206,18 @@ export const appSubscriptions = ({
         "app/fileDrop",
         Stream.mergeAll(
           [
-            fromDomEvent<DragEvent, AppMessage>(window, "dragenter", (event) =>
-              hasFiles(event) ? Option.some(AppMessage.EnteredFileDrag()) : Option.none(),
+            fromDomEvent<AppMessage>(window, "dragenter", (event) =>
+              event instanceof DragEvent && hasFiles(event) ? Option.some(AppMessage.EnteredFileDrag()) : Option.none(),
             ),
-            fromDomEvent<DragEvent, AppMessage>(window, "dragleave", (event) =>
-              hasFiles(event) ? Option.some(AppMessage.LeftFileDrag()) : Option.none(),
+            fromDomEvent<AppMessage>(window, "dragleave", (event) =>
+              event instanceof DragEvent && hasFiles(event) ? Option.some(AppMessage.LeftFileDrag()) : Option.none(),
             ),
-            fromDomEvent<DragEvent, AppMessage>(window, "dragover", (event) => {
-              if (hasFiles(event)) event.preventDefault()
+            fromDomEvent<AppMessage>(window, "dragover", (event) => {
+              if (event instanceof DragEvent && hasFiles(event)) event.preventDefault()
               return Option.none()
             }),
-            fromDomEvent<DragEvent, ReadonlyArray<FileSystemEntry | File>>(window, "drop", (event) => {
-              if (!hasFiles(event)) return Option.none()
+            fromDomEvent<ReadonlyArray<FileSystemEntry | File>>(window, "drop", (event) => {
+              if (!(event instanceof DragEvent) || !hasFiles(event)) return Option.none()
               event.preventDefault()
               return Option.some(droppedEntries(event))
             }).pipe(
@@ -255,7 +257,8 @@ export const appSubscriptions = ({
       isLoaded(model) &&
       Subscription.make(
         "app/playerKeys",
-        fromDomEvent<KeyboardEvent, AppMessage>(window, "keydown", (event) => {
+        fromDomEvent<AppMessage>(window, "keydown", (event) => {
+          if (!(event instanceof KeyboardEvent)) return Option.none()
           if (event.metaKey || event.ctrlKey || event.altKey) return Option.none()
           const target = event.target instanceof Element ? event.target : null
           if (target?.closest(INTERACTIVE)) return Option.none()

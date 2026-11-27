@@ -41,9 +41,11 @@ const sameSecret = async (given: string, expected: string) => {
   return diff === 0
 }
 
+const workerToken = (env: { readonly FAMA_WORKER_TOKEN?: string }) => env.FAMA_WORKER_TOKEN ?? ""
+
 /** `Authorization: Bearer <FAMA_WORKER_TOKEN>`. Guards `/api/worker/*`. An unset secret lets no worker in. */
 export const requireWorker = Effect.gen(function* () {
-  const expected = (yield* Bindings).FAMA_WORKER_TOKEN ?? ""
+  const expected = workerToken(yield* Bindings)
   const given = yield* bearer
   const same = yield* Effect.promise(() => sameSecret(given, expected))
   if (expected === "" || !same) return yield* new Unauthorized()

@@ -25,6 +25,7 @@ import {
   VoiceSamplesNoDeps,
   reviewVoices,
 } from "~/review/VoiceSamples"
+import { required } from "../../../test/required.ts"
 
 const steinn = "piper:is_IS-steinn-medium" as VoiceRef
 const salka = "piper:is_IS-salka-medium" as VoiceRef
@@ -84,7 +85,7 @@ const sampleProps = (
   connectionGeneration: 0,
   language: "is",
   speed: 1,
-  initialVoice: overrides && "initialVoice" in overrides ? overrides.initialVoice! : steinn,
+  initialVoice: overrides && "initialVoice" in overrides ? required(overrides.initialVoice) : steinn,
   voices,
   isBusy: false,
   isSavingVoice: overrides?.isSavingVoice ?? false,
@@ -130,7 +131,7 @@ describe("voice samples lifecycle", () => {
 
       // Request all Icelandic samples.
       s.send(VoiceSamplesMessage.ClickedHearVoices()).expectExact(RequestSamples)
-      expect(s.pending[0]!.command.args).toEqual({
+      expect(required(s.pending[0]).command.args).toEqual({
         episodeId: greinEpisode.id,
         origin: "",
         generation: 0,
@@ -170,7 +171,7 @@ describe("voice samples lifecycle", () => {
 
       // Retry failed Ugla individually.
       s.send(VoiceSamplesMessage.ClickedRetrySample({ voice: ugla })).expectExact(RequestSamples)
-      expect(s.pending[0]!.command.args).toEqual({
+      expect(required(s.pending[0]).command.args).toEqual({
         episodeId: greinEpisode.id,
         origin: "",
         generation: 0,
@@ -299,7 +300,7 @@ describe("voice samples lifecycle", () => {
           }),
         )
       expect(tokenApp.model.reviewVoices[greinEpisode.id]).toBeUndefined()
-      expect(Option.getOrThrow(tokenApp.model.maybeEpisodes)[0]!.voice).toBe(bui)
+      expect(required(Option.getOrThrow(tokenApp.model.maybeEpisodes)[0]).voice).toBe(bui)
 
       // Switching to a different server drops queued writes tied to the old server.
       const otherServer = { origin: "https://other.example", token: apiToken("other-server-token") }
@@ -344,7 +345,7 @@ describe("voice samples lifecycle", () => {
           Layer.mergeAll(
             SamplesQuery.toLayer(() =>
               Effect.sync(() => {
-                const samples = responses[Math.min(fetchCount, responses.length - 1)]!
+                const samples = required(responses[Math.min(fetchCount, responses.length - 1)])
                 fetchCount += 1
                 return { samples }
               }),
@@ -443,7 +444,7 @@ describe("voice samples lifecycle", () => {
           episodeId: harbourDays.id,
           chapter: 0,
           offsetMs: 1000,
-          url: harbourDays.chapters[0]!.url,
+          url: required(harbourDays.chapters[0]).url,
           isPlaying: true,
           isWaiting: false,
         }),
