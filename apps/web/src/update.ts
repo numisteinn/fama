@@ -1,5 +1,4 @@
 import type { Episode, EpisodeId, SourceInput, VoiceRef } from "@fama/contracts"
-import { Command } from "@effect/ui"
 import { Option, Record, Redacted } from "effect"
 import { type Connection, isSameConnection } from "~/core/api"
 import { SetAudioRate } from "~/core/audio"

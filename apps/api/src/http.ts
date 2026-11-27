@@ -8,7 +8,7 @@ import {
   FailRequest,
   ProgressRequest,
 } from "@fama/contracts"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 import { AccountRepo } from "./account-repo.ts"
 import { feedUser } from "./auth.ts"
