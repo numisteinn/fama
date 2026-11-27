@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +10,15 @@ import { run } from './index.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(here, '../..')
+
+function withTempFixture(fn) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'arch-check-test-'))
+    try {
+        return fn(dir)
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+}
 
 test('the prebuilt binary matches the committed source hash', () => {
     const result = spawnSync('./source-hash.sh', ['--check'], {
@@ -43,4 +54,79 @@ test('the binary accepts --stats', () => {
     const report = JSON.parse(stdout)
     assert.ok(Array.isArray(report.stats), 'expected a stats array')
     assert.ok(report.stats.length > 0, 'expected at least one area')
+})
+
+test('detects Python relative and package cycles through the CLI', () => {
+    withTempFixture(dir => {
+        const pkg = path.join(dir, 'worker/src/fama_worker')
+        mkdirSync(pkg, { recursive: true })
+        writeFileSync(path.join(pkg, '__init__.py'), '')
+        writeFileSync(
+            path.join(pkg, 'a.py'),
+            'from .b import (\n    helper,\n)\n\ndef entry():\n    return helper()\n'
+        )
+        writeFileSync(
+            path.join(pkg, 'b.py'),
+            'import fama_worker.a\n\ndef helper():\n    return fama_worker.a\n'
+        )
+        const configPath = path.join(dir, 'custom.config.json')
+        writeFileSync(
+            configPath,
+            JSON.stringify({
+                projects: [{ name: 'worker', kind: 'python', source: 'worker/src/fama_worker' }],
+                rules: [{ name: 'no-file-cycles', kind: 'no-file-cycles' }]
+            })
+        )
+
+        // Also verifies --config works when cwd does not contain arch.config.json.
+        const { status, stdout, stderr } = run(['--config', configPath, '--json'], {
+            cwd: os.tmpdir(),
+            capture: true
+        })
+        assert.equal(status, 1, `expected cycle failure, stderr=${stderr}`)
+        const report = JSON.parse(stdout)
+        const cycles = report.rules.find(rule => rule.kind === 'no-file-cycles')
+        assert.equal(cycles.violations.length, 1)
+        assert.equal(
+            cycles.violations[0],
+            'worker/src/fama_worker/a.py -> worker/src/fama_worker/b.py -> worker/src/fama_worker/a.py'
+        )
+    })
+})
+
+test('detects TypeScript dynamic imports inside exported declarations', () => {
+    withTempFixture(dir => {
+        const src = path.join(dir, 'src')
+        mkdirSync(src, { recursive: true })
+        writeFileSync(path.join(src, 'a.ts'), "export const load = () => import('./b')\n")
+        writeFileSync(path.join(src, 'b.ts'), "export { load } from './a'\n")
+        writeFileSync(
+            path.join(dir, 'arch.config.json'),
+            JSON.stringify({
+                projects: [{ name: 'app', kind: 'ts', source: 'src' }],
+                rules: [{ name: 'no-file-cycles', kind: 'no-file-cycles' }]
+            })
+        )
+
+        const { status, stdout } = run(['--json'], { cwd: dir, capture: true })
+        assert.equal(status, 1)
+        const report = JSON.parse(stdout)
+        const cycles = report.rules.find(rule => rule.kind === 'no-file-cycles')
+        assert.deepEqual(cycles.violations, ['src/a.ts -> src/b.ts -> src/a.ts'])
+    })
+})
+
+test('fails fast when a configured source directory is missing', () => {
+    withTempFixture(dir => {
+        writeFileSync(
+            path.join(dir, 'arch.config.json'),
+            JSON.stringify({
+                projects: [{ name: 'missing', kind: 'ts', source: 'nope/src' }],
+                rules: [{ name: 'no-file-cycles', kind: 'no-file-cycles' }]
+            })
+        )
+        const { status, stderr } = run([], { cwd: dir, capture: true })
+        assert.equal(status, 1)
+        assert.match(stderr, /does not exist/)
+    })
 })

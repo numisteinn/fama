@@ -4,7 +4,7 @@
 # source, so CI catches an edit without a rebuild. Needs no Rust.
 set -euo pipefail
 cd "$(dirname "$0")"
-hash=$(git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock rust-toolchain.toml src |
+hash=$(git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock rust-toolchain.toml mise.toml build.sh src |
     LC_ALL=C sort | while read -r file; do printf '%s\n' "$file"; cat "$file"; done |
     shasum -a 256 | cut -d' ' -f1)
 if [ "${1:-}" = --check ]; then

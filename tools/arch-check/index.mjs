@@ -11,9 +11,9 @@ const binaryName = {
 }[`${process.platform}-${process.arch}`]
 
 /**
- * Runs the arch-check binary against the config at `root/arch.config.json`.
- * Returns `{ status, stdout, stderr }`. With `capture`, output is captured;
- * otherwise it streams to the process stdio.
+ * Runs the arch-check binary against `arch.config.json` in `cwd`, or against
+ * the `--config` path supplied in `args`. Returns `{ status, stdout, stderr }`.
+ * With `capture`, output is captured; otherwise it streams to the process stdio.
  */
 export function run(args = [], { cwd = process.cwd(), capture = false } = {}) {
     if (!binaryName) {
@@ -26,11 +26,20 @@ export function run(args = [], { cwd = process.cwd(), capture = false } = {}) {
     if (!existsSync(binary)) {
         throw new Error(`Missing ${binary}. Run tools/arch-check/build.sh and commit bin/.`)
     }
-    const config = path.join(cwd, 'arch.config.json')
-    if (!existsSync(config)) {
-        throw new Error(`No arch.config.json at ${config}.`)
+
+    const isHelp = args.includes('--help') || args.includes('-h')
+    const hasConfig = args.some(arg => arg === '--config' || arg.startsWith('--config='))
+    let finalArgs = [...args]
+    if (!isHelp && !hasConfig) {
+        const config = path.join(cwd, 'arch.config.json')
+        if (!existsSync(config)) {
+            throw new Error(`No arch.config.json at ${config}.`)
+        }
+        finalArgs = ['--config', config, ...args]
     }
-    const result = spawnSync(binary, ['--config', config, ...args], {
+
+    const result = spawnSync(binary, finalArgs, {
+        cwd,
         encoding: 'utf8',
         stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
         maxBuffer: 64 * 1024 * 1024

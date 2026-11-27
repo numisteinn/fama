@@ -22,7 +22,9 @@
                 "web/<root> <-> web/review",
                 "web/<root> <-> web/view",
                 "web/components <-> web/view",
-                "web/reader <-> web/view"
+                "web/reader <-> web/view",
+                "worker/<root> <-> worker/engines",
+                "worker/<root> <-> worker/extract"
             ]
         },
         { "name": "contracts-is-leaf", "kind": "no-depend", "from": ["packages/contracts/**"], "to": ["apps/**", "worker/**"] },

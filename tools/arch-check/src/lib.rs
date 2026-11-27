@@ -60,6 +60,14 @@ pub fn run_cli(args: Vec<String>) -> i32 {
                     return 2;
                 }
             },
+            s if s.starts_with("--config=") => {
+                let value = &s["--config=".len()..];
+                if value.is_empty() {
+                    eprintln!("--config needs a path");
+                    return 2;
+                }
+                config_path = PathBuf::from(value);
+            }
             "--json" => json = true,
             "--stats" => stats = true,
             "--help" | "-h" => {
@@ -95,10 +103,10 @@ fn print_help() {
 }
 
 fn run(config_path: &Path, json: bool, stats: bool) -> Result<i32, String> {
-    let root = config_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let root = match config_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
     let raw = std::fs::read_to_string(config_path)
         .map_err(|e| format!("cannot read {}: {e}", config_path.display()))?;
     let config: Config =
