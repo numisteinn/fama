@@ -194,22 +194,19 @@ export class PlaySampleAudio extends Command.Service<PlaySampleAudio>()("review/
     Effect.gen(function* () {
       const state = yield* SampleAudioPlayer
       return ({ voice, src }) =>
-        Effect.tryPromise({
-          try: () => {
-            state.activeVoice = null
-            state.element.pause()
-            state.activeVoice = voice
-            state.element.src = Redacted.value(src)
-            state.element.currentTime = 0
-            state.element.defaultPlaybackRate = 1
-            state.element.playbackRate = 1
-            return state.element.play()
-          },
-          catch: (error) => error,
+        Effect.tryPromise(() => {
+          state.activeVoice = null
+          state.element.pause()
+          state.activeVoice = voice
+          state.element.src = Redacted.value(src)
+          state.element.currentTime = 0
+          state.element.defaultPlaybackRate = 1
+          state.element.playbackRate = 1
+          return state.element.play()
         }).pipe(
           Effect.match({
             onSuccess: (): VoiceSamplesMessage | Component.Noop => Component.noop,
-            onFailure: (error): VoiceSamplesMessage | Component.Noop => {
+            onFailure: ({ cause: error }): VoiceSamplesMessage | Component.Noop => {
               if (isInterrupted(error)) return Component.noop
               if (state.activeVoice === voice) state.activeVoice = null
               return VoiceSamplesMessage.FailedPlaySample({ voice, message: "Could not play sample" })

@@ -5,6 +5,13 @@
     "noUncheckedIndexedAccess": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "includeSuggestionsInTsc": false,
+        "diagnosticSeverity": { "floatingEffect": "error" }
+      }
+    ],
     "types": [
       "node"
     ]

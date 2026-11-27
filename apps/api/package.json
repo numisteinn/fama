@@ -7,7 +7,7 @@
     "dev": "wrangler d1 migrations apply DB --local && pnpm seed:dev && wrangler dev",
     "seed:dev": "node scripts/create-user.ts --user-id=dev-user --client-token=dev-api-token --feed-token=dev-feed-token -- --local",
     "create-user": "node scripts/create-user.ts",
-    "typecheck": "tsc -p . && tsc -p scripts",
+    "typecheck": "effect-tsgo tsc -p . && effect-tsgo tsc -p scripts",
     "test": "vitest run",
     "smoke": "node scripts/smoke.ts",
     "types": "wrangler types"
