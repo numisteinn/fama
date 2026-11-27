@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "node scripts/dev.ts",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p scripts",
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter @fama/api dev",
     "smoke:api": "pnpm --filter @fama/api smoke",

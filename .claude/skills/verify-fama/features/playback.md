@@ -40,7 +40,7 @@ Preconditions:
 - **iPhone, start.** Run `$AD press 'label="Harbour Days"' --settle`, then `$AD snapshot -i`. The player shows `Close player`, the title, `Pause`, the elapsed text (for example `0:14`) and the remaining text (for example `-0:16`).
 - **iPhone, moving clock.** Run `$AD snapshot -i` twice, a few seconds apart. The elapsed text grows.
 - **iPhone, mini player.** Run `$AD press 'label="Close player"' --settle`. `Library` shows `Open player, Harbour Days`, `Pause` and `Forward 30 seconds`.
-- **iPhone, download.** In the player, run `$AD press 'label="Download"'`. The label becomes `Downloading`, then `Downloaded`. As soon as `Downloaded` appears, take the phone offline, jump to `Evening`, and check that playback advances.
+- **iPhone, download.** In the player, run `$AD press 'label="Download"'`. The label becomes `Downloading`, then `Downloaded`. Take the phone offline (or stop the local API) and force a fresh native player load — relaunch (`$AD open dev.fama.app --relaunch --metro-port 8081`) or switch to another episode and back — then open `Harbour Days`, jump to `Evening`, and check that playback advances from disk.
 - **iPhone, resume.** Pause at a known position, then `$AD open dev.fama.app --relaunch --metro-port 8081`. The mini player is there, paused, and `Open player` shows the same elapsed time.
 - **Proof.** Web: two `preview_snapshot {save: true}` images a few seconds apart, copied to `$EVIDENCE/playback-web/`. iPhone: `$AD screenshot $EVIDENCE/playback-ios/player-1.png`, wait, then `player-2.png`.
 
