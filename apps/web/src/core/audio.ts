@@ -36,9 +36,9 @@ const isInterrupted = (error: unknown): boolean =>
   typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"
 
 const play = (audio: HTMLAudioElement) =>
-  Effect.tryPromise({ try: () => audio.play(), catch: (error) => error }).pipe(
+  Effect.tryPromise(() => audio.play()).pipe(
     Effect.as(Component.noop),
-    Effect.catch((error) => Effect.succeed(isInterrupted(error) ? Component.noop : AudioFailure.FailedPlayAudio())),
+    Effect.catch(({ cause: error }) => Effect.succeed(isInterrupted(error) ? Component.noop : AudioFailure.FailedPlayAudio())),
   )
 
 const AudioResult = Schema.Union([AudioFailure, Component.Noop])

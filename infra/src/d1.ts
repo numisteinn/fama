@@ -1,5 +1,6 @@
 // Remote D1 calls for `fama setup`, through the Cloudflare credentials Alchemy resolved.
 import * as d1 from "@distilled.cloud/cloudflare/d1"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import { createUserSql, type NewUser } from "../../apps/api/scripts/create-user.ts"
 
@@ -7,6 +8,8 @@ export interface Database {
   readonly accountId: string
   readonly databaseId: string
 }
+
+class InvalidUserCount extends Data.TaggedError("InvalidUserCount")<{ readonly message: string }> {}
 
 export const countUsers = (db: Database) =>
   d1.queryDatabase({ ...db, sql: "SELECT COUNT(*) AS n FROM users" }).pipe(
@@ -16,7 +19,7 @@ export const countUsers = (db: Database) =>
     }),
     Effect.filterOrFail(
       (count) => Number.isInteger(count) && count >= 0,
-      () => new Error("D1 did not return a user count."),
+      () => new InvalidUserCount({ message: "D1 did not return a user count." }),
     ),
   )
 

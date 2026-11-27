@@ -10,6 +10,23 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "includeSuggestionsInTsc": false,
+        "diagnosticSeverity": { "floatingEffect": "error" },
+        // Fama already uses these Effect v4 modules for HTTP, UI, tests and the setup CLI.
+        "allowedUnstableApis": [
+          "effect/http",
+          "effect/cli",
+          "effect/reactivity/AsyncResult",
+          "@effect/platform-node/NodeRuntime",
+          "@effect/platform-node/NodeServices",
+          "@effect/vitest"
+        ],
+        "allowedExperimentalApis": ["@effect/ui", "@effect/ui-kit", "@effect/ui-devtools"]
+      }
+    ]
   }
 }

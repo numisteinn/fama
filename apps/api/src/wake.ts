@@ -19,20 +19,18 @@ export interface WakeOptions {
 
 /** One POST to the wake URL. Never fails: errors, timeouts and non-2xx answers are logged without the secret. */
 const send = (url: string, secret: string, fetchFn: typeof fetch, timeoutMs: number) =>
-  Effect.tryPromise({
-    try: () =>
-      fetchFn(url, {
-        method: "POST",
-        headers: { authorization: `Bearer ${secret}` },
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
-    catch: (error) => error,
-  }).pipe(
+  Effect.tryPromise(() =>
+    fetchFn(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    }),
+  ).pipe(
     Effect.flatMap((response) => {
       void response.body?.cancel()
       return response.ok ? Effect.void : Effect.logWarning(`worker wake answered ${response.status}`)
     }),
-    Effect.catch((error) =>
+    Effect.catch(({ cause: error }) =>
       Effect.logWarning(`worker wake failed: ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`),
     ),
   )
