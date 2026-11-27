@@ -535,7 +535,7 @@ fn strip_py_suite_prefix(stmt: &str) -> &str {
     ];
     let trimmed = stmt.trim_start();
     let first_word = trimmed
-        .split(|c: char| c.is_ascii_whitespace() || matches!(c, ':' | '(' | '[' | '{' | '~' | '+' | '-' | '!'))
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
         .next()
         .unwrap_or_default();
     if !HEADERS.contains(&first_word) {
@@ -1383,6 +1383,8 @@ if enabled := True: import fama_worker.a
 if λlambda := True: import fama_worker.b
 if a\u{0301}lambda := True: import fama_worker.d
 if lambda x: x: import fama_worker.c
+except* ValueError: import fama_worker.e
+if.5: import fama_worker.f
 try: from .b import helper
 ";
         let (_loc, _total, _exports, imports) = parse_py(source);
@@ -1394,6 +1396,8 @@ try: from .b import helper
                 PyImport::Module("fama_worker.b".to_owned()),
                 PyImport::Module("fama_worker.d".to_owned()),
                 PyImport::Module("fama_worker.c".to_owned()),
+                PyImport::Module("fama_worker.e".to_owned()),
+                PyImport::Module("fama_worker.f".to_owned()),
                 PyImport::From {
                     module: ".b".to_owned(),
                     names: vec!["helper".to_owned()],
