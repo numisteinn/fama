@@ -1,7 +1,4 @@
-import { Document, EpisodeId } from "@fama/contracts"
-import { Option, Schema } from "effect"
-import { defineTaggedUnion } from "foldkit/schema"
-import { Samples } from "~/review/samples"
+import { Schema } from "effect"
 
 /** One chapter in the Review editor, aligned by `index` with `loaded.chapters`. */
 export const ReviewChapter = Schema.Struct({
@@ -11,95 +8,6 @@ export const ReviewChapter = Schema.Struct({
   isKept: Schema.Boolean,
 })
 export type ReviewChapter = typeof ReviewChapter.Type
-
-/** State of `PUT /api/episodes/:id/document`. */
-export const SaveState = defineTaggedUnion({
-  Idle: {},
-  Saving: {},
-  Saved: {},
-  Failed: { message: Schema.String },
-})
-export type SaveState = typeof SaveState.Type
-
-/** State of `POST /api/episodes/:id/start`. */
-export const StartState = defineTaggedUnion({
-  Idle: {},
-  Starting: {},
-  Failed: { message: Schema.String },
-})
-export type StartState = typeof StartState.Type
-
-/** Whether Review shows, and what state the Document is in. */
-export const ReviewView = defineTaggedUnion({
-  Closed: {},
-  Loading: { episodeId: EpisodeId, request: Schema.Number },
-  LoadFailed: { episodeId: EpisodeId, message: Schema.String },
-  Editing: {
-    episodeId: EpisodeId,
-    /** The Document as loaded from the API, or as last saved. */
-    loaded: Document,
-    title: Schema.String,
-    chapters: Schema.Array(ReviewChapter),
-    /** At most one chapter has its text editor open, so large books stay fast. */
-    maybeExpandedIndex: Schema.Option(Schema.Number),
-    /** Lines that repeat across kept chapters, ready to remove in one click. */
-    repeatedLines: Schema.Array(Schema.String),
-    samples: Samples,
-    save: SaveState,
-    start: StartState,
-  },
-})
-export type ReviewView = typeof ReviewView.Type
-export type EditingReview = Extract<ReviewView, { _tag: "Editing" }>
-
-export const Review = Schema.Struct({
-  view: ReviewView,
-  /** Counts Document fetch requests so stale responses are dropped. */
-  requests: Schema.Number,
-})
-export type Review = typeof Review.Type
-
-export const initReview: Review = { view: ReviewView.Closed(), requests: 0 }
-
-export const chapterPanelId = (index: number): string => `review-chapter-panel-${index}`
-
-export const keptCount = (editing: EditingReview): number =>
-  editing.chapters.reduce((count, chapter) => (chapter.isKept ? count + 1 : count), 0)
-
-/** Whether the edited title or any chapter title/text differs from `loaded`. */
-export const isDirty = (editing: EditingReview): boolean =>
-  editing.title !== editing.loaded.title ||
-  editing.chapters.length !== editing.loaded.chapters.length ||
-  editing.chapters.some((chapter, index) => {
-    const original = editing.loaded.chapters[index]
-    return !original || chapter.title !== original.title || chapter.text !== original.text
-  })
-
-/** Full edited Document (all chapters, including unticked ones) for saving while staying in Review. */
-export const toFullDocument = (editing: EditingReview): Option.Option<Document> => {
-  const [first, ...rest] = editing.chapters.map(({ title, text }) => ({ title, text }))
-  if (!first) return Option.none()
-  return Option.some({
-    title: editing.title,
-    author: editing.loaded.author,
-    language: editing.loaded.language,
-    chapters: [first, ...rest],
-  })
-}
-
-/** Edited Document with only the kept chapters in playback order, for `POST /api/episodes/:id/start`. */
-export const toStartDocument = (editing: EditingReview): Option.Option<Document> => {
-  const [first, ...rest] = editing.chapters
-    .filter((chapter) => chapter.isKept)
-    .map(({ title, text }) => ({ title, text }))
-  if (!first) return Option.none()
-  return Option.some({
-    title: editing.title,
-    author: editing.loaded.author,
-    language: editing.loaded.language,
-    chapters: [first, ...rest],
-  })
-}
 
 const MAX_REPEATED_LINE_LENGTH = 160
 const MAX_REPEATED_LINES = 3

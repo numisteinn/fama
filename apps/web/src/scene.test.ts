@@ -1,183 +1,217 @@
-import { Dialog } from "@foldkit/ui"
-import {
-  Command,
-  Mount,
-  Subscription,
-  changeFiles,
-  click,
-  expect,
-  given,
-  inside,
-  keydown,
-  role,
-  scene,
-  selector,
-  type,
-} from "foldkit/scene"
-import { Option, Redacted } from "effect"
-import { describe, test, expect as expectValue } from "vitest"
+import type { Voice, VoiceRef } from "@fama/contracts"
+import { Component } from "@effect/ui"
+import { HtmlCommand } from "@effect/ui/html"
+import { HtmlLocator, HtmlPlay, HtmlScene } from "@effect/ui/html/testing"
+import { Locator, Story, TestHost } from "@effect/ui/testing"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Layer, Redacted } from "effect"
+import { TestClock } from "effect/testing"
+import { AppComponent } from "~/App"
+import { apiToken } from "~/api"
 import { LoadChapter, PauseAudio, PlayAudio } from "~/audio"
 import {
   CreateEpisodeFromSource,
   FILE_INPUT_ID,
   FetchEpisodes,
-  FetchFeed,
-  FocusAddText,
-  FocusPicker,
-  FocusPickerTrigger,
+  FetchVoices,
   PushProgress,
   ReadStoredProgress,
   SaveProgress,
-  ScrollPickerItem,
-  StoreSetting,
   StoreConnection,
   UploadEpisode,
-  WaitBeforeResetTypeAhead,
 } from "~/command"
+import { Picker, PickerEvents } from "~/components/Picker"
+import {
+  CopyFeedUrl,
+  SettingsDialog,
+  SettingsForm,
+  SettingsFormEvents,
+  SettingsFormMessage,
+} from "~/components/SettingsDialog"
 import {
   baseModel,
-  connection,
+  defaultFlags,
   harbourDays,
   progressAt,
   queuedArticle,
   runningHarbourDays,
   withEpisodes,
-  withPlayback,
 } from "~/fixture"
-import { Message } from "~/message"
-import { Playback, StoredProgress } from "~/model"
-import { apiToken } from "~/api"
-import { update } from "~/update"
+import { AppMessage } from "~/message"
+import { StoredProgress } from "~/model"
+import { FamaApi } from "~/services"
 import { OpenFilePickerOnKey } from "~/view/addBar"
-import { AnchorPicker, pickerSide } from "~/view/picker"
-import type { Voice, VoiceRef } from "@fama/contracts"
-import type { Message as AppMessage } from "~/message"
-import { view } from "~/view"
 
-const linkOrText = role("textbox", { name: "Link or text" })
-/** The add bar is always on screen, so every scene starts its Attach file key Mount. */
-const resolveAttachKeys = Mount.resolve(OpenFilePickerOnKey, Message.CompletedMountFilePickerKeys())
+const linkOrText = HtmlLocator.role("textbox", { name: "Link or text" })
+const fileInput = Locator.attr("id", FILE_INPUT_ID)
 
 describe("add a link", () => {
-  test("Enter adds a Queued row with the provisional title and empties the box", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [])),
-      resolveAttachKeys,
-      expect(role("button", { name: "Add" })).toBeDisabled(),
-      type(linkOrText, "http://localhost:8790/article.html"),
-      expect(role("button", { name: "Add" })).toBeEnabled(),
-      keydown(linkOrText, "Enter"),
-      Command.expectExact(CreateEpisodeFromSource),
-      Command.resolve(CreateEpisodeFromSource, Message.SucceededCreateEpisode({ episode: queuedArticle })),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
-      expect(linkOrText).toHaveValue(""),
-      inside(
-        role("listitem"),
-        expect(role("button", { name: "Play localhost:8790/article.html" })).toBeDisabled(),
-        expect(role("button", { name: "Delete localhost:8790/article.html" })).toExist(),
-      ),
-    )
-  })
+  it.effect("Enter adds a Queued row with the provisional title and empties the box", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), []))
+        .expectMount(OpenFilePickerOnKey())
+        .expect(HtmlLocator.role("button", { name: "Add" })).toBeDisabled()
+        .type(linkOrText, "http://localhost:8790/article.html")
+        .expect(HtmlLocator.role("button", { name: "Add" })).toBeDisabled(false)
+        .keydown(linkOrText, "Enter")
+        .expectExact(CreateEpisodeFromSource)
+        .resolve(CreateEpisodeFromSource, AppMessage.SucceededCreateEpisode({ episode: queuedArticle }))
+        .resolve(HtmlCommand.Focus, { found: true })
+        .expect(linkOrText).toHaveValue("")
+        .expect(
+          Locator.inside(
+            HtmlLocator.role("listitem"),
+            HtmlLocator.role("button", { name: "Play localhost:8790/article.html" }),
+          ),
+        ).toBeDisabled()
+        .expect(
+          Locator.inside(
+            HtmlLocator.role("listitem"),
+            HtmlLocator.role("button", { name: "Delete localhost:8790/article.html" }),
+          ),
+        ).toExist()
+    }),
+  )
 })
 
 describe("attach a file", () => {
-  // The click itself opens the picker natively, in the browser; the live check covers it.
-  test("Attach file is a label for the file input, so the click opens the picker natively", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [])),
-      expect(role("button", { name: "Attach file" })).toHaveAttr("htmlFor", FILE_INPUT_ID),
-      expect(role("button", { name: "Attach file" })).toHaveAttr("tabIndex", "0"),
-      expect(selector(`#${FILE_INPUT_ID}`)).toHaveAttr("type", "file"),
-      Mount.expectExact(OpenFilePickerOnKey),
-      resolveAttachKeys,
-      changeFiles(`#${FILE_INPUT_ID}`, [new File(["book"], "harbour-days.epub", { type: "application/epub+zip" })]),
-      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
-      expect(role("button", { name: "Add" })).toBeEnabled(),
-    )
-  })
+  it.effect("Attach file is a label for the file input, so the click opens the picker natively", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), []))
+        .expectMount(OpenFilePickerOnKey())
+        .expect(HtmlLocator.role("button", { name: "Attach file" })).toHaveAttribute("for", FILE_INPUT_ID)
+        .expect(HtmlLocator.role("button", { name: "Attach file" })).toHaveAttribute("tabindex", "0")
+        .expect(fileInput).toHaveAttribute("type", "file")
+        .change(fileInput, {
+          files: [new File(["book"], "harbour-days.epub", { type: "application/epub+zip" })],
+        })
+        .expect(HtmlLocator.role("button", { name: "Remove harbour-days.epub" })).toExist()
+        .expect(HtmlLocator.role("button", { name: "Add" })).toBeDisabled(false)
+    }),
+  )
 
-  test("each file of a batch has its row; a refused or failed file says why, and a failed one has Retry", () => {
-    const epub = new File(["book"], "harbour-days.epub")
-    const png = new File(["png"], "cover.png")
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [])),
-      resolveAttachKeys,
-      changeFiles(`#${FILE_INPUT_ID}`, [epub, png]),
-      expect(linkOrText).toBeAbsent(),
-      expect(role("button", { name: "Remove harbour-days.epub" })).toExist(),
-      expect(role("button", { name: "Remove cover.png" })).toExist(),
-      expect(role("alert")).toHaveText("Unsupported type"),
-      click(role("button", { name: "Add" })),
-      Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: { status: 413, message: "The file is too large" } })),
-      expect(role("button", { name: "Retry harbour-days.epub" })).toExist(),
-      expect(role("button", { name: "Add" })).toBeDisabled(),
-      click(role("button", { name: "Remove harbour-days.epub" })),
-      click(role("button", { name: "Remove cover.png" })),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
-      expect(linkOrText).toExist(),
-    )
-  })
+  it.effect("each file of a batch has its row; a refused or failed file says why, and a failed one has Retry", () =>
+    Effect.gen(function* () {
+      const epub = new File(["book"], "harbour-days.epub")
+      const png = new File(["png"], "cover.png")
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), []))
+        .expectMount(OpenFilePickerOnKey())
+        .change(fileInput, { files: [epub, png] })
+        .expect(linkOrText).toBeAbsent()
+        .expect(HtmlLocator.role("button", { name: "Remove harbour-days.epub" })).toExist()
+        .expect(HtmlLocator.role("button", { name: "Remove cover.png" })).toExist()
+        .expect(HtmlLocator.role("alert")).toHaveText("Unsupported type")
+        .click(HtmlLocator.role("button", { name: "Add" }))
+        .resolve(
+          UploadEpisode,
+          AppMessage.FailedUploadFile({ key: 0, failure: { status: 413, message: "The file is too large" } }),
+        )
+        .expect(HtmlLocator.role("button", { name: "Retry harbour-days.epub" })).toExist()
+        .expect(HtmlLocator.role("button", { name: "Add" })).toBeDisabled()
+        .click(HtmlLocator.role("button", { name: "Remove harbour-days.epub" }))
+        .click(HtmlLocator.role("button", { name: "Remove cover.png" }))
+        .resolve(HtmlCommand.Focus, { found: true })
+        .expect(linkOrText).toExist()
+    }),
+  )
 })
 
 describe("settings", () => {
-  const savedConnection = { origin: "", token: apiToken("-2") }
+  const savedConnection = { origin: "", token: apiToken("dev-api-token-2") }
+  const feedUrl = Redacted.make("http://localhost:8788/feed/secret-feed-token/rss.xml")
 
-  test("Save stores the token, refetches, and closes the dialog", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [])),
-      resolveAttachKeys,
-      click(role("button", { name: "Settings" })),
-      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: "http://localhost:8788/feed/t/rss.xml" })),
-      expect(role("dialog", { name: "Settings" })).toExist(),
-      expect(role("button", { name: "Copy feed URL" })).toBeEnabled(),
-      type(role("textbox", { name: "API token" }), "-2"),
-      click(role("button", { name: "Save" })),
-      Command.expectExact(
-        StoreConnection,
-        FetchEpisodes({ connection: savedConnection, generation: 1, request: 2 }),
-        FetchFeed({ connection: savedConnection, request: 2 }),
-        Dialog.CloseDialog,
-      ),
-      Command.resolve(StoreConnection, Message.CompletedStoreSetting()),
-      Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] })),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 2, url: "http://localhost:8788/feed/t/rss.xml" })),
-      Command.resolve(Dialog.CloseDialog, Dialog.Message.CompletedCloseDialog()),
-      Mount.expectEnded(Dialog.AcquireResources),
-      expect(role("dialog", { name: "Settings" })).toBeAbsent(),
-    )
-  })
+  it.effect("SettingsForm loads FeedQuery, copies URL with Copied state, redacts token and feed URL, and emits Saved", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(SettingsForm, {
+        initialConnection: { origin: "", token: apiToken("dev-api-token") },
+        connectionGeneration: 0,
+        openId: 1,
+      })
+      s.loaded("feed", { url: feedUrl }, { waiting: true })
+        .expect(Locator.text("http://localhost:8788/feed/secret-feed-token/rss.xml")).toBeAbsent()
+        .expect(HtmlLocator.role("button", { name: "Copy feed URL" })).toBeDisabled()
+        .loaded("feed", { url: feedUrl })
+        .expect(HtmlLocator.role("button", { name: "Copy feed URL" })).toBeDisabled(false)
+        .click(HtmlLocator.role("button", { name: "Copy feed URL" }))
+        .expectExact(CopyFeedUrl.make({ url: feedUrl }))
+        .resolve(CopyFeedUrl, SettingsFormMessage.SucceededCopyFeedUrl())
+        .expect(HtmlLocator.role("button", { name: "Copied" })).toExist()
+        .resolve(
+          s.pending[0]!.command as never,
+          SettingsFormMessage.CompletedWaitBeforeResetCopied() as never,
+        )
+        .expect(HtmlLocator.role("button", { name: "Copy feed URL" })).toExist()
+        .type(HtmlLocator.label("API token"), "dev-api-token-2")
+        .expect(HtmlLocator.label("API token")).toHaveValue("dev-api-token-2")
+        .click(HtmlLocator.role("button", { name: "Save" }))
+        .emitted(SettingsFormEvents.Saved({ connection: savedConnection }))
 
-  test("the token Message is Redacted from the moment it is built", () => {
-    const seen: Array<AppMessage> = []
-    const recordingUpdate: typeof update = (model, message) => {
-      seen.push(message)
-      return update(model, message)
-    }
-    scene(
-      { update: recordingUpdate, view },
-      given(withEpisodes(baseModel(), [])),
-      resolveAttachKeys,
-      click(role("button", { name: "Settings" })),
-      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Mount.resolve(Dialog.AcquireResources, Dialog.Message.SucceededAcquireResources()),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: "http://localhost:8788/feed/t/rss.xml" })),
-      type(role("textbox", { name: "API token" }), "typed-secret"),
-      expect(role("textbox", { name: "API token" })).toHaveValue("typed-secret"),
-    )
-    const tokenMessages = seen.filter((message) => message._tag === "UpdatedTokenDraft")
-    expectValue(tokenMessages.length).toBeGreaterThan(0)
-    for (const message of tokenMessages) expectValue(Redacted.isRedacted(message.value)).toBe(true)
-    expectValue(JSON.stringify(tokenMessages)).not.toContain("typed-secret")
-  })
+      // Verify both the API token and private feed URL stay Redacted and never leak through JSON.stringify.
+      expect(Redacted.isRedacted(feedUrl)).toBe(true)
+      expect(JSON.stringify(feedUrl)).not.toContain("secret-feed-token")
+      const story = yield* Story.make(SettingsForm, {
+        initialConnection: { origin: "", token: apiToken("dev-api-token") },
+        connectionGeneration: 0,
+        openId: 1,
+      })
+      story
+        .loaded("feed", { url: feedUrl })
+        .send(SettingsFormMessage.UpdatedTokenDraft({ value: apiToken("typed-secret") }))
+      expect(Redacted.isRedacted(story.model.tokenDraft)).toBe(true)
+      expect(JSON.stringify(story.model.tokenDraft)).not.toContain("typed-secret")
+    }),
+  )
+
+  it.effect("SettingsForm Play loads FeedQuery, resets Copied via TestClock, and App refetches on Save", () =>
+    Effect.gen(function* () {
+      const copied: Array<string> = []
+      const originalClipboard = navigator.clipboard
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText: async (text: string) => { copied.push(text) } },
+      })
+      try {
+        const fakeApi = Layer.succeed(FamaApi, {
+          send: () => Effect.succeed(undefined as never),
+          sendJson: () => Effect.succeed({ url: "http://localhost:8788/feed/secret-feed-token/rss.xml" } as never),
+        })
+        const play = yield* HtmlPlay.make(SettingsForm, {
+          initialConnection: { origin: "", token: apiToken("dev-api-token") },
+          connectionGeneration: 0,
+          openId: 1,
+        }).pipe(Effect.provide(Layer.mergeAll(fakeApi, TestHost.layer())))
+
+        yield* play.expect(Locator.text("http://localhost:8788/feed/secret-feed-token/rss.xml")).toExist()
+        yield* play.click(HtmlLocator.role("button", { name: "Copy feed URL" }))
+        yield* play.expect(HtmlLocator.role("button", { name: "Copied" })).toExist()
+        expect(copied).toEqual(["http://localhost:8788/feed/secret-feed-token/rss.xml"])
+        yield* TestClock.adjust("1500 millis")
+        yield* play.expect(HtmlLocator.role("button", { name: "Copy feed URL" })).toExist()
+      } finally {
+        Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard })
+      }
+
+      const app = yield* Story.make(AppComponent, defaultFlags())
+      app
+        .given({ ...withEpisodes(baseModel(), []), isSettingsOpen: true })
+        .send(AppMessage.SavedSettings({ connection: savedConnection }))
+        .expectExact(
+          StoreConnection.make({ connection: savedConnection }),
+          FetchEpisodes.make({ connection: savedConnection, generation: 1, request: 2 }),
+          FetchVoices.make({ connection: savedConnection, generation: 1 }),
+        )
+        .resolve(StoreConnection, Component.noop)
+        .resolve(FetchEpisodes, AppMessage.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] }))
+        .resolve(FetchVoices, AppMessage.SucceededFetchVoices({ generation: 1, voices: [] }))
+      expect(app.model.isSettingsOpen).toBe(false)
+    }),
+  )
 })
 
-describe("menus", () => {
+describe("menus (Picker backed by @effect/ui-kit Menu)", () => {
   const voice = (id: string, name: string, language: string): Voice => ({
     id: id as VoiceRef,
     engine: "kokoro",
@@ -185,112 +219,97 @@ describe("menus", () => {
     language,
     gender: null,
   })
-  const voices = [voice("kokoro:af_heart", "Heart", "en"), voice("kokoro:af_sarah", "Sarah", "en"), voice("piper:steinn", "Steinn", "is")]
-  const voiceMenu = role("menu")
+  const voices = [
+    voice("kokoro:af_heart", "Heart", "en"),
+    voice("kokoro:af_sarah", "Sarah", "en"),
+    voice("piper:steinn", "Steinn", "is"),
+  ]
 
-  test("typing a letter moves to the next item that starts with it", () => {
-    scene(
-      { update, view },
-      given({ ...withEpisodes(baseModel(), []), voices }),
-      resolveAttachKeys,
-      click(role("button", { name: "Voice: Auto" })),
-      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
-      Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
-      keydown(voiceMenu, "s"),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
-      expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-2"),
-      keydown(voiceMenu, "S"),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
-      expect(voiceMenu).toHaveAttr("aria-activedescendant", "voice-item-3"),
-      keydown(voiceMenu, "Enter"),
-      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
-      Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
-      Mount.expectEnded(AnchorPicker),
-      expect(role("button", { name: "Voice: Steinn" })).toExist(),
-    )
-  })
-})
+  it.effect("Voice picker opens, supports selection, and emits Picked", () =>
+    Effect.gen(function* () {
+      const play = yield* HtmlPlay.make(Picker, {
+        label: "Voice: Auto",
+        triggerText: "Auto",
+        triggerKind: "voice",
+        triggerClass: "",
+        selectedValue: "",
+        items: [
+          { value: "", name: "Auto" },
+          ...voices.map((v) => ({ value: v.id, name: v.name, group: v.language })),
+        ],
+      }).pipe(Effect.provide(TestHost.layer()))
 
-describe("menu placement", () => {
-  // A 46-voice menu is taller than the 384 px cap, so it needs 384 px.
-  const voiceMenu = { contentHeight: 1_500, triggerTop: 0, triggerBottom: 0, viewportHeight: 500 }
+      yield* play.click(HtmlLocator.role("button", { name: "Voice: Auto" }))
+      yield* play.expect(HtmlLocator.role("menu")).toExist()
+      yield* play.expect(HtmlLocator.role("menuitemradio", { name: "Steinn" })).toExist()
+      // Type-ahead within Menu's 500 ms window moves highlight from Sarah to Steinn; pressing Enter on the highlighted item picks it.
+      yield* play.keydown(HtmlLocator.role("menu"), "S")
+      yield* play.expect(HtmlLocator.role("menuitemradio", { name: "Sarah" })).toHaveAttribute("data-highlighted", "")
+      yield* TestClock.adjust("400 millis")
+      yield* play.keydown(HtmlLocator.role("menu"), "t")
+      yield* play.expect(HtmlLocator.role("menuitemradio", { name: "Steinn" })).toHaveAttribute("data-highlighted", "")
+      yield* play.keydown(HtmlLocator.role("menuitemradio", { name: "Steinn" }), "Enter")
+      yield* play.expect(HtmlLocator.role("menu")).toBeAbsent()
+      expect(play.root.emitted).toEqual([PickerEvents.Picked({ value: "piper:steinn" })])
+    }),
+  )
 
-  test("a menu near the bottom of a short window opens above its trigger", () => {
-    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", triggerTop: 400, triggerBottom: 432 })).toBe("Top")
-  })
+  it.effect("Chapters picker renders numbered chapter items and emits selected chapter", () =>
+    Effect.gen(function* () {
+      const play = yield* HtmlPlay.make(Picker, {
+        label: "Chapters",
+        triggerText: "",
+        triggerKind: "chapters",
+        triggerClass: "",
+        selectedValue: "0",
+        side: "top",
+        align: "end",
+        items: harbourDays.chapters.map((chapter, index) => ({
+          value: String(index),
+          name: chapter.title,
+          number: index + 1,
+        })),
+      }).pipe(Effect.provide(TestHost.layer()))
 
-  test("a menu keeps its side when that side has room, or more room than the other", () => {
-    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", triggerTop: 60, triggerBottom: 92 })).toBe("Bottom")
-    expectValue(pickerSide({ ...voiceMenu, side: "Bottom", viewportHeight: 300, triggerTop: 100, triggerBottom: 132 })).toBe(
-      "Bottom",
-    )
-    expectValue(pickerSide({ ...voiceMenu, side: "Top", triggerTop: 440, triggerBottom: 472 })).toBe("Top")
-  })
-})
-
-describe("chapters menu", () => {
-  test("typing a chapter number highlights that chapter, as the item shows it", () => {
-    const loaded = withPlayback(
-      withEpisodes(baseModel(), [harbourDays]),
-      Playback.Loaded({ episodeId: harbourDays.id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 0, isPlaying: false, isWaiting: false }),
-    )
-    const chaptersMenu = role("menu")
-    scene(
-      { update, view },
-      given(loaded),
-      resolveAttachKeys,
-      click(role("button", { name: "Chapters" })),
-      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
-      Mount.resolve(AnchorPicker, Message.CompletedAnchorPicker()),
-      expect(role("menuitemradio", { name: "1 Morning" })).toExist(),
-      expect(role("menuitemradio", { name: "2 Evening" })).toExist(),
-      keydown(chaptersMenu, "2"),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
-      expect(chaptersMenu).toHaveAttr("aria-activedescendant", "chapters-item-1"),
-      keydown(chaptersMenu, "Escape"),
-      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
-      Mount.expectEnded(AnchorPicker),
-    )
-  })
+      yield* play.click(HtmlLocator.role("button", { name: "Chapters" }))
+      yield* play.expect(HtmlLocator.role("menuitemradio", { name: "1 Morning" })).toExist()
+      yield* play.expect(HtmlLocator.role("menuitemradio", { name: "2 Evening" })).toExist()
+      yield* play.click(HtmlLocator.role("menuitemradio", { name: "2 Evening" }))
+      yield* play.expect(HtmlLocator.role("menu")).toBeAbsent()
+      expect(play.root.emitted).toEqual([PickerEvents.Picked({ value: "1" })])
+    }),
+  )
 })
 
 describe("play and pause", () => {
-  test("the row and the player bar toggle between Play and Pause", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [harbourDays])),
-      resolveAttachKeys,
-      click(role("button", { name: "Play Harbour Days" })),
-      Command.expectExact(ReadStoredProgress),
-      Command.resolve(
-        ReadStoredProgress,
-        Message.GotStoredProgress({ episodeId: harbourDays.id, intent: 1, stored: StoredProgress.NotSaved() }),
-      ),
-      Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
-      Subscription.emit(Message.StartedAudio()),
-      expect(role("button", { name: "Pause Harbour Days" })).toExist(),
-      inside(
-        role("contentinfo"),
-        expect(role("group", { name: "Position" })).toExist(),
-        expect(role("button", { name: "Playback speed: 1×" })).toExist(),
-        expect(role("button", { name: "Chapters" })).toExist(),
-        expect(role("link", { name: "Download" })).toExist(),
-      ),
-      click(role("button", { name: /^Pause$/ })),
-      Command.expectExact(PauseAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 0 })),
-      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
-      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) })),
-      Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
-      Subscription.emit(Message.PausedAudio()),
-      expect(role("button", { name: "Play Harbour Days" })).toExist(),
-      click(role("button", { name: /^Play$/ })),
-      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
-    )
-  })
+  it.effect("the row and the player bar toggle between Play and Pause", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), [harbourDays]))
+        .expectMount(OpenFilePickerOnKey())
+        .click(HtmlLocator.role("button", { name: "Play Harbour Days" }))
+        .expectExact(ReadStoredProgress)
+        .resolve(
+          ReadStoredProgress,
+          AppMessage.GotStoredProgress({ episodeId: harbourDays.id, intent: 1, stored: StoredProgress.NotSaved() }),
+        )
+        .expectExact(LoadChapter)
+        .resolve(LoadChapter, Component.noop)
+        .subscription("app/audioEvents", AppMessage.StartedAudio())
+        .expect(HtmlLocator.role("button", { name: "Pause Harbour Days" })).toExist()
+        .expect(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("group", { name: "Position" }))).toExist()
+        .expect(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("link", { name: "Download" }))).toExist()
+        .click(Locator.inside(Locator.attr("class", "sm:hidden"), HtmlLocator.role("button", { name: /^Pause$/ })))
+        .expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 0 }), PauseAudio)
+        .resolve(PauseAudio, Component.noop)
+        .resolve(SaveProgress, AppMessage.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) }))
+        .resolve(PushProgress, AppMessage.FailedPushProgress({ episodeId: harbourDays.id }))
+        .subscription("app/audioEvents", AppMessage.PausedAudio())
+        .expect(HtmlLocator.role("button", { name: "Play Harbour Days" })).toExist()
+        .click(Locator.inside(Locator.attr("class", "sm:hidden"), HtmlLocator.role("button", { name: /^Play$/ })))
+        .resolve(PlayAudio, Component.noop)
+    }),
+  )
 })
 
 describe("time left", () => {
@@ -299,21 +318,21 @@ describe("time left", () => {
     job: { ...runningHarbourDays.job, remainingMs },
   })
 
-  test("a running row shows the time left next to the stage once the worker has an estimate", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [running(130_000)])),
-      resolveAttachKeys,
-      expect(role("listitem")).toContainText("Narrating · 2 min left"),
-    )
-  })
+  it.effect("a running row shows the time left next to the stage once the worker has an estimate", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), [running(130_000)]))
+        .expectMount(OpenFilePickerOnKey())
+        .expect(HtmlLocator.role("listitem")).toHaveText(/Narrating · 2 min left/)
+    }),
+  )
 
-  test("without an estimate the row shows the count", () => {
-    scene(
-      { update, view },
-      given(withEpisodes(baseModel(), [running(null)])),
-      resolveAttachKeys,
-      expect(role("listitem")).toContainText("Narrating 3/6"),
-    )
-  })
+  it.effect("without an estimate the row shows the count", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(AppComponent, defaultFlags())
+      s.given(withEpisodes(baseModel(), [running(null)]))
+        .expectMount(OpenFilePickerOnKey())
+        .expect(HtmlLocator.role("listitem")).toHaveText(/Narrating 3\/6/)
+    }),
+  )
 })

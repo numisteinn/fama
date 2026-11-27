@@ -1,7 +1,6 @@
 import { VoiceRef } from "@fama/contracts"
+import { UiSchema } from "@effect/ui"
 import { Option, Schema } from "effect"
-import { File } from "foldkit"
-import { defineTaggedUnion } from "foldkit/schema"
 
 /** File types the API narrates. */
 export const ACCEPT = ".pdf,.epub,.txt,.md,.markdown,.html,.htm"
@@ -19,7 +18,7 @@ const Sent = { voice: Schema.NullOr(VoiceRef), speed: Schema.Number, review: Sch
  * Where one file of the add bar is. `Attached` waits for Add. `Refused` is a type the API does not narrate, and
  * is never sent. `Pending` waits for its turn to upload, `Failed` can be sent again with the same voice and speed.
  */
-export const FileState = defineTaggedUnion({
+export const FileState = UiSchema.TaggedEnum({
   Attached: {},
   Refused: {},
   Pending: Sent,
@@ -29,7 +28,11 @@ export const FileState = defineTaggedUnion({
 })
 export type FileState = typeof FileState.Type
 
-export const BatchFile = Schema.Struct({ key: Schema.Number, file: File.File, state: FileState })
+export const BatchFile = Schema.Struct({
+  key: Schema.Number,
+  file: Schema.instanceOf(File),
+  state: FileState,
+})
 export type BatchFile = typeof BatchFile.Type
 export type Batch = ReadonlyArray<BatchFile>
 
@@ -37,7 +40,7 @@ const setState = (batch: Batch, key: number, state: FileState): Batch =>
   batch.map((item) => (item.key === key ? { ...item, state } : item))
 
 /** Adds files from the picker or a drop. Keys start at `firstKey`. */
-export const attach = (batch: Batch, files: ReadonlyArray<File.File>, firstKey: number): Batch => [
+export const attach = (batch: Batch, files: ReadonlyArray<File>, firstKey: number): Batch => [
   ...batch,
   ...files.map((file, index) => ({
     key: firstKey + index,
@@ -53,13 +56,22 @@ export const isSending = (batch: Batch): boolean =>
 
 /** Add: each attached file waits to upload with this voice, speed and review choice. */
 export const send = (batch: Batch, voice: VoiceRef | null, speed: number, review: boolean): Batch =>
-  batch.map((item) => (item.state._tag === "Attached" ? { ...item, state: FileState.Pending({ voice, speed, review }) } : item))
+  batch.map((item) =>
+    item.state._tag === "Attached" ? { ...item, state: FileState.Pending({ voice, speed, review }) } : item,
+  )
 
 /** A failed file waits to upload again, with the voice, speed and review choice it had. */
 export const retry = (batch: Batch, key: number): Batch =>
   batch.map((item) =>
     item.state._tag === "Failed" && item.key === key
-      ? { ...item, state: FileState.Pending({ voice: item.state.voice, speed: item.state.speed, review: item.state.review }) }
+      ? {
+          ...item,
+          state: FileState.Pending({
+            voice: item.state.voice,
+            speed: item.state.speed,
+            review: item.state.review,
+          }),
+        }
       : item,
   )
 
@@ -74,7 +86,11 @@ export const startNext = (batch: Batch): { batch: Batch; maybeStarted: Option.Op
   if (!next || next.state._tag !== "Pending") return { batch, maybeStarted: Option.none() }
   const started = {
     ...next,
-    state: FileState.Uploading({ voice: next.state.voice, speed: next.state.speed, review: next.state.review }),
+    state: FileState.Uploading({
+      voice: next.state.voice,
+      speed: next.state.speed,
+      review: next.state.review,
+    }),
   }
   return { batch: setState(batch, next.key, started.state), maybeStarted: Option.some(started) }
 }

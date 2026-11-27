@@ -12,14 +12,15 @@
   },
   "dependencies": {
     "@effect/platform-browser": "4.1.4",
+    "@effect/ui": "https://pkg.pr.new/Effect-TS/ui/@effect/ui@87a704be",
+    "@effect/ui-devtools": "https://pkg.pr.new/Effect-TS/ui/@effect/ui-devtools@87a704be",
+    "@effect/ui-kit": "https://pkg.pr.new/Effect-TS/ui/@effect/ui-kit@87a704be",
     "@fama/contracts": "workspace:*",
     "@fontsource-variable/dm-sans": "^5.3.0",
-    "@foldkit/ui": "0.171.0",
-    "effect": "catalog:",
-    "foldkit": "0.171.0"
+    "effect": "catalog:"
   },
   "devDependencies": {
-    "@foldkit/vite-plugin": "0.29.1",
+    "@effect/vitest": "catalog:",
     "@tailwindcss/vite": "^4.3.5",
     "@types/node": "^26.6.6",
     "happy-dom": "20.14.6",

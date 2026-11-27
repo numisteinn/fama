@@ -5,7 +5,7 @@ Read `CONTEXT.md` for domain terms and `docs/api.md` for the HTTP contract. Shap
 ## Layout
 - `packages/contracts` shared Effect Schema contract.
 - `apps/api` Cloudflare Worker: API, D1, R2, RSS feed. Serves the web build as static assets.
-- `apps/web` Vite + Foldkit web app (The Elm Architecture on Effect).
+- `apps/web` Vite + Effect UI web app (The Elm Architecture on Effect).
 - `apps/mobile` Expo iOS app.
 - `worker/` Python (uv) worker: extraction + TTS. Runs on the Mac and on Modal.
 

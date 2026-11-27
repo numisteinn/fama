@@ -1,4 +1,6 @@
 import {
+  type ChangeVoice,
+  type Document,
   type Episode,
   type EpisodeId,
   type EpisodeProgress,
@@ -8,85 +10,95 @@ import {
   mergeProgress,
   playStart,
 } from "@fama/contracts"
-import { Dialog } from "@foldkit/ui"
+import { Command, type Component } from "@effect/ui"
 import { Option, Record, Redacted } from "effect"
-import type { HttpClient } from "effect/http"
-import { type File, Update } from "foldkit"
-import { modifyFields } from "foldkit/struct"
-import { type Connection, apiToken, isSameConnection } from "~/api"
-import * as Batch from "~/batch"
-import { type AudioPlayer, LoadChapter, PauseAudio, PlayAudio, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
+import { type Connection, isSameConnection } from "~/api"
 import {
-  CopyFeedUrl,
+  type AudioCommandServices,
+  LoadChapter,
+  PauseAudio,
+  PlayAudio,
+  SeekAudio,
+  SetAudioRate,
+  StopAudio,
+} from "~/audio"
+import * as Batch from "~/batch"
+import {
+  type AppCommandServices,
+  ChangeNarrateAgainVoice,
+  ChangeReviewVoice,
   CreateEpisodeFromSource,
   DeleteEpisode,
   FetchEpisodes,
-  FetchFeed,
   FetchVoices,
-  FocusAddText,
-  FocusDeleteConfirm,
-  FocusPicker,
-  FocusPickerTrigger,
+  NarrateAgainWithDocument,
   PushProgress,
   ReadStoredProgress,
   RetryEpisode,
+  SaveDocument,
   SaveProgress,
-  ScrollPickerItem,
+  StartReviewNarration,
   StoreConnection,
   StoreProgress,
   StoreSetting,
   UploadEpisode,
   WaitBeforeDisarmDelete,
-  WaitBeforeResetCopied,
-  WaitBeforeResetTypeAhead,
+  focusAddText,
+  focusDeleteConfirm,
 } from "~/command"
-import { Message, type PlayerShortcut } from "~/message"
-import type { ReaderMessage } from "~/reader/message"
-import type { NarrateAgainMessage } from "~/review/narrateAgainMessage"
-import type { ReviewMessage } from "~/review/message"
+import { AppMessage, type PlayerShortcut } from "~/message"
 import {
-  Feed,
+  type AppModel,
   type Flags,
   type Listening,
   type LoadedPlayback,
-  type Model,
-  Picker,
-  type PickerId,
   Playback,
   RATES,
   SAVE_EVERY_MS,
   SKIP_BACK_MS,
   SKIP_FORWARD_MS,
   SPEEDS,
+  Screen,
   StoredProgress,
   current,
   episodes,
   isPlayPending,
-  pickerItemText,
-  pickerItems,
-  selectedVoice,
-  sortedVoices,
   toDraft,
 } from "~/model"
-import { initReader } from "~/reader/model"
-import * as Reader from "~/reader/update"
-import { NarrateAgainView, initNarrateAgain } from "~/review/narrateAgainModel"
-import * as NarrateAgain from "~/review/narrateAgainUpdate"
-import { initReview } from "~/review/model"
-import * as Review from "~/review/update"
+import { InvalidateDocument } from "~/queries"
+import { hasText } from "~/reader/ReaderScreen"
 import { chapterStartMs, locate, scrubTargetMs, totalMs } from "~/timeline"
 
-export type Services = AudioPlayer | HttpClient.HttpClient
-type UpdateReturn = Update.Return<Model, Message, Services>
-type Step = Update.Step<Model, Message, Services>
+export type AppServices = AppCommandServices | AudioCommandServices
+export type AppCommand = Command.Command<AppMessage | Component.Noop, AppServices>
+export type UpdateResult = {
+  readonly model: AppModel
+  readonly commands: ReadonlyArray<AppCommand>
+}
+type StepReturn = {
+  readonly model: AppModel
+  readonly commands?: ReadonlyArray<AppCommand>
+}
+type Step = (model: AppModel) => StepReturn
 
 const unchanged: Step = (model) => ({ model })
 
+const combine = (model: AppModel, steps: ReadonlyArray<Step>): UpdateResult => {
+  let currentModel = model
+  const commands: Array<AppCommand> = []
+  for (const step of steps) {
+    const next = step(currentModel)
+    currentModel = next.model
+    if (next.commands) commands.push(...next.commands)
+  }
+  return { model: currentModel, commands }
+}
+
 // INIT
 
-export const init = (flags: Flags): UpdateReturn => {
+export const initApp = (flags: Flags): UpdateResult => {
   const connection = { origin: flags.origin, token: flags.token }
-  const model: Model = {
+  const model: AppModel = {
     connection,
     connectionGeneration: 0,
     libraryRequests: 0,
@@ -105,19 +117,18 @@ export const init = (flags: Flags): UpdateReturn => {
     fileDragDepth: 0,
     armedDeletes: [],
     rowErrors: {},
-    picker: Picker.Closed(),
-    typeAheadKeys: 0,
-    settingsDialog: Dialog.init({ id: "settings" }),
-    settingsDraft: connection,
-    feed: Feed.Loading(),
-    feedRequests: 0,
-    isFeedUrlCopied: false,
-    feedUrlCopies: 0,
-    narrateAgain: initNarrateAgain,
+    isSettingsOpen: false,
+    settingsOpens: 0,
+    screen: Screen.Library(),
+    screenOpens: 0,
+    maybeReaderEpisodeId: Option.none(),
+    reviewSaves: {},
+    reviewVoices: {},
+    reviewVoiceRequests: 0,
+    reviewStarts: {},
+    narrateAgainSubmits: {},
     playback: Playback.Stopped(),
     loadedChapterDurationMs: null,
-    reader: initReader,
-    review: initReview,
     maybeListening: Option.none(),
     playIntents: 0,
     maybePendingPlay: Option.none(),
@@ -129,114 +140,102 @@ export const init = (flags: Flags): UpdateReturn => {
     maybeScrubMs: Option.none(),
   }
   const library = fetchLibrary(model)
-  return { model: library.model, commands: [library.command, FetchVoices({ connection }), FocusAddText()] }
+  return {
+    model: library.model,
+    commands: [library.command, FetchVoices.make({ connection, generation: 0 }), focusAddText()],
+  }
 }
 
 // CONNECTION
 
 /** A new library request for the current connection, tagged with its generation and its number, and in flight. */
-const fetchLibrary = (model: Model): { model: Model; command: ReturnType<typeof FetchEpisodes> } => {
+const fetchLibrary = (model: AppModel): { model: AppModel; command: AppCommand } => {
   const request = model.libraryRequests + 1
   return {
-    model: modifyFields(model, {
-      libraryRequests: () => request,
-      libraryRequestsInFlight: (inFlight) => [...inFlight, request],
+    model: {
+      ...model,
+      libraryRequests: request,
+      libraryRequestsInFlight: [...model.libraryRequestsInFlight, request],
+    },
+    command: FetchEpisodes.make({
+      connection: model.connection,
+      generation: model.connectionGeneration,
+      request,
     }),
-    command: FetchEpisodes({ connection: model.connection, generation: model.connectionGeneration, request }),
   }
 }
 
-/** A new feed request for the current connection. Results of earlier requests are dropped. */
-const fetchFeed = (model: Model): { model: Model; command: ReturnType<typeof FetchFeed> } => {
-  const next = modifyFields(model, { feedRequests: (requests) => requests + 1 })
-  return { model: next, command: FetchFeed({ connection: next.connection, request: next.feedRequests }) }
+/** Moves to `connection` as a new generation, dropping old voices and responses and refreshing queries. */
+const changeConnection = (model: AppModel, connection: Connection): AppModel => {
+  const sameOrigin = connection.origin === model.connection.origin
+  return {
+    ...model,
+    connection,
+    connectionGeneration: model.connectionGeneration + 1,
+    voices: [],
+    reviewSaves: sameOrigin ? model.reviewSaves : {},
+    reviewVoices: sameOrigin ? model.reviewVoices : {},
+    reviewStarts: sameOrigin ? model.reviewStarts : {},
+    narrateAgainSubmits: sameOrigin ? model.narrateAgainSubmits : {},
+  }
 }
-
-/** Moves to `connection` as a new generation, so every response fetched before is dropped. */
-const changeConnection = (model: Model, connection: Connection): Model =>
-  modifyFields(model, { connection: () => connection, connectionGeneration: (generation) => generation + 1 })
 
 /** A response fetched for the current connection generation. */
-const isCurrent = (model: Model, generation: number) => generation === model.connectionGeneration
+const isCurrent = (model: AppModel, generation: number) => generation === model.connectionGeneration
 
-// SETTINGS DIALOG
-
-const foldSettingsOutMessage = Dialog.OutMessage.match<Step>({
-  Opened: () => (model) => {
-    const feed = fetchFeed(
-      modifyFields(model, {
-        settingsDraft: () => model.connection,
-        feed: () => Feed.Loading(),
-        isFeedUrlCopied: () => false,
-      }),
-    )
-    return { model: feed.model, commands: [feed.command] }
-  },
-  Closed: () => unchanged,
-})
-
-const settingsFold = {
-  read: (model: Model) => Option.some(model.settingsDialog),
-  write: (model: Model, nextSettingsDialog: Dialog.Model) =>
-    modifyFields(model, { settingsDialog: () => nextSettingsDialog }),
-  toParentMessage: (message: Dialog.Message) => Message.GotSettingsDialogMessage({ message }),
-  foldOutMessage: foldSettingsOutMessage,
-}
-
-const foldSettingsDialog = Update.foldChild({ update: Dialog.update, ...settingsFold })
-const openSettings: Step = Update.foldChildStep({ update: Dialog.open, ...settingsFold })
-const closeSettings: Step = Update.foldChildStep({ update: Dialog.close, ...settingsFold })
+// SETTINGS
 
 /** Saves the token and server and closes the dialog. A changed connection refetches; a new 401 opens it again. */
-const saveSettings: Step = (model) => {
-  const connection = {
-    token: apiToken(Redacted.value(model.settingsDraft.token).trim()),
-    origin: model.settingsDraft.origin.trim().replace(/\/+$/, ""),
-  }
+const saveSettings = (connection: Connection): Step => (model) => {
   const isChanged =
     Redacted.value(connection.token) !== Redacted.value(model.connection.token) ||
     connection.origin !== model.connection.origin
-  return Update.combine(model, [
-    (stepModel) => {
-      if (!isChanged) return { model: stepModel, commands: [StoreConnection({ connection })] }
-      const feed = fetchFeed(changeConnection(stepModel, connection))
-      const library = fetchLibrary(feed.model)
-      return { model: library.model, commands: [StoreConnection({ connection }), library.command, feed.command] }
-    },
-    closeSettings,
-  ])
+  if (!isChanged) {
+    return {
+      model: { ...model, isSettingsOpen: false },
+      commands: [StoreConnection.make({ connection })],
+    }
+  }
+  const changed = changeConnection(model, connection)
+  const library = fetchLibrary({ ...changed, isSettingsOpen: false })
+  return {
+    model: library.model,
+    commands: [
+      StoreConnection.make({ connection }),
+      library.command,
+      FetchVoices.make({ connection, generation: changed.connectionGeneration }),
+    ],
+  }
 }
 
-/** Shows a feed result, unless a later feed request was made. */
-const setFeed = (request: number, feed: Feed): Step => (model) =>
-  request === model.feedRequests ? { model: modifyFields(model, { feed: () => feed }) } : { model }
-
-/** Follows a token or server saved in another tab, as the React app did: the library and an open feed refetch. */
+/** Follows a token or server saved in another tab: the library and voices refetch and `connectionGeneration` refreshes queries. */
 const followStoredConnection = (connection: Connection): Step => (model) => {
   if (isSameConnection(connection, model.connection)) return { model }
-  const isFeedShown = model.settingsDialog.isOpen
-  const library = fetchLibrary(changeConnection(model, connection))
-  if (!isFeedShown) return { model: library.model, commands: [library.command] }
-  const feed = fetchFeed(modifyFields(library.model, { feed: () => Feed.Loading() }))
-  return { model: feed.model, commands: [library.command, feed.command] }
+  const changed = changeConnection(model, connection)
+  const library = fetchLibrary(changed)
+  return {
+    model: library.model,
+    commands: [library.command, FetchVoices.make({ connection, generation: changed.connectionGeneration })],
+  }
 }
 
 /**
- * Follows settings saved in another tab, as the React app did. The add bar takes the Voice and Voice speed,
+ * Follows settings saved in another tab. The add bar takes the Voice and Voice speed,
  * and a new Playback speed applies to the audio now.
  */
 const followStoredSettings =
   (settings: { connection: Connection; maybeVoice: Option.Option<VoiceRef>; speed: number; rate: number }): Step =>
   (model) =>
-    Update.combine(model, [
+    combine(model, [
       followStoredConnection(settings.connection),
       (stepModel) => ({
-        model: modifyFields(stepModel, {
-          maybeVoice: () => settings.maybeVoice,
-          speed: () => settings.speed,
-          rate: () => settings.rate,
-        }),
-        commands: settings.rate === stepModel.rate ? [] : [SetAudioRate({ rate: settings.rate })],
+        model: {
+          ...stepModel,
+          maybeVoice: settings.maybeVoice,
+          speed: settings.speed,
+          rate: settings.rate,
+        },
+        commands: settings.rate === stepModel.rate ? [] : [SetAudioRate.make({ rate: settings.rate })],
       }),
     ])
 
@@ -248,8 +247,10 @@ const fetchEpisodes: Step = (model) => {
 }
 
 /** Library request `request` answered: it is no longer in flight. */
-const answerLibrary = (model: Model, request: number): Model =>
-  modifyFields(model, { libraryRequestsInFlight: (inFlight) => inFlight.filter((sent) => sent !== request) })
+const answerLibrary = (model: AppModel, request: number): AppModel => ({
+  ...model,
+  libraryRequestsInFlight: model.libraryRequestsInFlight.filter((sent) => sent !== request),
+})
 
 /** Replaces the episode list. Captures the loaded chapter's duration before replacement so chapter fraction holds. */
 const withEpisodes =
@@ -265,22 +266,24 @@ const withEpisodes =
           })()
         : model.loadedChapterDurationMs
     return {
-      model: modifyFields(model, {
-        maybeEpisodes: () => Option.some(toEpisodes(previous)),
-        loadedChapterDurationMs: () => previousDuration,
-      }),
+      model: {
+        ...model,
+        maybeEpisodes: Option.some(toEpisodes(previous)),
+        loadedChapterDurationMs: previousDuration,
+      },
     }
   }
 
 const forgetRow = (episodeId: EpisodeId): Step => (model) => ({
-  model: modifyFields(model, {
-    armedDeletes: (ids) => ids.filter((id) => id !== episodeId),
-    rowErrors: Record.remove(episodeId),
-  }),
+  model: {
+    ...model,
+    armedDeletes: model.armedDeletes.filter((id) => id !== episodeId),
+    rowErrors: Record.remove(model.rowErrors, episodeId),
+  },
 })
 
 const setRowError = (episodeId: EpisodeId, message: string): Step => (model) => ({
-  model: modifyFields(model, { rowErrors: Record.set(episodeId, message) }),
+  model: { ...model, rowErrors: Record.set(model.rowErrors, episodeId, message) },
 })
 
 // ADD BAR
@@ -289,13 +292,13 @@ const setRowError = (episodeId: EpisodeId, message: string): Step => (model) => 
 const startNextUpload: Step = (model) => {
   const { batch, maybeStarted } = Batch.startNext(model.batch)
   return {
-    model: modifyFields(model, { batch: () => batch }),
+    model: { ...model, batch },
     commands: Option.match(maybeStarted, {
       onNone: () => [],
       onSome: ({ key, file, state }) =>
         state._tag === "Uploading"
           ? [
-              UploadEpisode({
+              UploadEpisode.make({
                 connection: model.connection,
                 key,
                 file,
@@ -314,18 +317,20 @@ const withBatch =
   (toBatch: (batch: Batch.Batch) => Batch.Batch): Step =>
   (model) => {
     const batch = toBatch(model.batch)
-    const next = modifyFields(model, { batch: () => batch })
-    return model.batch.length > 0 && batch.length === 0 ? { model: next, commands: [FocusAddText()] } : { model: next }
+    const next: AppModel = { ...model, batch }
+    return model.batch.length > 0 && batch.length === 0 ? { model: next, commands: [focusAddText()] } : { model: next }
   }
 
 const attachFiles =
-  (files: ReadonlyArray<File.File>): Step =>
+  (files: ReadonlyArray<File>): Step =>
   (model) =>
     files.length === 0
       ? { model }
-      : withBatch((batch) => Batch.attach(batch, files, model.batchKeys))(
-          modifyFields(model, { batchKeys: (keys) => keys + files.length, maybeAddError: () => Option.none() }),
-        )
+      : withBatch((batch) => Batch.attach(batch, files, model.batchKeys))({
+          ...model,
+          batchKeys: model.batchKeys + files.length,
+          maybeAddError: Option.none(),
+        })
 
 const submitAdd: Step = (model) => {
   const draft = toDraft(model)
@@ -333,209 +338,51 @@ const submitAdd: Step = (model) => {
   const { connection, isReviewOn, speed } = model
   const voice = Option.getOrNull(model.maybeVoice)
   if (draft._tag === "Files")
-    return Update.combine(model, [withBatch((batch) => Batch.send(batch, voice, speed, isReviewOn)), startNextUpload])
+    return combine(model, [withBatch((batch) => Batch.send(batch, voice, speed, isReviewOn)), startNextUpload])
   const source: SourceInput =
     draft._tag === "Url" ? { _tag: "Url", url: draft.url } : { _tag: "Text", title: null, text: draft.text }
   return {
-    model: modifyFields(model, { isAdding: () => true, maybeAddError: () => Option.none() }),
-    commands: [CreateEpisodeFromSource({ connection, input: { source, voice, speed, review: isReviewOn } })],
+    model: { ...model, isAdding: true, maybeAddError: Option.none() },
+    commands: [
+      CreateEpisodeFromSource.make({ connection, input: { source, voice, speed, review: isReviewOn } }),
+    ],
   }
 }
 
-// MENUS
+// PICKERS
 
-/** The text of each item in a menu, in order, as the menu shows it. Type-ahead matches against it. */
-const pickerItemTexts = (model: Model, pickerId: PickerId): ReadonlyArray<string> =>
-  pickerItems(model, pickerId).map(pickerItemText)
-
-const pickerItemCount = (model: Model, pickerId: PickerId): number => pickerItems(model, pickerId).length
-
-/** A single printable character, as the menus' type-ahead takes it. */
-export const isTypeAheadKey = (key: string): boolean => key.length === 1 && key !== " "
-
-/** The first item from `start` on whose text starts with `prefix`, wrapping around. */
-const findPrefix = (texts: ReadonlyArray<string>, start: number, prefix: string): Option.Option<number> => {
-  const needle = prefix.toLocaleLowerCase()
-  for (let step = 0; step < texts.length; step++) {
-    const index = (((start + step) % texts.length) + texts.length) % texts.length
-    if (texts[index]?.toLocaleLowerCase().startsWith(needle)) return Option.some(index)
-  }
-  return Option.none()
-}
-
-/** No item starts with a doubled letter (`Llama`), so a repeated letter may cycle, as base-ui decides. */
-const canCycle = (texts: ReadonlyArray<string>): boolean =>
-  texts.every((text) => !text || text[0]?.toLocaleLowerCase() !== text[1]?.toLocaleLowerCase())
-
-/**
- * Type-ahead, ported from base-ui's `useTypeahead`. Keys typed within 750 ms make one prefix, searched
- * after the item that was highlighted when it started: `S`, `t`, `e` goes to Steinn. The same letter
- * again starts a one-letter prefix after the last match, so it cycles, and the next key extends that
- * prefix: `s`, `s`, `k` goes to Sky. Unlike base-ui, `s` then `S` also counts as the same letter.
- * A key with no match clears the prefix, so the next key starts a new search; a Space with no match
- * keeps it.
- */
-const typeAhead = (key: string): Step => (model) => {
-  if (model.picker._tag === "Closed") return { model }
-  const open = model.picker
-  const keys = model.typeAheadKeys + 1
-  const texts = pickerItemTexts(model, open.pickerId)
-  const active = Option.getOrElse(open.maybeActiveIndex, () => -1)
-  const isNewPrefix = open.typedText === ""
-  const isCycle = open.typedText.toLocaleLowerCase() === key.toLocaleLowerCase() && canCycle(texts)
-  const from = isNewPrefix || isCycle ? active : open.typeAheadFrom
-  const typedText = (isCycle ? "" : open.typedText) + key
-  const maybeMatch = findPrefix(texts, from + 1, typedText)
-  const nextTypedText = Option.isSome(maybeMatch) || key === " " ? typedText : ""
+const pickVoice = (value: string): Step => (model) => {
+  const maybeVoiceRef =
+    value === ""
+      ? Option.none<VoiceRef>()
+      : Option.fromNullishOr(model.voices.find((voice) => voice.id === value)?.id)
   return {
-    model: modifyFields(model, {
-      picker: () =>
-        Picker.Open({
-          ...open,
-          typedText: nextTypedText,
-          typeAheadFrom: from,
-          maybeActiveIndex: Option.orElse(maybeMatch, () => open.maybeActiveIndex),
-        }),
-      typeAheadKeys: () => keys,
-    }),
-    commands: [
-      ...(nextTypedText === "" ? [] : [WaitBeforeResetTypeAhead({ keys })]),
-      ...Option.toArray(Option.map(maybeMatch, (index) => ScrollPickerItem({ pickerId: open.pickerId, index }))),
-    ],
+    model: { ...model, maybeVoice: maybeVoiceRef },
+    commands: [StoreSetting.make({ key: "fama.voice", value: Option.getOrNull(maybeVoiceRef) })],
   }
 }
 
-const resetTypeAhead = (keys: number): Step => (model) => {
-  const picker = model.picker
-  if (picker._tag === "Closed" || keys !== model.typeAheadKeys) return { model }
-  return { model: modifyFields(model, { picker: () => Picker.Open({ ...picker, typedText: "" }) }) }
-}
-
-/** The index of the checked item in a menu. */
-export const pickerCheckedIndex = (model: Model, pickerId: PickerId): number => {
-  switch (pickerId) {
-    case "Voice":
-      return Option.match(selectedVoice(model), {
-        onNone: () => 0,
-        onSome: (voice) => sortedVoices(model.voices).findIndex((item) => item.id === voice.id) + 1,
-      })
-    case "VoiceSpeed":
-      return SPEEDS.findIndex((value) => value === model.speed)
-    case "PlaybackSpeed":
-      return RATES.findIndex((value) => value === model.rate)
-    case "Chapters":
-      return model.playback._tag === "Loaded" ? model.playback.chapter : -1
+const pickVoiceSpeed = (value: string): Step => (model) => {
+  const parsed = Number(value)
+  if (!SPEEDS.includes(parsed as (typeof SPEEDS)[number])) return { model }
+  return {
+    model: { ...model, speed: parsed },
+    commands: [StoreSetting.make({ key: "fama.speed", value: parsed })],
   }
 }
 
-const openPicker =
-  (pickerId: PickerId, maybeActiveIndex: Option.Option<number>): Step =>
-  (model) => ({
-    model: modifyFields(model, {
-      picker: () => Picker.Open({ pickerId, maybeActiveIndex, typedText: "", typeAheadFrom: -1 }),
-    }),
-    commands: [
-      FocusPicker({ pickerId }),
-      ...Option.toArray(Option.map(maybeActiveIndex, (index) => ScrollPickerItem({ pickerId, index }))),
-    ],
-  })
-
-const closePicker =
-  (isFocusReturned: boolean): Step =>
-  (model) => {
-    if (model.picker._tag === "Closed") return { model }
-    const { pickerId } = model.picker
-    return {
-      model: modifyFields(model, { picker: () => Picker.Closed() }),
-      commands: isFocusReturned ? [FocusPickerTrigger({ pickerId })] : [],
-    }
-  }
-
-const startIndex = (model: Model, pickerId: PickerId, fallback: number): number => {
-  const checked = pickerCheckedIndex(model, pickerId)
-  return checked >= 0 ? checked : fallback
-}
-
-const pressPickerTriggerKey = (pickerId: PickerId, key: string): Step => (model) => {
-  const count = pickerItemCount(model, pickerId)
-  if (count === 0) return { model }
-  if (key === "ArrowDown") return openPicker(pickerId, Option.some(startIndex(model, pickerId, 0)))(model)
-  if (key === "ArrowUp") return openPicker(pickerId, Option.some(startIndex(model, pickerId, count - 1)))(model)
-  return { model }
-}
-
-const activate = (pickerId: PickerId, index: number): Step => (model) => ({
-  model: modifyFields(model, {
-    picker: (picker) =>
-      picker._tag === "Open"
-        ? Picker.Open({ ...picker, pickerId, maybeActiveIndex: Option.some(index) })
-        : Picker.Open({ pickerId, maybeActiveIndex: Option.some(index), typedText: "", typeAheadFrom: -1 }),
-  }),
-  commands: [ScrollPickerItem({ pickerId, index })],
-})
-
-const pressPickerKey = (key: string): Step => (model) => {
-  if (model.picker._tag === "Closed") return { model }
-  const { pickerId, maybeActiveIndex, typedText } = model.picker
-  const count = pickerItemCount(model, pickerId)
-  const selectActive: Step = Option.match(maybeActiveIndex, {
-    onNone: () => unchanged,
-    onSome: (index) => selectPickerItem(pickerId, index),
-  })
-  if (key === "Escape" || key === "Tab") return closePicker(true)(model)
-  if (count === 0) return { model }
-  const from = Option.getOrElse(maybeActiveIndex, () => -1)
-  switch (key) {
-    case "ArrowDown":
-      return activate(pickerId, from < 0 ? startIndex(model, pickerId, 0) : (from + 1) % count)(model)
-    case "ArrowUp":
-      return activate(pickerId, from < 0 ? startIndex(model, pickerId, count - 1) : (from - 1 + count) % count)(model)
-    case "Home":
-      return activate(pickerId, 0)(model)
-    case "End":
-      return activate(pickerId, count - 1)(model)
-    case "Enter":
-      return selectActive(model)
-    case " ":
-      // Inside a typed prefix, Space is part of the search (`The E`), as in base-ui.
-      return typedText === "" ? selectActive(model) : typeAhead(key)(model)
-    default:
-      return isTypeAheadKey(key) ? typeAhead(key)(model) : { model }
+const pickPlaybackSpeed = (value: string): Step => (model) => {
+  const parsed = Number(value)
+  if (!RATES.includes(parsed as (typeof RATES)[number])) return { model }
+  return {
+    model: { ...model, rate: parsed },
+    commands: [StoreSetting.make({ key: "fama.rate", value: parsed }), SetAudioRate.make({ rate: parsed })],
   }
 }
 
-const selectPickerItem = (pickerId: PickerId, index: number): Step =>
-  Update.combine([closePicker(true), applyPickerItem(pickerId, index)])
-
-const applyPickerItem = (pickerId: PickerId, index: number): Step => (model) => {
-  switch (pickerId) {
-    case "Voice": {
-      const maybeVoice = index === 0 ? Option.none() : Option.fromNullishOr(sortedVoices(model.voices)[index - 1])
-      const maybeVoiceRef = Option.map(maybeVoice, (voice) => voice.id)
-      return {
-        model: modifyFields(model, { maybeVoice: () => maybeVoiceRef }),
-        commands: [StoreSetting({ key: "fama.voice", value: Option.getOrNull(maybeVoiceRef) })],
-      }
-    }
-    case "VoiceSpeed": {
-      const speed = SPEEDS[index]
-      if (speed === undefined) return { model }
-      return {
-        model: modifyFields(model, { speed: () => speed }),
-        commands: [StoreSetting({ key: "fama.speed", value: speed })],
-      }
-    }
-    case "PlaybackSpeed": {
-      const rate = RATES[index]
-      if (rate === undefined) return { model }
-      return {
-        model: modifyFields(model, { rate: () => rate }),
-        commands: [StoreSetting({ key: "fama.rate", value: rate }), SetAudioRate({ rate })],
-      }
-    }
-    case "Chapters":
-      return playChapter(index)(model)
-  }
+const pickChapter = (value: string): Step => (model) => {
+  const index = Number(value)
+  return Number.isInteger(index) ? playChapter(index)(model) : { model }
 }
 
 // PLAYER
@@ -560,33 +407,36 @@ const setPlayback =
   (model) => {
     const playback = model.playback
     if (playback._tag !== "Loaded") return { model }
-    return { model: modifyFields(model, { playback: () => Playback.Loaded({ ...playback, ...fields }) }) }
+    return { model: { ...model, playback: Playback.Loaded({ ...playback, ...fields }) } }
   }
 
 /** What the listener asks of the episode they listen to. */
 const setListening =
   (fields: Partial<Listening>): Step =>
   (model) => ({
-    model: modifyFields(model, { maybeListening: Option.map((listening) => ({ ...listening, ...fields })) }),
+    model: { ...model, maybeListening: Option.map(model.maybeListening, (listening) => ({ ...listening, ...fields })) },
   })
 
-const isListeningTo = (model: Model, episodeId: EpisodeId) =>
+const isListeningTo = (model: AppModel, episodeId: EpisodeId) =>
   Option.exists(model.maybeListening, (listening) => listening.episodeId === episodeId)
 
 const isSameProgress = (a: EpisodeProgress, b: EpisodeProgress) =>
   a.positionMs === b.positionMs && a.updatedAt === b.updatedAt
 
 /** Where the device holds an episode: the position a save stamps now, else its entry. */
-const heldMs = (model: Model, episodeId: EpisodeId): number | undefined =>
+const heldMs = (model: AppModel, episodeId: EpisodeId): number | undefined =>
   model.stamping[episodeId] ?? model.localProgress[episodeId]?.positionMs
 
 // Facts
 
 /** Shows `progress` as the server's on the episode in the list. */
 const setServerProgress = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
-  model: modifyFields(model, {
-    maybeEpisodes: Option.map((list) => list.map((item) => (item.id === episodeId ? { ...item, progress } : item))),
-  }),
+  model: {
+    ...model,
+    maybeEpisodes: Option.map(model.maybeEpisodes, (list) =>
+      list.map((item) => (item.id === episodeId ? { ...item, progress } : item)),
+    ),
+  },
 })
 
 /**
@@ -597,8 +447,8 @@ const takeEntry = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (mo
   const local = model.localProgress[episodeId]
   if (local && isSameProgress(local, progress)) return { model }
   return {
-    model: modifyFields(model, { localProgress: Record.set(episodeId, progress) }),
-    commands: [StoreProgress({ episodeId, progress })],
+    model: { ...model, localProgress: Record.set(model.localProgress, episodeId, progress) },
+    commands: [StoreProgress.make({ episodeId, progress })],
   }
 }
 
@@ -607,14 +457,18 @@ const takeEntry = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (mo
  * follows it already.
  */
 const takeStamp = (episodeId: EpisodeId, progress: EpisodeProgress): Step => (model) => ({
-  model: modifyFields(model, {
-    localProgress: Record.set(episodeId, progress),
-    stamping: (stamping) => (stamping[episodeId] === progress.positionMs ? Record.remove(stamping, episodeId) : stamping),
-    maybeListening: Option.map((listening) =>
+  model: {
+    ...model,
+    localProgress: Record.set(model.localProgress, episodeId, progress),
+    stamping:
+      model.stamping[episodeId] === progress.positionMs
+        ? Record.remove(model.stamping, episodeId)
+        : model.stamping,
+    maybeListening: Option.map(model.maybeListening, (listening) =>
       listening.episodeId === episodeId ? { ...listening, maybeFollowedAt: Option.some(progress.updatedAt) } : listening,
     ),
-  }),
-  commands: [PushProgress({ connection: model.connection, episodeId, progress })],
+  },
+  commands: [PushProgress.make({ connection: model.connection, episodeId, progress })],
 })
 
 /**
@@ -626,18 +480,19 @@ const takePushAnswer = (episodeId: EpisodeId, sent: EpisodeProgress, stored: Epi
   const local = model.localProgress[episodeId]
   const isLatest = local !== undefined && isSameProgress(local, sent)
   const isOwn = stored.positionMs === sent.positionMs
-  return Update.combine(model, [
+  return combine(model, [
     setServerProgress(episodeId, stored),
     isLatest ? takeEntry(episodeId, stored) : unchanged,
     isLatest && isOwn
       ? (stepModel) => ({
-          model: modifyFields(stepModel, {
-            maybeListening: Option.map((listening) =>
+          model: {
+            ...stepModel,
+            maybeListening: Option.map(stepModel.maybeListening, (listening) =>
               listening.episodeId === episodeId && Option.contains(listening.maybeFollowedAt, sent.updatedAt)
                 ? { ...listening, maybeFollowedAt: Option.some(stored.updatedAt) }
                 : listening,
             ),
-          }),
+          },
         })
       : unchanged,
   ])
@@ -649,7 +504,7 @@ const takePushAnswer = (episodeId: EpisodeId, sent: EpisodeProgress, stored: Epi
  * stamp is newer than both, and goes out when it lands.
  */
 const syncProgress: Step = (model) =>
-  Update.combine(
+  combine(
     model,
     episodes(model).map((episode): Step => (stepModel) => {
       if (stepModel.stamping[episode.id] !== undefined) return { model: stepModel }
@@ -658,7 +513,7 @@ const syncProgress: Step = (model) =>
       if (isPushed && local !== null) {
         return {
           model: stepModel,
-          commands: [PushProgress({ connection: stepModel.connection, episodeId: episode.id, progress: local })],
+          commands: [PushProgress.make({ connection: stepModel.connection, episodeId: episode.id, progress: local })],
         }
       }
       return progress === null ? { model: stepModel } : takeEntry(episode.id, progress)(stepModel)
@@ -674,13 +529,13 @@ const endChapter: Step = withLoaded(({ playback, episode }) => {
 /** The element says where it is. Only audio that plays moves: a resting element is where the tab put it. */
 const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
   const playback = model.playback
-  const timed =
+  const timed: AppModel =
     playback._tag === "Loaded" && playback.isPlaying
-      ? modifyFields(model, { playback: () => Playback.Loaded({ ...playback, offsetMs }) })
+      ? { ...model, playback: Playback.Loaded({ ...playback, offsetMs }) }
       : model
   return atMs - model.lastSavedAtMs < SAVE_EVERY_MS
     ? { model: timed }
-    : { model: modifyFields(timed, { lastSavedAtMs: () => atMs, isSaveDue: () => true }) }
+    : { model: { ...timed, lastSavedAtMs: atMs, isSaveDue: true } }
 }
 
 // Intent
@@ -692,16 +547,16 @@ const updateAudioTime = (offsetMs: number, atMs: number): Step => (model) => {
 const intend =
   (step: Step): Step =>
   (model) =>
-    step(modifyFields(model, { playIntents: (count) => count + 1, maybePendingPlay: () => Option.none() }))
+    step({ ...model, playIntents: model.playIntents + 1, maybePendingPlay: Option.none() })
 
 /** Reads the progress storage holds for an episode, to play it from there. The read carries the latest intent. */
 const readThenPlay =
   (episodeId: EpisodeId): Step =>
-  (model) => ({ model, commands: [ReadStoredProgress({ episodeId, intent: model.playIntents })] })
+  (model) => ({ model, commands: [ReadStoredProgress.make({ episodeId, intent: model.playIntents })] })
 
 /**
  * A Play acts. The episode the listener listens to gets a Play to place. Another episode reads its progress from
- * storage first, as the React app did, so a pause in another tab is where it resumes.
+ * storage first, so a pause in another tab is where it resumes.
  */
 const actPlay = (episodeId: EpisodeId): Step => (model) =>
   isListeningTo(model, episodeId)
@@ -719,9 +574,10 @@ const actPlay = (episodeId: EpisodeId): Step => (model) =>
 const askPlay = (episodeId: EpisodeId): Step => (model) =>
   model.libraryRequestsInFlight.length > 0 && !isPlayPending(model, episodeId)
     ? intend((held) => ({
-        model: modifyFields(held, {
-          maybePendingPlay: () => Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
-        }),
+        model: {
+          ...held,
+          maybePendingPlay: Option.some({ episodeId, awaiting: held.libraryRequestsInFlight }),
+        },
       }))(model)
     : intend(actPlay(episodeId))(model)
 
@@ -731,7 +587,7 @@ const askPause: Step = intend(setListening({ wantsPlay: false, isPlayDue: false 
 /** A Pause while a Play waits for the library: the Play is off. */
 const cancelPlay: Step = (model) => (Option.isSome(model.maybePendingPlay) ? intend(unchanged)(model) : { model })
 
-const wantsPlay = (model: Model) => Option.exists(model.maybeListening, (listening) => listening.wantsPlay)
+const wantsPlay = (model: AppModel) => Option.exists(model.maybeListening, (listening) => listening.wantsPlay)
 
 const toggle: Step = (model) =>
   Option.match(model.maybeListening, {
@@ -751,8 +607,7 @@ const start =
 /**
  * Library request `request` answered: `isListed` says it brought a list the tab takes. A Play waits for the
  * requests that were in flight when it was pressed, by number (`awaitedAfter` of the contract). When none is left,
- * the Play acts, on what the device knows now. The failure of a request sent later, a poll for example, does not
- * start it.
+ * the Play acts, on what the device knows now.
  */
 const settlePendingPlay = (request: number, isListed: boolean): Step => (model) =>
   Option.match(model.maybePendingPlay, {
@@ -760,16 +615,15 @@ const settlePendingPlay = (request: number, isListed: boolean): Step => (model) 
     onSome: ({ episodeId, awaiting }) => {
       const stillAwaiting = awaitedAfter(awaiting, request, isListed)
       return stillAwaiting.length > 0
-        ? { model: modifyFields(model, { maybePendingPlay: () => Option.some({ episodeId, awaiting: stillAwaiting }) }) }
-        : actPlay(episodeId)(modifyFields(model, { maybePendingPlay: () => Option.none() }))
+        ? { model: { ...model, maybePendingPlay: Option.some({ episodeId, awaiting: stillAwaiting }) } }
+        : actPlay(episodeId)({ ...model, maybePendingPlay: Option.none() })
     },
   })
 
 /**
  * The storage read of a start came back. The device's entry is the newer of what storage holds and the server's;
  * with neither, it has none. Only when storage cannot be read is the entry this tab knows used. Then the listener
- * listens to this episode, with a Play to place. A result whose start is no longer the latest playback intent is
- * dropped: a later Pause, Play or seek wins.
+ * listens to this episode, with a Play to place.
  */
 const startFromStored =
   (episodeId: EpisodeId, intent: number, stored: StoredProgress): Step =>
@@ -783,24 +637,23 @@ const startFromStored =
       Unreadable: () => model.localProgress[episodeId] ?? null,
     })
     const { progress } = mergeProgress(local, episode.progress)
-    // Storage is the truth for this device: an entry gone from it (site data cleared) is gone here too.
     const known: Step =
       progress !== null
         ? takeEntry(episodeId, progress)
-        : (stepModel) => ({ model: modifyFields(stepModel, { localProgress: Record.remove(episodeId) }) })
-    return Update.combine(model, [
+        : (stepModel) => ({ model: { ...stepModel, localProgress: Record.remove(stepModel.localProgress, episodeId) } })
+    return combine(model, [
       known,
       (stepModel) => ({
-        model: modifyFields(stepModel, {
-          maybeListening: () =>
-            Option.some({
-              episodeId,
-              wantsPlay: true,
-              isPlayDue: true,
-              maybeSeekMs: Option.none(),
-              maybeFollowedAt: Option.none(),
-            }),
-        }),
+        model: {
+          ...stepModel,
+          maybeListening: Option.some({
+            episodeId,
+            wantsPlay: true,
+            isPlayDue: true,
+            maybeSeekMs: Option.none(),
+            maybeFollowedAt: Option.none(),
+          }),
+        },
       }),
     ])
   }
@@ -819,39 +672,6 @@ const playFrom = (ms: number): Step =>
 const playChapter = (index: number): Step =>
   withLoaded(({ episode }) => (episode.chapters[index] ? playFrom(chapterStartMs(episode.chapters, index)) : unchanged))
 
-/** A message of Narrate again. A queued change closes the screen and refreshes the Library. */
-const narrateAgainStep = (message: NarrateAgainMessage): Step => (model) => {
-  const { model: next, commands, outMessage } = NarrateAgain.update(model, message)
-  if (!outMessage) return { model: next, commands: commands ?? [] }
-  const library = fetchLibrary(next)
-  return { model: library.model, commands: [...(commands ?? []), library.command] }
-}
-
-/** A message of the reader. A click on a Segment plays from its start. Opening Read-along closes Narrate again. */
-const readerStep = (message: ReaderMessage): Step => (model) => {
-  const { model: next, commands, outMessage } = Reader.update(model, message)
-  const closed =
-    message._tag === "ClickedText" && next.reader.view._tag === "Open" && next.narrateAgain.view._tag !== "Closed"
-      ? modifyFields(next, { narrateAgain: (state) => ({ ...state, view: NarrateAgainView.Closed() }) })
-      : next
-  return Update.combine(closed, [
-    (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
-    outMessage ? playFrom(outMessage.positionMs) : unchanged,
-  ])
-}
-
-/** A message of the review screen. Starting narration updates the episode; playing a sample pauses main playback. */
-const reviewStep = (message: ReviewMessage): Step => (model) => {
-  const { model: next, commands, outMessage } = Review.update(model, message)
-  return Update.combine(next, [
-    (stepModel) => ({ model: stepModel, commands: commands ?? [] }),
-    outMessage?.episode
-      ? withEpisodes((list) => list.map((item) => (item.id === outMessage.episode!.id ? outMessage.episode! : item)))
-      : unchanged,
-    outMessage?.pausePlayback ? askPause : unchanged,
-  ])
-}
-
 /** The element stopped though the tab did not tell it to: that is a Pause of the listener. */
 const takeOwnPause: Step = (model) =>
   model.playback._tag === "Loaded" && model.playback.isPlaying
@@ -867,6 +687,257 @@ const shortcut = (name: PlayerShortcut): Step => {
     case "Forward":
       return skip(SKIP_FORWARD_MS)
   }
+}
+
+// SUB-SCREENS
+
+const openReview = (episodeId: EpisodeId): Step => (model) => {
+  const episode = episodes(model).find((item) => item.id === episodeId)
+  if (!episode || episode.job._tag !== "Review") return { model }
+  const openId = model.screenOpens + 1
+  const existingSave = model.reviewSaves[episodeId]
+  const reviewSaves =
+    existingSave !== undefined && !existingSave.isSaving
+      ? Record.remove(model.reviewSaves, episodeId)
+      : existingSave !== undefined
+        ? Record.set(model.reviewSaves, episodeId, { ...existingSave, maybeError: Option.none() })
+        : model.reviewSaves
+  const existingStart = model.reviewStarts[episodeId]
+  const reviewStarts =
+    existingStart !== undefined && !existingStart.isStarting
+      ? Record.remove(model.reviewStarts, episodeId)
+      : model.reviewStarts
+  return {
+    model: {
+      ...model,
+      screen: Screen.Review({ episodeId, openId }),
+      screenOpens: openId,
+      maybeReaderEpisodeId: Option.none(),
+      reviewSaves,
+      reviewStarts,
+    },
+    commands:
+      model.voices.length === 0
+        ? [FetchVoices.make({ connection: model.connection, generation: model.connectionGeneration })]
+        : [],
+  }
+}
+
+const openNarrateAgain = (episodeId: EpisodeId): Step => (model) => {
+  const episode = episodes(model).find((item) => item.id === episodeId)
+  if (!episode || (episode.job._tag !== "Ready" && episode.job._tag !== "Failed")) return { model }
+  const openId = model.screenOpens + 1
+  const existing = model.narrateAgainSubmits[episodeId]
+  const narrateAgainSubmits =
+    existing !== undefined && !existing.isSubmitting
+      ? Record.remove(model.narrateAgainSubmits, episodeId)
+      : model.narrateAgainSubmits
+  return {
+    model: {
+      ...model,
+      screen: Screen.NarrateAgain({ episodeId, openId }),
+      screenOpens: openId,
+      maybeReaderEpisodeId: Option.none(),
+      narrateAgainSubmits,
+    },
+    commands:
+      model.voices.length === 0
+        ? [FetchVoices.make({ connection: model.connection, generation: model.connectionGeneration })]
+        : [],
+  }
+}
+
+const toggleReader: Step = (model) => {
+  if (Option.isSome(model.maybeReaderEpisodeId)) {
+    return { model: { ...model, maybeReaderEpisodeId: Option.none() } }
+  }
+  return Option.match(current(model), {
+    onNone: () => ({ model }),
+    onSome: ({ episode }) =>
+      hasText(episode)
+        ? {
+            model: {
+              ...model,
+              maybeReaderEpisodeId: Option.some(episode.id),
+              // Opening Read-along closes Narrate again, while keeping Review mounted behind it.
+              screen: model.screen._tag === "NarrateAgain" ? Screen.Library() : model.screen,
+            },
+          }
+        : { model },
+  })
+}
+
+const submitSaveReview =
+  (episodeId: EpisodeId, document: Document): Step =>
+  (model) => {
+    const command = SaveDocument.make({ connection: model.connection, episodeId, document }).pipe(
+      Command.match({
+        onSuccess: (saved) => AppMessage.SucceededSaveReview({ episodeId, document: saved }),
+        onFailure: (failure) => AppMessage.FailedSaveReview({ episodeId, failure }),
+      }),
+    )
+    const previousSaved = model.reviewSaves[episodeId]?.maybeSavedDocument ?? Option.none()
+    const existingStart = model.reviewStarts[episodeId]
+    return {
+      model: {
+        ...model,
+        reviewSaves: Record.set(model.reviewSaves, episodeId, {
+          isSaving: true,
+          maybePendingDocument: Option.some(document),
+          maybeSavedDocument: previousSaved,
+          maybeError: Option.none(),
+        }),
+        reviewStarts:
+          existingStart !== undefined && !existingStart.isStarting
+            ? Record.remove(model.reviewStarts, episodeId)
+            : model.reviewStarts,
+      },
+      commands: [command],
+    }
+  }
+
+const submitStartReview =
+  (episodeId: EpisodeId, document: Document, voice?: VoiceRef): Step =>
+  (model) => {
+    const command = StartReviewNarration.make({
+      connection: model.connection,
+      episodeId,
+      document,
+      ...(voice !== undefined ? { voice } : {}),
+    }).pipe(
+      Command.match({
+        onSuccess: (episode) => AppMessage.SucceededStartReview({ episode }),
+        onFailure: (failure) => AppMessage.FailedStartReview({ episodeId, failure }),
+      }),
+    )
+    const existingSave = model.reviewSaves[episodeId]
+    return {
+      model: {
+        ...model,
+        reviewStarts: Record.set(model.reviewStarts, episodeId, {
+          isStarting: true,
+          maybeError: Option.none(),
+        }),
+        reviewSaves:
+          existingSave !== undefined
+            ? Record.set(model.reviewSaves, episodeId, { ...existingSave, maybeError: Option.none() })
+            : model.reviewSaves,
+      },
+      commands: [command],
+    }
+  }
+
+const submitNarrateAgainText =
+  (episodeId: EpisodeId, document: Document): Step =>
+  (model) => {
+    const command = NarrateAgainWithDocument.make({ connection: model.connection, episodeId, document }).pipe(
+      Command.match({
+        onSuccess: () => AppMessage.SucceededNarrateAgain({ episodeId }),
+        onFailure: (failure) => AppMessage.FailedNarrateAgain({ episodeId, target: "text", failure }),
+      }),
+    )
+    return {
+      model: {
+        ...model,
+        narrateAgainSubmits: Record.set(model.narrateAgainSubmits, episodeId, {
+          target: "text" as const,
+          isSubmitting: true,
+          maybeError: Option.none(),
+        }),
+      },
+      commands: [command],
+    }
+  }
+
+const submitNarrateAgainVoice =
+  (episodeId: EpisodeId, input: typeof ChangeVoice.Type): Step =>
+  (model) => {
+    const command = ChangeNarrateAgainVoice.make({ connection: model.connection, episodeId, input }).pipe(
+      Command.match({
+        onSuccess: () => AppMessage.SucceededNarrateAgain({ episodeId }),
+        onFailure: (failure) => AppMessage.FailedNarrateAgain({ episodeId, target: "voice", failure }),
+      }),
+    )
+    return {
+      model: {
+        ...model,
+        narrateAgainSubmits: Record.set(model.narrateAgainSubmits, episodeId, {
+          target: "voice" as const,
+          isSubmitting: true,
+          maybeError: Option.none(),
+        }),
+      },
+      commands: [command],
+    }
+  }
+
+/** Closes a sub-screen or Read-along when its backing episode or playback state no longer supports it. */
+const reconcileScreen: Step = (model) => {
+  let screen = model.screen
+  switch (screen._tag) {
+    case "Library":
+      break
+    case "Review": {
+      const id = screen.episodeId
+      const episode = episodes(model).find((item) => item.id === id)
+      if (!episode || episode.job._tag !== "Review") screen = Screen.Library()
+      break
+    }
+    case "NarrateAgain": {
+      const id = screen.episodeId
+      const episode = episodes(model).find((item) => item.id === id)
+      if (!episode || (episode.job._tag !== "Ready" && episode.job._tag !== "Failed")) screen = Screen.Library()
+      break
+    }
+  }
+
+  const maybeReaderEpisodeId = Option.filter(model.maybeReaderEpisodeId, (id) =>
+    Option.exists(current(model), ({ episode }) => episode.id === id && hasText(episode)),
+  )
+  const isInReview = (id: string) =>
+    episodes(model).some((episode) => episode.id === id && episode.job._tag === "Review")
+  const canNarrateAgain = (id: string) =>
+    episodes(model).some(
+      (episode) => episode.id === id && (episode.job._tag === "Ready" || episode.job._tag === "Failed"),
+    )
+  const filterRecord = <T>(record: Record<string, T>, keep: (id: string) => boolean): Record<string, T> => {
+    let changed = false
+    for (const id of Object.keys(record)) {
+      if (!keep(id)) {
+        changed = true
+        break
+      }
+    }
+    if (!changed) return record
+    const next: Record<string, T> = {}
+    for (const [id, value] of Object.entries(record)) {
+      if (keep(id)) next[id] = value
+    }
+    return next
+  }
+  const reviewSaves = filterRecord(model.reviewSaves, isInReview)
+  const reviewVoices = filterRecord(model.reviewVoices, isInReview)
+  const reviewStarts = filterRecord(model.reviewStarts, isInReview)
+  const narrateAgainSubmits = filterRecord(model.narrateAgainSubmits, canNarrateAgain)
+
+  return screen === model.screen &&
+    Option.getOrNull(maybeReaderEpisodeId) === Option.getOrNull(model.maybeReaderEpisodeId) &&
+    reviewSaves === model.reviewSaves &&
+    reviewVoices === model.reviewVoices &&
+    reviewStarts === model.reviewStarts &&
+    narrateAgainSubmits === model.narrateAgainSubmits
+    ? { model }
+    : {
+        model: {
+          ...model,
+          screen,
+          maybeReaderEpisodeId,
+          reviewSaves,
+          reviewVoices,
+          reviewStarts,
+          narrateAgainSubmits,
+        },
+      }
 }
 
 // RECONCILE
@@ -891,47 +962,25 @@ const isSameListening = (a: Listening, b: Listening) =>
 /** Nothing is listened to, or the episode is gone from the library: the audio stops. */
 const stopPlayback: Step = (model) => {
   if (model.playback._tag === "Stopped" && Option.isNone(model.maybeListening)) {
-    return model.isSaveDue ? { model: modifyFields(model, { isSaveDue: () => false }) } : { model }
+    return model.isSaveDue ? { model: { ...model, isSaveDue: false } } : { model }
   }
   return {
-    model: modifyFields(model, {
-      playback: () => Playback.Stopped(),
-      loadedChapterDurationMs: () => null,
-      maybeListening: () => Option.none(),
-      isSaveDue: () => false,
-      maybeScrubMs: () => Option.none(),
-      picker: (picker) => (picker._tag === "Open" && picker.pickerId === "Chapters" ? Picker.Closed() : picker),
-    }),
-    commands: model.playback._tag === "Loaded" ? [StopAudio()] : [],
+    model: {
+      ...model,
+      playback: Playback.Stopped(),
+      loadedChapterDurationMs: null,
+      maybeListening: Option.none(),
+      isSaveDue: false,
+      maybeScrubMs: Option.none(),
+    },
+    commands: model.playback._tag === "Loaded" ? [StopAudio.make({})] : [],
   }
 }
 
 /**
- * The one step that decides playback. It runs after every Message, on the Model alone. From the intent and the
+ * The one step that decides playback. Runs after every Message, on the Model alone. From the intent and the
  * facts it works out the target (the episode, the chapter, the offset, and playing, paused or waiting), compares
  * it with what the audio element has, and returns at most one audio Command and at most one save.
- *
- * Where the listener is:
- *
- * - a seek puts them where they asked;
- * - audio that plays what they asked for leads: a newer entry of another device does not move it;
- * - a player whose audio does not play (paused, held for the library, waiting for a chapter) moves to a device
- *   entry it does not follow yet. That is each newer entry of the server or of storage. So listening never goes
- *   on, and nothing is stamped, from a place another device moved on from. An entry past the end of the listed
- *   audio is followed only when a later list has that audio;
- * - else they are where the audio rests.
- *
- * What the audio does there, by `playStart` of the contract on the chapters and the job the library lists now:
- *
- * - a Play that has no place yet (pressed, released by the library, or moved to a newer entry) starts at 0 on a
- *   finished position, waits at the end of the chapters of a job that still works, and plays every other place;
- * - a Play that ran out of audio (a chapter ended, or it waits) plays the audio listed from there on, waits while
- *   the job still works, and is over when the job ended: that was the end of the episode;
- * - with no Play, the audio rests.
- *
- * What is stamped: the place of an episode the listener left, a seek, the end of the episode, a pause, and the
- * place every 5 s and when the page hides. A place the device already holds is not stamped again. A player that
- * moved to a newer entry stamps nothing, and neither does one whose Play waits for the library.
  */
 const reconcile: Step = (model) => {
   const maybeEpisode = Option.flatMap(model.maybeListening, (listening) =>
@@ -943,7 +992,6 @@ const reconcile: Step = (model) => {
   const { chapters, job } = episode
   const lengthMs = totalMs(chapters)
   const playback = model.playback
-  /** What the element has of this episode, and of the episode the listener left. */
   const here = playback._tag === "Loaded" && playback.episodeId === episode.id ? playback : undefined
   const left = playback._tag === "Loaded" && playback.episodeId !== episode.id ? playback : undefined
   const heardMs = here ? globalMs(here, episode) : undefined
@@ -951,7 +999,6 @@ const reconcile: Step = (model) => {
   const isStamping = model.stamping[episode.id] !== undefined
   const maybeSeekMs = Option.map(listening.maybeSeekMs, (ms) => Math.min(Math.max(0, ms), lengthMs))
   const isSeek = Option.isSome(maybeSeekMs)
-  /** The audio plays what the listener asked for. */
   const isOn = here !== undefined && here.isPlaying && listening.wantsPlay && !listening.isPlayDue
 
   // Where the listener is.
@@ -960,21 +1007,18 @@ const reconcile: Step = (model) => {
   const positionMs = Option.getOrElse(maybeSeekMs, () =>
     heardMs === undefined ? (heldMs(model, episode.id) ?? 0) : isMovedToEntry && entry ? entry.positionMs : heardMs,
   )
-  // An entry past the end of the listed audio cannot be reached yet: the audio rests at that end, and the player
-  // keeps moving to the entry as the list grows. Listening and a seek are the listener's own place: they follow.
   const isReached = isOn || isSeek || entry === undefined || entry.positionMs <= lengthMs
   const maybeFollowedAt = isStamping || !isReached ? listening.maybeFollowedAt : Option.fromNullishOr(entry?.updatedAt)
 
   // What the audio does there.
-  const start = playStart(positionMs, chapters, job)
+  const startState = playStart(positionMs, chapters, job)
   const isStart = listening.isPlayDue || (listening.wantsPlay && isMovedToEntry)
-  const isOver = listening.wantsPlay && !(isOn && !isSeek) && !start.isWaiting && !isStart && positionMs >= lengthMs
+  const isOver = listening.wantsPlay && !(isOn && !isSeek) && !startState.isWaiting && !isStart && positionMs >= lengthMs
   const mode: "Playing" | "Waiting" | "Paused" =
-    !listening.wantsPlay || isOver ? "Paused" : isOn && !isSeek ? "Playing" : start.isWaiting ? "Waiting" : "Playing"
-  const placeMs = mode === "Playing" && isStart ? start.positionMs : positionMs
+    !listening.wantsPlay || isOver ? "Paused" : isOn && !isSeek ? "Playing" : startState.isWaiting ? "Waiting" : "Playing"
+  const placeMs = mode === "Playing" && isStart ? startState.positionMs : positionMs
 
-  // Where the audio must be. Audio that rests, waits or plays on stays in its place: only a reason moves it.
-  // A late shorter list may omit the current chapter; only a listed chapter with a different URL counts as replaced.
+  // Where the audio must be.
   const listed = here !== undefined ? chapters[here.chapter] : undefined
   const isReplaced = here !== undefined && listed !== undefined && listed.url !== here.url
   const isPlaced = here === undefined || isSeek || isMovedToEntry || isReplaced || (mode === "Playing" && !(isOn && !isSeek))
@@ -990,28 +1034,32 @@ const reconcile: Step = (model) => {
       : undefined
   const target =
     replacedTarget ?? (isPlaced || here === undefined ? locate(chapters, placeMs) : { index: here.chapter, offsetMs: here.offsetMs })
-  /** The file to load. Audio that stays in its place has its file already, also when a late list no longer has it. */
   const file = chapters[target.index]
   const hasFile = isPlaced ? file !== undefined : true
   const isPlaying = mode === "Playing" && hasFile
 
   // At most one audio Command, and it is absolute.
   const load = (chapter: { readonly url: string }) =>
-    LoadChapter({ src: model.connection.origin + chapter.url, offsetMs: target.offsetMs, rate: model.rate, isAutoplay: isPlaying })
-  const audio =
+    LoadChapter.make({
+      src: model.connection.origin + chapter.url,
+      offsetMs: target.offsetMs,
+      rate: model.rate,
+      isAutoplay: isPlaying,
+    })
+  const audio: ReadonlyArray<AppCommand> =
     file === undefined || !isPlaced
       ? here !== undefined && here.isPlaying !== isPlaying && hasFile
-        ? [isPlaying ? PlayAudio() : PauseAudio()]
+        ? [isPlaying ? PlayAudio.make({}) : PauseAudio.make({})]
         : here?.isPlaying && !hasFile
-          ? [PauseAudio()]
+          ? [PauseAudio.make({})]
           : []
       : here === undefined || here.chapter !== target.index || here.url !== file.url
         ? [load(file)]
         : Math.abs(here.offsetMs - target.offsetMs) >= 1
-          ? [isPlaying === here.isPlaying && !isStart ? SeekAudio({ offsetMs: target.offsetMs }) : load(file)]
+          ? [isPlaying === here.isPlaying && !isStart ? SeekAudio.make({ offsetMs: target.offsetMs }) : load(file)]
           : isPlaying === here.isPlaying
             ? []
-            : [isPlaying ? PlayAudio() : PauseAudio()]
+            : [isPlaying ? PlayAudio.make({}) : PauseAudio.make({})]
 
   // At most one save.
   const isNew = (episodeId: EpisodeId, ms: number) => heldMs(model, episodeId) !== Math.max(0, Math.round(ms))
@@ -1062,28 +1110,30 @@ const reconcile: Step = (model) => {
   return {
     model: isUnchanged
       ? model
-      : modifyFields(model, {
-          playback: () => (isSamePlayback(playback, nextPlayback) ? playback : nextPlayback),
-          loadedChapterDurationMs: () => nextLoadedDurationMs,
-          maybeListening: () => (isSameListening(listening, nextListening) ? model.maybeListening : Option.some(nextListening)),
-          isSaveDue: () => false,
-          stamping: (stamping) =>
-            stamp ? Record.set(stamping, stamp.episodeId, Math.max(0, Math.round(stamp.positionMs))) : stamping,
-        }),
-    commands: [...(stamp ? [SaveProgress(stamp)] : []), ...audio],
+      : {
+          ...model,
+          playback: isSamePlayback(playback, nextPlayback) ? playback : nextPlayback,
+          loadedChapterDurationMs: nextLoadedDurationMs,
+          maybeListening: isSameListening(listening, nextListening) ? model.maybeListening : Option.some(nextListening),
+          isSaveDue: false,
+          stamping: stamp
+            ? Record.set(model.stamping, stamp.episodeId, Math.max(0, Math.round(stamp.positionMs)))
+            : model.stamping,
+        },
+    commands: [...(stamp ? [SaveProgress.make(stamp)] : []), ...audio],
   }
 }
 
 // UPDATE
 
 /** Changes intent and facts for `message`. It sends no audio Command and stamps nothing: `reconcile` does. */
-const handle = (model: Model, message: Message): UpdateReturn =>
-  Message.match<UpdateReturn>(message, {
+const handle = (model: AppModel, message: AppMessage): StepReturn =>
+  AppMessage.match(message, {
     SucceededFetchEpisodes: ({ generation, request, episodes: list }) => {
       const isListed = isCurrent(model, generation)
       const answered = answerLibrary(model, request)
       return isListed
-        ? Update.combine(modifyFields(answered, { maybeLibraryFailure: () => Option.none() }), [
+        ? combine({ ...answered, maybeLibraryFailure: Option.none() }, [
             withEpisodes(() => list),
             syncProgress,
             settlePendingPlay(request, true),
@@ -1091,140 +1141,399 @@ const handle = (model: Model, message: Message): UpdateReturn =>
         : settlePendingPlay(request, false)(answered)
     },
     FailedFetchEpisodes: ({ generation, request, failure }) => {
-      // When each request a Play waited for has failed, it starts from what the tab knows.
       const answered = answerLibrary(model, request)
       if (!isCurrent(model, generation)) return settlePendingPlay(request, false)(answered)
       const wasUnauthorized = Option.exists(model.maybeLibraryFailure, (previous) => previous.status === 401)
-      return Update.combine(modifyFields(answered, { maybeLibraryFailure: () => Option.some(failure) }), [
-        failure.status === 401 && !wasUnauthorized ? openSettings : unchanged,
-        settlePendingPlay(request, false),
-      ])
+      const autoOpen = failure.status === 401 && !wasUnauthorized && !answered.isSettingsOpen
+      const withFailure: AppModel = {
+        ...answered,
+        maybeLibraryFailure: Option.some(failure),
+        isSettingsOpen: failure.status === 401 && !wasUnauthorized ? true : answered.isSettingsOpen,
+        settingsOpens: autoOpen ? answered.settingsOpens + 1 : answered.settingsOpens,
+      }
+      return settlePendingPlay(request, false)(withFailure)
     },
-    SucceededFetchVoices: ({ voices }) => ({ model: modifyFields(model, { voices: () => voices }) }),
+    SucceededFetchVoices: ({ generation, voices }) =>
+      isCurrent(model, generation) ? { model: { ...model, voices } } : { model },
     FailedFetchVoices: () => ({ model }),
     ClickedTryAgain: () => fetchEpisodes(model),
     TickedPoll: () => fetchEpisodes(model),
     BecameVisible: () => fetchEpisodes(model),
-    HidPage: () => ({ model: modifyFields(model, { isSaveDue: () => true }) }),
+    HidPage: () => ({ model: { ...model, isSaveDue: true } }),
 
     UpdatedAddText: ({ value }) => ({
-      model: modifyFields(model, { addText: () => value, maybeAddError: () => Option.none() }),
+      model: { ...model, addText: value, maybeAddError: Option.none() },
     }),
     PressedEnterInAddText: () => submitAdd(model),
     SubmittedAddForm: () => submitAdd(model),
-    ToggledAddReview: () => ({ model: modifyFields(model, { isReviewOn: (on) => !on }) }),
+    ToggledAddReview: ({ checked }) => ({ model: { ...model, isReviewOn: checked } }),
     ChangedFileInput: ({ files }) => attachFiles(files)(model),
     ClickedRemoveFile: ({ key }) => withBatch((batch) => Batch.remove(batch, key))(model),
     ClickedRetryFile: ({ key }) =>
-      Update.combine(model, [withBatch((batch) => Batch.retry(batch, key)), startNextUpload]),
-    EnteredFileDrag: () => ({ model: modifyFields(model, { fileDragDepth: (depth) => depth + 1 }) }),
-    LeftFileDrag: () => ({ model: modifyFields(model, { fileDragDepth: (depth) => Math.max(0, depth - 1) }) }),
-    DroppedFiles: ({ files }) => attachFiles(files)(modifyFields(model, { fileDragDepth: () => 0 })),
+      combine(model, [withBatch((batch) => Batch.retry(batch, key)), startNextUpload]),
+    EnteredFileDrag: () => ({ model: { ...model, fileDragDepth: model.fileDragDepth + 1 } }),
+    LeftFileDrag: () => ({ model: { ...model, fileDragDepth: Math.max(0, model.fileDragDepth - 1) } }),
+    DroppedFiles: ({ files }) => attachFiles(files)({ ...model, fileDragDepth: 0 }),
     SucceededCreateEpisode: ({ episode }) =>
-      Update.combine(model, [
+      combine(model, [
         (stepModel) => ({
-          model: modifyFields(stepModel, { addText: () => "", isAdding: () => false }),
-          commands: [FocusAddText()],
+          model: { ...stepModel, addText: "", isAdding: false },
+          commands: [focusAddText()],
         }),
         withEpisodes((list) => [episode, ...list.filter((item) => item.id !== episode.id)]),
       ]),
     FailedCreateEpisode: ({ failure }) => ({
-      model: modifyFields(model, { isAdding: () => false, maybeAddError: () => Option.some(failure.message) }),
+      model: { ...model, isAdding: false, maybeAddError: Option.some(failure.message) },
     }),
     SucceededUploadFile: ({ key, episode }) =>
-      Update.combine(model, [
+      combine(model, [
         withBatch((batch) => Batch.succeed(batch, key)),
         withEpisodes((list) => [episode, ...list.filter((item) => item.id !== episode.id)]),
         startNextUpload,
       ]),
     FailedUploadFile: ({ key, failure }) =>
-      Update.combine(model, [withBatch((batch) => Batch.fail(batch, key, failure.message)), startNextUpload]),
-    CompletedMountFilePickerKeys: () => ({ model }),
-    CompletedFocusAddText: () => ({ model }),
+      combine(model, [withBatch((batch) => Batch.fail(batch, key, failure.message)), startNextUpload]),
 
-    ClickedPickerTrigger: ({ pickerId }) =>
-      model.picker._tag === "Open" && model.picker.pickerId === pickerId
-        ? closePicker(false)(model)
-        : openPicker(pickerId, Option.none())(model),
-    PressedPickerTriggerKey: ({ pickerId, key }) => pressPickerTriggerKey(pickerId, key)(model),
-    PressedPickerKey: ({ key }) => pressPickerKey(key)(model),
-    ClickedPickerItem: ({ pickerId, index }) => selectPickerItem(pickerId, index)(model),
-    ClickedPickerBackdrop: () => closePicker(false)(model),
-    CompletedFocusPicker: () => ({ model }),
-    CompletedFocusPickerTrigger: () => ({ model }),
-    CompletedScrollPickerItem: () => ({ model }),
-    CompletedAnchorPicker: () => ({ model }),
-    CompletedWaitBeforeResetTypeAhead: ({ keys }) => resetTypeAhead(keys)(model),
+    PickedVoice: ({ value }) => pickVoice(value)(model),
+    PickedVoiceSpeed: ({ value }) => pickVoiceSpeed(value)(model),
+    PickedPlaybackSpeed: ({ value }) => pickPlaybackSpeed(value)(model),
+    PickedChapter: ({ value }) => pickChapter(value)(model),
 
     ClickedPlayEpisode: ({ episodeId }) =>
       Option.match(Option.fromNullishOr(episodes(model).find((item) => item.id === episodeId)), {
         onNone: () => ({ model }),
         onSome: (episode) => start(episode)(model),
       }),
+    ClickedOpenReview: ({ episodeId }) => openReview(episodeId)(model),
+    ClickedOpenNarrateAgain: ({ episodeId }) => openNarrateAgain(episodeId)(model),
     ClickedRetry: ({ episodeId }) => ({
-      model: modifyFields(model, { rowErrors: Record.remove(episodeId) }),
-      commands: [RetryEpisode({ connection: model.connection, episodeId })],
+      model: { ...model, rowErrors: Record.remove(model.rowErrors, episodeId) },
+      commands: [RetryEpisode.make({ connection: model.connection, episodeId })],
     }),
     SucceededRetryEpisode: ({ episode }) =>
       withEpisodes((list) => list.map((item) => (item.id === episode.id ? episode : item)))(model),
     FailedRetryEpisode: ({ episodeId, failure }) => setRowError(episodeId, failure.message)(model),
     ClickedArmDelete: ({ episodeId }) => ({
-      model: modifyFields(model, { armedDeletes: (ids) => [...ids.filter((id) => id !== episodeId), episodeId] }),
-      commands: [WaitBeforeDisarmDelete({ episodeId }), FocusDeleteConfirm({ episodeId })],
+      model: { ...model, armedDeletes: [...model.armedDeletes.filter((id) => id !== episodeId), episodeId] },
+      commands: [WaitBeforeDisarmDelete.make({ episodeId }), focusDeleteConfirm(episodeId)],
     }),
     ClickedConfirmDelete: ({ episodeId }) => ({
-      model: modifyFields(model, { rowErrors: Record.remove(episodeId) }),
-      commands: [DeleteEpisode({ connection: model.connection, episodeId })],
+      model: { ...model, rowErrors: Record.remove(model.rowErrors, episodeId) },
+      commands: [DeleteEpisode.make({ connection: model.connection, episodeId })],
     }),
     SucceededDeleteEpisode: ({ episodeId }) =>
-      Update.combine(model, [forgetRow(episodeId), withEpisodes((list) => list.filter((item) => item.id !== episodeId))]),
+      combine(model, [forgetRow(episodeId), withEpisodes((list) => list.filter((item) => item.id !== episodeId))]),
     FailedDeleteEpisode: ({ episodeId, failure }) => setRowError(episodeId, failure.message)(model),
     CompletedWaitBeforeDisarmDelete: ({ episodeId }) => ({
-      model: modifyFields(model, { armedDeletes: (ids) => ids.filter((id) => id !== episodeId) }),
+      model: { ...model, armedDeletes: model.armedDeletes.filter((id) => id !== episodeId) },
     }),
-    CompletedFocusDeleteConfirm: () => ({ model }),
 
-    GotNarrateAgainMessage: ({ message: narrateAgainMessage }) => narrateAgainStep(narrateAgainMessage)(model),
-    GotReaderMessage: ({ message: readerMessage }) => readerStep(readerMessage)(model),
-    GotReviewMessage: ({ message: reviewMessage }) => reviewStep(reviewMessage)(model),
-
-    ClickedSettings: () => openSettings(model),
-    GotSettingsDialogMessage: ({ message: dialogMessage }) => foldSettingsDialog(model, dialogMessage),
-    UpdatedTokenDraft: ({ value }) => ({
-      model: modifyFields(model, {
-        settingsDraft: (draft) => modifyFields(draft, { token: () => value }),
-      }),
-    }),
-    UpdatedOriginDraft: ({ value }) => ({
-      model: modifyFields(model, { settingsDraft: (draft) => modifyFields(draft, { origin: () => value }) }),
-    }),
-    SubmittedSettings: () => saveSettings(model),
-    ChangedStoredSettings: (settings) => followStoredSettings(settings)(model),
-    SucceededFetchFeed: ({ request, url }) => setFeed(request, Feed.Ready({ url }))(model),
-    FailedFetchFeed: ({ request, failure }) =>
-      setFeed(request, failure.status === 401 ? Feed.Loading() : Feed.Failed({ message: failure.message }))(model),
-    ClickedCopyFeedUrl: () =>
-      model.feed._tag === "Ready" ? { model, commands: [CopyFeedUrl({ url: model.feed.url })] } : { model },
-    SucceededCopyFeedUrl: () => {
-      if (model.isFeedUrlCopied) return { model }
-      const copy = model.feedUrlCopies + 1
+    ClosedSubScreen: () => {
+      let reviewSaves = model.reviewSaves
+      let reviewStarts = model.reviewStarts
+      let narrateAgainSubmits = model.narrateAgainSubmits
+      if (model.screen._tag === "Review") {
+        const id = model.screen.episodeId
+        const existingSave = reviewSaves[id]
+        if (existingSave !== undefined && !existingSave.isSaving) {
+          reviewSaves = Record.remove(reviewSaves, id)
+        }
+        const existingStart = reviewStarts[id]
+        if (existingStart !== undefined && !existingStart.isStarting) {
+          reviewStarts = Record.remove(reviewStarts, id)
+        }
+      } else if (model.screen._tag === "NarrateAgain") {
+        const id = model.screen.episodeId
+        const existing = narrateAgainSubmits[id]
+        if (existing !== undefined && !existing.isSubmitting) {
+          narrateAgainSubmits = Record.remove(narrateAgainSubmits, id)
+        }
+      }
       return {
-        model: modifyFields(model, { isFeedUrlCopied: () => true, feedUrlCopies: () => copy }),
-        commands: [WaitBeforeResetCopied({ copy })],
+        model: {
+          ...model,
+          screen: Screen.Library(),
+          reviewSaves,
+          reviewStarts,
+          narrateAgainSubmits,
+        },
       }
     },
-    FailedCopyFeedUrl: () => ({ model }),
-    CompletedWaitBeforeResetCopied: ({ copy }) =>
-      copy === model.feedUrlCopies ? { model: modifyFields(model, { isFeedUrlCopied: () => false }) } : { model },
-    CompletedStoreSetting: () => ({ model }),
+    SubmittedSaveReview: ({ episodeId, document }) => submitSaveReview(episodeId, document)(model),
+    SucceededSaveReview: ({ episodeId, document }) => ({
+      model: {
+        ...model,
+        reviewSaves:
+          model.screen._tag === "Review" && model.screen.episodeId === episodeId
+            ? Record.set(model.reviewSaves, episodeId, {
+                isSaving: false,
+                maybePendingDocument: Option.none(),
+                maybeSavedDocument: Option.some(document),
+                maybeError: Option.none(),
+              })
+            : Record.remove(model.reviewSaves, episodeId),
+      },
+      commands: [InvalidateDocument.make({})],
+    }),
+    FailedSaveReview: ({ episodeId, failure }) => {
+      const previousSaved = model.reviewSaves[episodeId]?.maybeSavedDocument ?? Option.none()
+      return {
+        model: {
+          ...model,
+          reviewSaves:
+            model.screen._tag === "Review" && model.screen.episodeId === episodeId
+              ? Record.set(model.reviewSaves, episodeId, {
+                  isSaving: false,
+                  maybePendingDocument: Option.none(),
+                  maybeSavedDocument: previousSaved,
+                  maybeError: Option.some(failure.message),
+                })
+              : Record.remove(model.reviewSaves, episodeId),
+        },
+      }
+    },
+    SubmittedStartReview: ({ episodeId, document, voice }) => submitStartReview(episodeId, document, voice)(model),
+    SucceededStartReview: ({ episode }) =>
+      combine(
+        {
+          ...model,
+          screen:
+            model.screen._tag === "Review" && model.screen.episodeId === episode.id
+              ? Screen.Library()
+              : model.screen,
+          reviewSaves: Record.remove(model.reviewSaves, episode.id),
+          reviewVoices: Record.remove(model.reviewVoices, episode.id),
+          reviewStarts: Record.remove(model.reviewStarts, episode.id),
+        },
+        [
+          withEpisodes((list) => list.map((item) => (item.id === episode.id ? episode : item))),
+          (stepModel) => ({
+            model: stepModel,
+            commands: [InvalidateDocument.make({})],
+          }),
+        ],
+      ),
+    FailedStartReview: ({ episodeId, failure }) => ({
+      model: {
+        ...model,
+        reviewStarts:
+          model.screen._tag === "Review" && model.screen.episodeId === episodeId
+            ? Record.set(model.reviewStarts, episodeId, {
+                isStarting: false,
+                maybeError: Option.some(failure.message),
+              })
+            : Record.remove(model.reviewStarts, episodeId),
+      },
+    }),
+    ClearedReviewError: ({ episodeId }) => {
+      const existingSave = model.reviewSaves[episodeId]
+      const existingStart = model.reviewStarts[episodeId]
+      return {
+        model: {
+          ...model,
+          reviewSaves:
+            existingSave !== undefined
+              ? Record.set(model.reviewSaves, episodeId, { ...existingSave, maybeError: Option.none() })
+              : model.reviewSaves,
+          reviewStarts:
+            existingStart !== undefined && !existingStart.isStarting
+              ? Record.remove(model.reviewStarts, episodeId)
+              : model.reviewStarts,
+        },
+      }
+    },
+    RequestedChangeReviewVoice: ({ episodeId, voice, speed }) => {
+      const existing = model.reviewVoices[episodeId]
+      if (existing !== undefined && existing.isSaving) {
+        return {
+          model: {
+            ...model,
+            reviewVoices: Record.set(model.reviewVoices, episodeId, {
+              ...existing,
+              voice,
+              maybeQueued: Option.some({ voice, speed, origin: model.connection.origin }),
+              maybeError: Option.none(),
+            }),
+          },
+        }
+      }
+      const request = model.reviewVoiceRequests + 1
+      return {
+        model: {
+          ...model,
+          reviewVoiceRequests: request,
+          reviewVoices: Record.set(model.reviewVoices, episodeId, {
+            request,
+            voice,
+            isSaving: true,
+            maybeQueued: Option.none(),
+            maybeError: Option.none(),
+          }),
+        },
+        commands: [ChangeReviewVoice.make({ connection: model.connection, episodeId, request, voice, speed })],
+      }
+    },
+    SucceededChangeReviewVoice: ({ episodeId, origin, request, voice, speed }) => {
+      const currentVoice = model.reviewVoices[episodeId]
+      const applyEpisode: Step =
+        origin === model.connection.origin
+          ? withEpisodes((list) =>
+              list.map((item) =>
+                item.id === episodeId && item.job._tag === "Review" ? { ...item, voice, speed } : item,
+              ),
+            )
+          : unchanged
+      if (currentVoice === undefined || currentVoice.request !== request) {
+        return applyEpisode(model)
+      }
+      return Option.match(currentVoice.maybeQueued, {
+        onNone: () =>
+          combine({ ...model, reviewVoices: Record.remove(model.reviewVoices, episodeId) }, [applyEpisode]),
+        onSome: (queued) => {
+          if (queued.origin !== model.connection.origin) {
+            return combine({ ...model, reviewVoices: Record.remove(model.reviewVoices, episodeId) }, [applyEpisode])
+          }
+          const nextRequest = model.reviewVoiceRequests + 1
+          return combine(
+            {
+              ...model,
+              reviewVoiceRequests: nextRequest,
+              reviewVoices: Record.set(model.reviewVoices, episodeId, {
+                request: nextRequest,
+                voice: queued.voice,
+                isSaving: true,
+                maybeQueued: Option.none(),
+                maybeError: Option.none(),
+              }),
+            },
+            [
+              applyEpisode,
+              (stepModel) => ({
+                model: stepModel,
+                commands: [
+                  ChangeReviewVoice.make({
+                    connection: stepModel.connection,
+                    episodeId,
+                    request: nextRequest,
+                    voice: queued.voice,
+                    speed: queued.speed,
+                  }),
+                ],
+              }),
+            ],
+          )
+        },
+      })
+    },
+    FailedChangeReviewVoice: ({ episodeId, request, voice, failure }) => {
+      const currentVoice = model.reviewVoices[episodeId]
+      if (currentVoice === undefined || currentVoice.request !== request) return { model }
+      return Option.match(currentVoice.maybeQueued, {
+        onNone: () => ({
+          model: {
+            ...model,
+            reviewVoices: Record.set(model.reviewVoices, episodeId, {
+              request,
+              voice,
+              isSaving: false,
+              maybeQueued: Option.none(),
+              maybeError: Option.some(failure.message),
+            }),
+          },
+        }),
+        onSome: (queued) => {
+          if (queued.origin !== model.connection.origin) {
+            return { model: { ...model, reviewVoices: Record.remove(model.reviewVoices, episodeId) } }
+          }
+          const nextRequest = model.reviewVoiceRequests + 1
+          return {
+            model: {
+              ...model,
+              reviewVoiceRequests: nextRequest,
+              reviewVoices: Record.set(model.reviewVoices, episodeId, {
+                request: nextRequest,
+                voice: queued.voice,
+                isSaving: true,
+                maybeQueued: Option.none(),
+                maybeError: Option.none(),
+              }),
+            },
+            commands: [
+              ChangeReviewVoice.make({
+                connection: model.connection,
+                episodeId,
+                request: nextRequest,
+                voice: queued.voice,
+                speed: queued.speed,
+              }),
+            ],
+          }
+        },
+      })
+    },
+    RequestedPauseMainPlayback: () => askPause(model),
+    SubmittedNarrateAgainText: ({ episodeId, document }) => submitNarrateAgainText(episodeId, document)(model),
+    SubmittedNarrateAgainVoice: ({ episodeId, input }) => submitNarrateAgainVoice(episodeId, input)(model),
+    SucceededNarrateAgain: ({ episodeId }) =>
+      combine(
+        {
+          ...model,
+          screen:
+            model.screen._tag === "NarrateAgain" && model.screen.episodeId === episodeId
+              ? Screen.Library()
+              : model.screen,
+          narrateAgainSubmits: Record.remove(model.narrateAgainSubmits, episodeId),
+        },
+        [
+          fetchEpisodes,
+          (stepModel) => ({
+            model: stepModel,
+            commands: [InvalidateDocument.make({})],
+          }),
+        ],
+      ),
+    FailedNarrateAgain: ({ episodeId, target, failure }) => {
+      const nextModel: AppModel = {
+        ...model,
+        narrateAgainSubmits:
+          model.screen._tag === "NarrateAgain" && model.screen.episodeId === episodeId
+            ? Record.set(model.narrateAgainSubmits, episodeId, {
+                target,
+                isSubmitting: false,
+                maybeError: Option.some(failure.message),
+              })
+            : Record.remove(model.narrateAgainSubmits, episodeId),
+      }
+      return failure.status === 409 || failure.status === 404 ? fetchEpisodes(nextModel) : { model: nextModel }
+    },
+    ClearedNarrateAgainError: ({ episodeId, target }) => {
+      const existing = model.narrateAgainSubmits[episodeId]
+      return existing !== undefined && !existing.isSubmitting && existing.target === target
+        ? { model: { ...model, narrateAgainSubmits: Record.remove(model.narrateAgainSubmits, episodeId) } }
+        : { model }
+    },
+    ClickedToggleReader: () => toggleReader(model),
+    RequestedPlayFromReader: ({ positionMs }) => playFrom(positionMs)(model),
+
+    RequestedOpenSettings: () => ({
+      model: {
+        ...model,
+        isSettingsOpen: true,
+        settingsOpens: model.isSettingsOpen ? model.settingsOpens : model.settingsOpens + 1,
+      },
+    }),
+    RequestedCloseSettings: () => ({ model: { ...model, isSettingsOpen: false } }),
+    SavedSettings: ({ connection }) => saveSettings(connection)(model),
+    ChangedStoredSettings: (settings) => followStoredSettings(settings)(model),
 
     ClickedPlayPause: () => toggle(model),
     ClickedSkip: ({ deltaMs }) => skip(deltaMs)(model),
-    UpdatedScrub: ({ value }) => ({ model: modifyFields(model, { maybeScrubMs: () => Option.some(Number(value)) }) }),
+    UpdatedScrub: ({ value }) => ({ model: { ...model, maybeScrubMs: Option.some(Number(value)) } }),
     CommittedScrub: ({ value }) =>
-      withLoaded(({ episode }) => seek(scrubTargetMs(episode.chapters, Number(value))))(
-        modifyFields(model, { maybeScrubMs: () => Option.none() }),
-      ),
+      withLoaded(({ episode }) => seek(scrubTargetMs(episode.chapters, Number(value))))({
+        ...model,
+        maybeScrubMs: Option.none(),
+      }),
     PressedPlayerShortcut: ({ shortcut: name }) => shortcut(name)(model),
     PressedMediaPlay: () => (wantsPlay(model) ? { model } : toggle(model)),
     PressedMediaPause: () => (wantsPlay(model) ? askPause(model) : cancelPlay(model)),
@@ -1241,26 +1550,18 @@ const handle = (model: Model, message: Message): UpdateReturn =>
     StartedAudio: () => setPlayback({ isPlaying: true })(model),
     PausedAudio: () => takeOwnPause(model),
     EndedChapter: () => endChapter(model),
-    CompletedLoadChapter: () => ({ model }),
-    // The browser refused to play: the Play is off, and the element rests.
     FailedPlayAudio: () =>
-      Update.combine(model, [setPlayback({ isPlaying: false }), setListening({ wantsPlay: false, isPlayDue: false })]),
-    CompletedPlayAudio: () => ({ model }),
-    CompletedPauseAudio: () => ({ model }),
-    CompletedSeekAudio: () => ({ model }),
-    CompletedSetAudioRate: () => ({ model }),
-    CompletedStopAudio: () => ({ model }),
+      combine(model, [setPlayback({ isPlaying: false }), setListening({ wantsPlay: false, isPlayDue: false })]),
     GotStoredProgress: ({ episodeId, intent, stored }) => startFromStored(episodeId, intent, stored)(model),
 
     SavedProgress: ({ episodeId, progress }) => takeStamp(episodeId, progress)(model),
     SucceededPushProgress: ({ episodeId, sent, stored }) => takePushAnswer(episodeId, sent, stored)(model),
     FailedPushProgress: () => ({ model }),
-    CompletedStoreProgress: () => ({ model }),
   })
 
 /**
- * Every Message goes three steps: `handle` changes intent and facts, `reconcile` decides what the audio does, and the
- * reader's `reconcile` loads text and keeps the mark in sight.
+ * Every Message goes three steps: `handle` changes intent and facts, `reconcile` decides what the audio does, and
+ * `reconcileScreen` closes any sub-screen whose backing episode or playback state went away.
  */
-export const update = (model: Model, message: Message): UpdateReturn =>
-  Update.combine(model, [(start) => handle(start, message), reconcile, NarrateAgain.reconcile, Reader.reconcile, Review.reconcile])
+export const updateApp = (model: AppModel, message: AppMessage): UpdateResult =>
+  combine(model, [(startModel) => handle(startModel, message), reconcile, reconcileScreen])

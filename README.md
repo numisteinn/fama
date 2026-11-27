@@ -71,7 +71,7 @@ pnpm --filter @fama/infra exec alchemy destroy --stage home
 | `packages/contracts` | The HTTP contract as Effect Schema. `docs/api.md` is the same contract in words. |
 | `infra` | Alchemy stack and `fama setup` for a self-hosted deployment. |
 | `apps/api` | Cloudflare Worker: API, D1, R2, RSS feed. |
-| `apps/web` | Vite + Foldkit web app (The Elm Architecture on Effect). |
+| `apps/web` | Vite + Effect UI web app (The Elm Architecture on Effect). |
 | `apps/mobile` | Expo iOS app. |
 | `worker` | Python worker: extraction and TTS. |
 
