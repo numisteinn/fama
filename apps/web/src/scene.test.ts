@@ -22,7 +22,6 @@ import {
 import { Picker, PickerEvents } from "~/ui/Picker"
 import {
   CopyFeedUrl,
-  SettingsDialog,
   SettingsForm,
   SettingsFormEvents,
   SettingsFormMessage,

@@ -1,7 +1,7 @@
 import { EpisodeId, type Episode, type JobState } from "@fama/contracts"
 import { UiSchema } from "@effect/ui"
 import type { Html } from "@effect/ui/html"
-import { Option, Schema } from "effect"
+import { Option } from "effect"
 import { type ApiFailure } from "~/core/api"
 import { totalMs } from "~/core/timeline"
 import { formatDuration } from "~/lib/format"

@@ -17,12 +17,6 @@
             "allow": [
                 "api/<root> <-> api/routes",
                 "mobile/lib <-> mobile/player",
-                "web/<root> <-> web/components",
-                "web/<root> <-> web/reader",
-                "web/<root> <-> web/review",
-                "web/<root> <-> web/view",
-                "web/components <-> web/view",
-                "web/reader <-> web/view",
                 "worker/<root> <-> worker/engines",
                 "worker/<root> <-> worker/extract"
             ]
@@ -49,26 +43,10 @@
             ]
         },
         {
-            "name": "max-lines",
-            "kind": "max-lines",
-            "threshold": 400,
-            "allow": [
-                "apps/web/src/update.ts",
-                "apps/web/src/reader/ReaderScreen.ts",
-                "apps/web/src/review/NarrateAgainScreen.ts",
-                "apps/web/src/review/ReviewScreen.ts",
-                "apps/web/src/review/VoiceSamples.ts",
-                "apps/api/src/episode-repo.ts",
-                "worker/src/fama_worker/extract/pdf.py"
-            ]
-        },
-        {
             "name": "max-exports",
             "kind": "max-exports",
             "threshold": 25,
             "allow": [
-                "apps/web/src/command.ts",
-                "apps/web/src/model.ts",
                 "packages/contracts/src/index.ts"
             ]
         }

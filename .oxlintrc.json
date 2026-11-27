@@ -1,0 +1,63 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import"],
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/.wrangler/**",
+    "**/.expo/**",
+    "**/ios/**",
+    "**/android/**",
+    "**/worker-configuration.d.ts",
+    ".claude/**",
+    "worker/**",
+    "tools/**",
+    "scripts/**"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "max-lines": ["error", { "max": 400, "skipBlankLines": true, "skipComments": true }],
+    "import/no-cycle": "error"
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "rules": {
+        "max-lines": "off"
+      }
+    },
+    {
+      "files": ["apps/api/src/episode-repo.ts"],
+      "rules": { "max-lines": ["error", { "max": 692, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/review/VoiceSamples.ts"],
+      "rules": { "max-lines": ["error", { "max": 573, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/review/ReviewScreen.ts"],
+      "rules": { "max-lines": ["error", { "max": 555, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/screenUpdate.ts"],
+      "rules": { "max-lines": ["error", { "max": 546, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/narrate-again/NarrateAgainScreen.ts"],
+      "rules": { "max-lines": ["error", { "max": 465, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/playback/player.ts"],
+      "rules": { "max-lines": ["error", { "max": 448, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/update.ts"],
+      "rules": { "max-lines": ["error", { "max": 447, "skipBlankLines": true, "skipComments": true }] }
+    },
+    {
+      "files": ["apps/web/src/reader/ReaderScreen.ts"],
+      "rules": { "max-lines": ["error", { "max": 411, "skipBlankLines": true, "skipComments": true }] }
+    }
+  ]
+}
