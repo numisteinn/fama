@@ -7,11 +7,10 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Redacted } from "effect"
 import { TestClock } from "effect/testing"
 import { AppComponent } from "~/App"
-import { apiToken } from "~/api"
-import { LoadChapter, PauseAudio, PlayAudio } from "~/audio"
+import { apiToken } from "~/core/api"
+import { LoadChapter, PauseAudio, PlayAudio } from "~/core/audio"
 import {
   CreateEpisodeFromSource,
-  FILE_INPUT_ID,
   FetchEpisodes,
   FetchVoices,
   PushProgress,
@@ -20,7 +19,7 @@ import {
   StoreConnection,
   UploadEpisode,
 } from "~/command"
-import { Picker, PickerEvents } from "~/components/Picker"
+import { Picker, PickerEvents } from "~/ui/Picker"
 import {
   CopyFeedUrl,
   SettingsDialog,
@@ -38,8 +37,9 @@ import {
   withEpisodes,
 } from "~/fixture"
 import { AppMessage } from "~/message"
-import { StoredProgress } from "~/model"
-import { FamaApi } from "~/services"
+import { StoredProgress } from "~/core/flags"
+import { FamaApi } from "~/core/services"
+import { FILE_INPUT_ID } from "~/ui/refs"
 import { OpenFilePickerOnKey } from "~/view/addBar"
 
 const linkOrText = HtmlLocator.role("textbox", { name: "Link or text" })

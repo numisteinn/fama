@@ -4,12 +4,12 @@ import { Story } from "@effect/ui/testing"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Option, Redacted } from "effect"
 import { AppComponent } from "~/App"
-import { LoadChapter } from "~/audio"
+import { LoadChapter } from "~/core/audio"
 import { PushProgress, SaveProgress } from "~/command"
 import { baseModel, defaultFlags, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
 import { AppMessage } from "~/message"
-import { Playback } from "~/model"
-import { publicMediaPath } from "~/queries"
+import { Playback } from "~/playback/model"
+import { publicMediaPath } from "~/core/queries"
 import {
   ReadSelection,
   ReaderScreenEvents,

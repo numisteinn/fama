@@ -1,4 +1,4 @@
-import type { Chapter } from "@fama/contracts"
+import type { Chapter, Episode } from "@fama/contracts"
 
 /**
  * An episode plays as one timeline made of its chapter files in order.
@@ -41,4 +41,9 @@ export function locate(
   }
   const last = chapters.length - 1
   return last < 0 ? { index: 0, offsetMs: 0 } : { index: last, offsetMs: chapters[last]!.durationMs }
+}
+
+/** Whether the episode has at least one chapter with a timing file, so Read-along can show its text. */
+export function hasText(episode: Episode): boolean {
+  return episode.chapters.some((chapter) => chapter.timingUrl !== null)
 }

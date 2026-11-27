@@ -11,21 +11,14 @@ import {
   VoiceRef,
 } from "@fama/contracts"
 import { Command, Component } from "@effect/ui"
-import { Html, HtmlCommand } from "@effect/ui/html"
+import { HtmlCommand } from "@effect/ui/html"
 import { Duration, Effect, Layer, Redacted, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
-import { ApiFailure, Connection, episodePath, send, sendJson } from "~/api"
-import { PROGRESS_PREFIX, storedProgress } from "~/flags"
+import { ApiFailure, Connection, episodePath, send, sendJson } from "~/core/api"
+import { PROGRESS_PREFIX, storedProgress } from "~/core/flags"
 import { AppMessage } from "~/message"
-import { DISARM_DELETE_MS } from "~/model"
-import { FamaConnection } from "~/services"
-
-// REFS & DOM IDS
-
-export const FILE_INPUT_ID = "file-input"
-export const ADD_TEXT_ID = "add-text"
-export const AddTextRef = Html.ref("AddText", "textarea")
-export const DeleteConfirmRef = Html.ref("DeleteConfirm", "button")
+import { FamaConnection } from "~/core/services"
+import { AddTextRef, DeleteConfirmRef } from "~/ui/refs"
 
 export const focusAddText = () => HtmlCommand.focus(AddTextRef, () => Component.noop)
 
@@ -262,6 +255,8 @@ export const StoreProgress = Command.make(
 )
 
 // TIMERS
+
+const DISARM_DELETE_MS = 3000
 
 export const WaitBeforeDisarmDelete = Command.make(
   "app/WaitBeforeDisarmDelete",

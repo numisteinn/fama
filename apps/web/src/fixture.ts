@@ -1,7 +1,9 @@
 import type { Episode, EpisodeId, EpisodeProgress, VoiceRef } from "@fama/contracts"
 import { Option } from "effect"
-import { apiToken } from "~/api"
-import type { AppModel, Flags, LoadedPlayback } from "~/model"
+import { apiToken } from "~/core/api"
+import type { Flags } from "~/core/flags"
+import type { AppModel } from "~/model"
+import type { LoadedPlayback } from "~/playback/model"
 import { initApp } from "~/update"
 
 export const connection = { origin: "", token: apiToken("dev-api-token") }

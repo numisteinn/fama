@@ -1,19 +1,23 @@
 import { Component } from "@effect/ui"
 import { Html } from "@effect/ui/html"
 import { Layer, Option } from "effect"
-import { audioCommandsLayer } from "~/audio"
+import { audioCommandsLayer } from "~/core/audio"
 import { appCommandsLayer } from "~/command"
 import { SettingsDialog } from "~/components/SettingsDialog"
+import { Flags } from "~/core/flags"
+import { hasText } from "~/core/timeline"
+import { languageName, sortedVoices } from "~/core/voices"
 import { AppMessage } from "~/message"
-import { AppModel, Flags, Screen, current, episodes } from "~/model"
+import { AppModel, Screen, current, episodes, toDraft } from "~/model"
+import { NarrateAgainScreen } from "~/narrate-again/NarrateAgainScreen"
+import { RATES, SKIP_BACK_MS, SKIP_FORWARD_MS, isPlayPending } from "~/playback/model"
 import { ReaderScreen } from "~/reader/ReaderScreen"
-import { NarrateAgainScreen } from "~/review/NarrateAgainScreen"
 import { ReviewScreen } from "~/review/ReviewScreen"
 import { appSubscriptions } from "~/subscription"
 import { initApp, updateApp } from "~/update"
-import { AddBar } from "~/view/addBar"
-import { Library } from "~/view/library"
-import { PlayerBar } from "~/view/playerBar"
+import { AddBar, AddBarEvents } from "~/view/addBar"
+import { Library, LibraryEvents } from "~/view/library"
+import { PlayerBar, PlayerBarEvents } from "~/view/playerBar"
 
 /**
  * Root application component without provided command layers, so unit tests can resolve or stub
@@ -119,12 +123,77 @@ export const AppComponent = Html.component({
       },
     })
 
+    const selectedVoice = Option.flatMap(model.maybeVoice, (id) =>
+      Option.fromNullishOr(model.voices.find((voice) => voice.id === id)),
+    )
+    const voiceName = Option.match(selectedVoice, { onNone: () => "Auto", onSome: (voice) => voice.name })
+    const voiceOptions = [
+      { value: "", name: "Auto" },
+      ...sortedVoices(model.voices).map((voice) => ({
+        value: voice.id,
+        name: voice.name,
+        group: languageName(voice.language),
+      })),
+    ]
+
     const visibleNonReview = isReaderOpen
       ? null
       : Screen.match(model.screen, {
           Library: () => [
-            ...AddBar(model, h),
-            h.section.class("mt-6").children(Library(model, h)),
+            ...AddBar(
+              {
+                addText: model.addText,
+                batch: model.batch,
+                isAdding: model.isAdding,
+                maybeAddError: model.maybeAddError,
+                isReviewOn: model.isReviewOn,
+                isDragging: model.fileDragDepth > 0,
+                canSubmit: toDraft(model)._tag !== "Empty",
+                speed: model.speed,
+                voiceName,
+                selectedVoiceId: Option.getOrElse(Option.map(selectedVoice, (voice) => voice.id), () => ""),
+                voiceOptions,
+              },
+              h,
+              (event) =>
+                AddBarEvents.match(event, {
+                  UpdatedText: ({ value }) => AppMessage.UpdatedAddText({ value }),
+                  PressedEnter: () => AppMessage.PressedEnterInAddText(),
+                  Submitted: () => AppMessage.SubmittedAddForm(),
+                  ToggledReview: ({ checked }) => AppMessage.ToggledAddReview({ checked }),
+                  ChangedFiles: ({ files }) => AppMessage.ChangedFileInput({ files }),
+                  RemovedFile: ({ key }) => AppMessage.ClickedRemoveFile({ key }),
+                  RetriedFile: ({ key }) => AppMessage.ClickedRetryFile({ key }),
+                  PickedVoice: ({ value }) => AppMessage.PickedVoice({ value }),
+                  PickedVoiceSpeed: ({ value }) => AppMessage.PickedVoiceSpeed({ value }),
+                }),
+            ),
+            h.section
+              .class("mt-6")
+              .children(
+                Library(
+                  {
+                    episodes: model.maybeEpisodes,
+                    maybeLibraryFailure: model.maybeLibraryFailure,
+                    currentEpisodeId: Option.map(activeLoaded, ({ playback }) => playback.episodeId),
+                    isCurrentPlaying: isMainPlaying,
+                    rowErrors: model.rowErrors,
+                    armedDeletes: model.armedDeletes,
+                    origin: model.connection.origin,
+                  },
+                  h,
+                  (event) =>
+                    LibraryEvents.match(event, {
+                      ClickedTryAgain: () => AppMessage.ClickedTryAgain(),
+                      Played: ({ episodeId }) => AppMessage.ClickedPlayEpisode({ episodeId }),
+                      OpenedReview: ({ episodeId }) => AppMessage.ClickedOpenReview({ episodeId }),
+                      OpenedNarrateAgain: ({ episodeId }) => AppMessage.ClickedOpenNarrateAgain({ episodeId }),
+                      Retried: ({ episodeId }) => AppMessage.ClickedRetry({ episodeId }),
+                      ArmedDelete: ({ episodeId }) => AppMessage.ClickedArmDelete({ episodeId }),
+                      ConfirmedDelete: ({ episodeId }) => AppMessage.ClickedConfirmDelete({ episodeId }),
+                    }),
+                ),
+              ),
           ],
           Review: () => null,
           NarrateAgain: ({ episodeId, openId }) => {
@@ -160,6 +229,37 @@ export const AppComponent = Html.component({
           },
         })
 
+    const playerBar = Option.match(activeLoaded, {
+      onNone: () => null,
+      onSome: ({ playback, episode }) =>
+        PlayerBar(
+          {
+            playback,
+            episode,
+            rate: model.rate,
+            rates: RATES,
+            skipBackMs: SKIP_BACK_MS,
+            skipForwardMs: SKIP_FORWARD_MS,
+            isReaderOpen: Option.contains(model.maybeReaderEpisodeId, episode.id),
+            isPending: isPlayPending(model.maybePendingPlay, episode.id),
+            hasText: hasText(episode),
+            maybeScrubMs: model.maybeScrubMs,
+            origin: model.connection.origin,
+          },
+          h,
+          (event) =>
+            PlayerBarEvents.match(event, {
+              PickedPlaybackSpeed: ({ value }) => AppMessage.PickedPlaybackSpeed({ value }),
+              PickedChapter: ({ value }) => AppMessage.PickedChapter({ value }),
+              ToggledReader: () => AppMessage.ClickedToggleReader(),
+              ClickedPlayPause: () => AppMessage.ClickedPlayPause(),
+              ClickedSkip: ({ deltaMs }) => AppMessage.ClickedSkip({ deltaMs }),
+              UpdatedScrub: ({ value }) => AppMessage.UpdatedScrub({ value }),
+              CommittedScrub: ({ value }) => AppMessage.CommittedScrub({ value }),
+            }),
+        ),
+    })
+
     return h.div.children(
       h.main
         .class("mx-auto w-full max-w-2xl px-4 pt-[env(safe-area-inset-top)] sm:px-6")
@@ -188,7 +288,7 @@ export const AppComponent = Html.component({
           readerContent,
           visibleNonReview,
         ),
-      PlayerBar(model, h),
+      playerBar,
     )
   },
 })

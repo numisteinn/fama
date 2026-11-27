@@ -6,13 +6,15 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted } from "effect"
 import { TestClock } from "effect/testing"
 import { AppComponent } from "~/App"
-import { apiToken } from "~/api"
-import { PauseAudio, PlayAudio } from "~/audio"
+import { apiToken } from "~/core/api"
+import { PauseAudio, PlayAudio } from "~/core/audio"
 import { ChangeReviewVoice, FetchEpisodes, FetchVoices, PushProgress, SaveProgress, StoreConnection } from "~/command"
 import { baseModel, connection, defaultFlags, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
 import { AppMessage } from "~/message"
-import { Playback, Screen } from "~/model"
-import { type RedactedSample, SamplesQuery } from "~/queries"
+import { Screen } from "~/model"
+import { Playback } from "~/playback/model"
+import { type RedactedSample, SamplesQuery } from "~/core/queries"
+import { languageOf } from "~/core/voices"
 import {
   PlaySampleAudio,
   RequestSamples,
@@ -21,7 +23,6 @@ import {
   VoiceSamplesEvents,
   VoiceSamplesMessage,
   VoiceSamplesNoDeps,
-  languageOf,
   reviewVoices,
 } from "~/review/VoiceSamples"
 

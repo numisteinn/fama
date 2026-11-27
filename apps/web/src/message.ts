@@ -1,11 +1,10 @@
 import { ChangeVoice, Document, Episode, EpisodeId, EpisodeProgress, Voice, VoiceRef } from "@fama/contracts"
 import { UiSchema } from "@effect/ui"
 import { Schema } from "effect"
-import { ApiFailure, Connection } from "~/api"
-import { NarrateAgainSubmitTarget, StoredProgress } from "~/model"
-
-export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
-export type PlayerShortcut = typeof PlayerShortcut.Type
+import { ApiFailure, Connection } from "~/core/api"
+import { StoredProgress } from "~/core/flags"
+import { NarrateAgainSubmitTarget } from "~/narrate-again/model"
+import { PlayerShortcut } from "~/playback/model"
 
 export const AppMessage = UiSchema.TaggedEnum({
   // Library

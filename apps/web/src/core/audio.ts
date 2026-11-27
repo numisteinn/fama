@@ -1,6 +1,12 @@
-import { Command, Component } from "@effect/ui"
+import { Command, Component, UiSchema } from "@effect/ui"
 import { Context, Effect, Layer, Schema } from "effect"
-import { AppMessage } from "~/message"
+
+/**
+ * The audio element could not start playback. The app resets its playback state on it. It is the
+ * only signal the audio layer produces, so the layer needs no knowledge of the app's Message.
+ */
+export const AudioFailure = UiSchema.TaggedEnum({ FailedPlayAudio: {} })
+export type AudioFailure = typeof AudioFailure.Type
 
 /**
  * The page's one audio element. It is detached: there is no `<audio>` in the DOM.
@@ -32,10 +38,10 @@ const isInterrupted = (error: unknown): boolean =>
 const play = (audio: HTMLAudioElement) =>
   Effect.tryPromise({ try: () => audio.play(), catch: (error) => error }).pipe(
     Effect.as(Component.noop),
-    Effect.catch((error) => Effect.succeed(isInterrupted(error) ? Component.noop : AppMessage.FailedPlayAudio())),
+    Effect.catch((error) => Effect.succeed(isInterrupted(error) ? Component.noop : AudioFailure.FailedPlayAudio())),
   )
 
-const AudioResult = Schema.Union([AppMessage, Component.Noop])
+const AudioResult = Schema.Union([AudioFailure, Component.Noop])
 
 /** Points the element at a chapter file and seeks into it. It plays when `isAutoplay`, and rests when not. */
 export class LoadChapter extends Command.Service<LoadChapter>()("audio/LoadChapter", {

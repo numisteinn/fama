@@ -1,16 +1,38 @@
-import type { Episode, JobState } from "@fama/contracts"
+import { EpisodeId, type Episode, type JobState } from "@fama/contracts"
+import { UiSchema } from "@effect/ui"
 import type { Html } from "@effect/ui/html"
-import { Option } from "effect"
-import { DeleteConfirmRef } from "~/command"
+import { Option, Schema } from "effect"
+import { type ApiFailure } from "~/core/api"
+import { totalMs } from "~/core/timeline"
 import { formatDuration } from "~/lib/format"
-import { AppMessage } from "~/message"
-import type { AppModel } from "~/model"
-import { totalMs } from "~/timeline"
-import { buttonClass, cx } from "~/view/button"
-import * as Icon from "~/view/icon"
+import { buttonClass, cx } from "~/ui/button"
+import * as Icon from "~/ui/icon"
+import { DeleteConfirmRef } from "~/ui/refs"
+
+/** What the library list needs, computed by the App. */
+export interface LibraryProps {
+  readonly episodes: Option.Option<ReadonlyArray<Episode>>
+  readonly maybeLibraryFailure: Option.Option<ApiFailure>
+  readonly currentEpisodeId: Option.Option<EpisodeId>
+  readonly isCurrentPlaying: boolean
+  readonly rowErrors: Record<string, string>
+  readonly armedDeletes: ReadonlyArray<EpisodeId>
+  readonly origin: string
+}
+
+export const LibraryEvents = UiSchema.TaggedEnum({
+  ClickedTryAgain: {},
+  Played: { episodeId: EpisodeId },
+  OpenedReview: { episodeId: EpisodeId },
+  OpenedNarrateAgain: { episodeId: EpisodeId },
+  Retried: { episodeId: EpisodeId },
+  ArmedDelete: { episodeId: EpisodeId },
+  ConfirmedDelete: { episodeId: EpisodeId },
+})
+export type LibraryEvents = typeof LibraryEvents.Type
 
 /** Status badge on a Library row whose job waits in Review. */
-const reviewBadge = (h: Html.H<AppMessage>) =>
+const reviewBadge = <M>(h: Html.H<M>) =>
   h.span
     .class(
       "inline-flex shrink-0 items-center gap-1 rounded-full border border-input bg-accent px-2.5 py-0.5 text-[13px] font-medium text-foreground",
@@ -18,10 +40,10 @@ const reviewBadge = (h: Html.H<AppMessage>) =>
     .children("Review", Icon.chevronRight(h, "size-3.5 text-muted-foreground"))
 
 /** The episode list, or the error of the first load with a way to try again. */
-export const Library = (model: AppModel, h: Html.H<AppMessage>) =>
-  Option.match(model.maybeEpisodes, {
+export const Library = <M>(props: LibraryProps, h: Html.H<M>, emit: (e: LibraryEvents) => M) =>
+  Option.match(props.episodes, {
     onNone: () =>
-      Option.match(model.maybeLibraryFailure, {
+      Option.match(props.maybeLibraryFailure, {
         onNone: () => null,
         onSome: (failure) =>
           h.div
@@ -30,7 +52,7 @@ export const Library = (model: AppModel, h: Html.H<AppMessage>) =>
               h.span.class("text-destructive").children(failure.message),
               h.button
                 .attr("type", "button")
-                .on("click", AppMessage.ClickedTryAgain())
+                .on("click", emit(LibraryEvents.ClickedTryAgain()))
                 .class(buttonClass({ variant: "outline", size: "sm" }))
                 .children("Try again"),
             ),
@@ -40,21 +62,20 @@ export const Library = (model: AppModel, h: Html.H<AppMessage>) =>
         ? h.img
             .attrs({ src: "/pan-sleeping.png", alt: "", draggable: "false" })
             .class("mx-auto mt-16 size-40 select-none")
-        : h.ul.class("-mx-2 flex flex-col").children(...list.map((episode) => row(model, episode, h))),
+        : h.ul.class("-mx-2 flex flex-col").children(...list.map((episode) => row(props, episode, h, emit))),
   })
 
-const row = (model: AppModel, episode: Episode, h: Html.H<AppMessage>) => {
-  const playback = model.playback
-  const isCurrent = playback._tag === "Loaded" && playback.episodeId === episode.id
-  const isPlaying = isCurrent && playback.isPlaying
+const row = <M>(props: LibraryProps, episode: Episode, h: Html.H<M>, emit: (e: LibraryEvents) => M) => {
+  const isCurrent = Option.contains(props.currentEpisodeId, episode.id)
+  const isPlaying = isCurrent && props.isCurrentPlaying
   const isPlayable = episode.chapters.length > 0
   const isReview = episode.job._tag === "Review"
   const isActionable = isPlayable || isReview
-  const maybeRowError = Option.fromNullishOr(model.rowErrors[episode.id])
+  const maybeRowError = Option.fromNullishOr(props.rowErrors[episode.id])
   const maybeErrorText = Option.orElse(maybeRowError, () =>
     episode.job._tag === "Failed" ? Option.some(episode.job.reason) : Option.none(),
   )
-  const isArmed = model.armedDeletes.includes(episode.id)
+  const isArmed = props.armedDeletes.includes(episode.id)
 
   return h.li
     .key(episode.id)
@@ -79,14 +100,14 @@ const row = (model: AppModel, episode: Episode, h: Html.H<AppMessage>) => {
         .on(
           "click",
           isReview
-            ? AppMessage.ClickedOpenReview({ episodeId: episode.id })
-            : AppMessage.ClickedPlayEpisode({ episodeId: episode.id }),
+            ? emit(LibraryEvents.OpenedReview({ episodeId: episode.id }))
+            : emit(LibraryEvents.Played({ episodeId: episode.id })),
         )
         .class(
           "flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left outline-none disabled:cursor-default before:absolute before:inset-0 before:rounded-xl focus-visible:before:ring-2 focus-visible:before:ring-ring",
         )
         .children(
-          artwork(model, episode, isCurrent, isPlaying, h),
+          artwork(props, episode, isCurrent, isPlaying, h),
           h.span.class("min-w-0 flex-1").children(
             h.span.class("block truncate text-[15px] leading-snug").children(episode.title),
             Option.match(maybeErrorText, {
@@ -107,7 +128,7 @@ const row = (model: AppModel, episode: Episode, h: Html.H<AppMessage>) => {
             "aria-label": `Narrate again ${episode.title}`,
             title: "Narrate again",
           })
-          .on("click", AppMessage.ClickedOpenNarrateAgain({ episodeId: episode.id }))
+          .on("click", emit(LibraryEvents.OpenedNarrateAgain({ episodeId: episode.id })))
           .class(
             buttonClass(
               { size: "icon-sm" },
@@ -118,19 +139,19 @@ const row = (model: AppModel, episode: Episode, h: Html.H<AppMessage>) => {
       episode.job._tag === "Failed" &&
         h.button
           .attr("type", "button")
-          .on("click", AppMessage.ClickedRetry({ episodeId: episode.id }))
+          .on("click", emit(LibraryEvents.Retried({ episodeId: episode.id })))
           .class(buttonClass({ variant: "outline", size: "sm" }, "relative"))
           .children(Icon.rotateCw(h), "Retry"),
       isArmed
         ? h.button
             .ref(DeleteConfirmRef.at(episode.id))
             .attr("type", "button")
-            .on("click", AppMessage.ClickedConfirmDelete({ episodeId: episode.id }))
+            .on("click", emit(LibraryEvents.ConfirmedDelete({ episodeId: episode.id })))
             .class(buttonClass({ variant: "destructive", size: "sm" }, "relative"))
             .children("Delete")
         : h.button
             .attrs({ type: "button", "aria-label": `Delete ${episode.title}` })
-            .on("click", AppMessage.ClickedArmDelete({ episodeId: episode.id }))
+            .on("click", emit(LibraryEvents.ArmedDelete({ episodeId: episode.id })))
             .class(
               buttonClass(
                 { size: "icon-sm" },
@@ -143,12 +164,12 @@ const row = (model: AppModel, episode: Episode, h: Html.H<AppMessage>) => {
 
 const SOURCE_ICON = { Url: Icon.link, Text: Icon.alignLeft, File: Icon.fileText } as const
 
-const artwork = (
-  model: AppModel,
+const artwork = <M>(
+  props: LibraryProps,
   episode: Episode,
   isCurrent: boolean,
   isPlaying: boolean,
-  h: Html.H<AppMessage>,
+  h: Html.H<M>,
 ) => {
   const isHoverPlay = episode.chapters.length > 0 && !isPlaying
   const sourceIcon = SOURCE_ICON[episode.source._tag]
@@ -159,7 +180,7 @@ const artwork = (
     .children(
       episode.coverUrl
         ? h.img
-            .attrs({ src: model.connection.origin + episode.coverUrl, alt: "" })
+            .attrs({ src: props.origin + episode.coverUrl, alt: "" })
             .class("absolute inset-0 size-full object-cover")
         : !isPlaying &&
             sourceIcon(
@@ -190,7 +211,7 @@ const STAGE: Record<Extract<JobState, { _tag: "Running" }>["stage"], string> = {
   uploading: "Uploading",
 }
 
-const jobStatus = (episode: Episode, h: Html.H<AppMessage>) => {
+const jobStatus = <M>(episode: Episode, h: Html.H<M>) => {
   const { job } = episode
   switch (job._tag) {
     case "Ready":

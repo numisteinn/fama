@@ -1,15 +1,42 @@
-import { Component, Mount } from "@effect/ui"
+import { Component, Mount, UiSchema } from "@effect/ui"
 import { Switch } from "@effect/ui-kit"
 import type { Html } from "@effect/ui/html"
-import { Effect, Option } from "effect"
-import { ACCEPT, type BatchFile, isSending } from "~/batch"
-import { ADD_TEXT_ID, AddTextRef, FILE_INPUT_ID } from "~/command"
-import { Picker, type PickerOption } from "~/components/Picker"
+import { Effect, Option, Schema } from "effect"
+import { ACCEPT, type BatchFile, isSending } from "~/core/batch"
+import { SPEEDS } from "~/core/voices"
 import { formatRate } from "~/lib/format"
-import { AppMessage } from "~/message"
-import { type AppModel, SPEEDS, languageName, selectedVoice, sortedVoices, toDraft } from "~/model"
-import { buttonClass, cx } from "~/view/button"
-import * as Icon from "~/view/icon"
+import { Picker, type PickerOption } from "~/ui/Picker"
+import { buttonClass, cx } from "~/ui/button"
+import * as Icon from "~/ui/icon"
+import { ADD_TEXT_ID, AddTextRef, FILE_INPUT_ID } from "~/ui/refs"
+
+/** What the add bar asks the App for. Narrow data, computed by the App. */
+export interface AddBarProps {
+  readonly addText: string
+  readonly batch: ReadonlyArray<BatchFile>
+  readonly isAdding: boolean
+  readonly maybeAddError: Option.Option<string>
+  readonly isReviewOn: boolean
+  readonly isDragging: boolean
+  readonly canSubmit: boolean
+  readonly speed: number
+  readonly voiceName: string
+  readonly selectedVoiceId: string
+  readonly voiceOptions: ReadonlyArray<PickerOption>
+}
+
+export const AddBarEvents = UiSchema.TaggedEnum({
+  UpdatedText: { value: Schema.String },
+  PressedEnter: {},
+  Submitted: {},
+  ToggledReview: { checked: Schema.Boolean },
+  ChangedFiles: { files: Schema.Array(Schema.instanceOf(File)) },
+  RemovedFile: { key: Schema.Number },
+  RetriedFile: { key: Schema.Number },
+  PickedVoice: { value: Schema.String },
+  PickedVoiceSpeed: { value: Schema.String },
+})
+export type AddBarEvents = typeof AddBarEvents.Type
 
 /**
  * Enter and Space on the Attach file label open the file picker, as a click on it does.
@@ -34,7 +61,12 @@ export const OpenFilePickerOnKey = Mount.make(
     ).pipe(Effect.andThen(Effect.never), Effect.as(Component.noop)),
 )
 
-const fileRow = ({ key, file, state }: BatchFile, h: Html.H<AppMessage>) => {
+const speedOptions: ReadonlyArray<PickerOption> = SPEEDS.map((speed) => ({
+  value: String(speed),
+  name: formatRate(speed),
+}))
+
+const fileRow = <M>({ key, file, state }: BatchFile, h: Html.H<M>, emit: (e: AddBarEvents) => M) => {
   const reason = state._tag === "Failed" ? state.reason : state._tag === "Refused" ? "Unsupported type" : undefined
   const icon =
     state._tag === "Uploading"
@@ -43,7 +75,7 @@ const fileRow = ({ key, file, state }: BatchFile, h: Html.H<AppMessage>) => {
         ? Icon.check(h, "size-5 shrink-0 text-muted-foreground")
         : Icon.fileText(h, cx("size-5 shrink-0", reason ? "text-destructive" : "text-muted-foreground"))
 
-  const rowButton = (label: string, message: AppMessage, content: ReturnType<typeof Icon.x<AppMessage>>) =>
+  const rowButton = (label: string, message: M, content: ReturnType<typeof Icon.x<M>>) =>
     h.button
       .attrs({ type: "button", "aria-label": label })
       .on("click", message)
@@ -59,39 +91,22 @@ const fileRow = ({ key, file, state }: BatchFile, h: Html.H<AppMessage>) => {
         .class(cx("min-w-0 flex-1 truncate text-[15px]", state._tag === "Pending" && "text-muted-foreground"))
         .children(file.name),
       reason && h.span.attr("role", "alert").class("max-w-1/2 truncate text-[13px] text-destructive").children(reason),
-      state._tag === "Failed" && rowButton(`Retry ${file.name}`, AppMessage.ClickedRetryFile({ key }), Icon.rotateCcw(h)),
+      state._tag === "Failed" && rowButton(`Retry ${file.name}`, emit(AddBarEvents.RetriedFile({ key })), Icon.rotateCcw(h)),
       state._tag !== "Uploading" &&
         state._tag !== "Done" &&
-        rowButton(`Remove ${file.name}`, AppMessage.ClickedRemoveFile({ key }), Icon.x(h)),
+        rowButton(`Remove ${file.name}`, emit(AddBarEvents.RemovedFile({ key })), Icon.x(h)),
     )
 }
 
-const voiceOptions = (model: AppModel): ReadonlyArray<PickerOption> => [
-  { value: "", name: "Auto" },
-  ...sortedVoices(model.voices).map((voice) => ({
-    value: voice.id,
-    name: voice.name,
-    group: languageName(voice.language),
-  })),
-]
-
-const speedOptions: ReadonlyArray<PickerOption> = SPEEDS.map((speed) => ({
-  value: String(speed),
-  name: formatRate(speed),
-}))
-
 /** Paste a link or text, or attach files, then add them. */
-export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
-  const draft = toDraft(model)
-  const voiceName = Option.match(selectedVoice(model), { onNone: () => "Auto", onSome: (voice) => voice.name })
-  const isDragging = model.fileDragDepth > 0
-  const isBusy = model.isAdding || isSending(model.batch)
+export const AddBar = <M>(props: AddBarProps, h: Html.H<M>, emit: (e: AddBarEvents) => M) => {
+  const isBusy = props.isAdding || isSending(props.batch)
 
   const input =
-    model.batch.length > 0
+    props.batch.length > 0
       ? h.ul
           .class("max-h-60 overflow-y-auto px-2 pt-2")
-          .children(...model.batch.map((item) => fileRow(item, h)))
+          .children(...props.batch.map((item) => fileRow(item, h, emit)))
       : h.textarea
           .ref(AddTextRef)
           .attrs({
@@ -100,12 +115,12 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
             "aria-label": "Link or text",
             rows: "1",
           })
-          .value(model.addText)
-          .on("input", ({ value }) => AppMessage.UpdatedAddText({ value }))
+          .value(props.addText)
+          .on("input", ({ value }) => emit(AddBarEvents.UpdatedText({ value })))
           .on(
             "keydown",
             ({ key, shift, composing }) =>
-              key === "Enter" && !shift && !composing ? AppMessage.PressedEnterInAddText() : undefined,
+              key === "Enter" && !shift && !composing ? emit(AddBarEvents.PressedEnter()) : undefined,
             { preventDefault: true },
           )
           .class(
@@ -113,11 +128,11 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
           )
 
   const form = h.form
-    .on("submit", AppMessage.SubmittedAddForm())
+    .on("submit", emit(AddBarEvents.Submitted()))
     .class(
       cx(
         "rounded-2xl border border-input bg-surface transition-[border-color,box-shadow] duration-200 focus-within:border-ring/60",
-        isDragging && "border-foreground/60",
+        props.isDragging && "border-foreground/60",
       ),
     )
     .children(
@@ -142,38 +157,38 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
             hidden: "",
           })
           .value("")
-          .on("change", ({ files }) => AppMessage.ChangedFileInput({ files })),
+          .on("change", ({ files }) => emit(AddBarEvents.ChangedFiles({ files }))),
         Picker(h, {
           key: "voice",
           props: {
-            label: `Voice: ${voiceName}`,
-            triggerText: voiceName,
+            label: `Voice: ${props.voiceName}`,
+            triggerText: props.voiceName,
             triggerKind: "voice",
             triggerClass: buttonClass({ size: "sm" }, "max-w-48"),
-            selectedValue: Option.match(selectedVoice(model), { onNone: () => "", onSome: (voice) => voice.id }),
-            items: voiceOptions(model),
+            selectedValue: props.selectedVoiceId,
+            items: props.voiceOptions,
           },
           onEmit: {
-            Picked: ({ value }) => AppMessage.PickedVoice({ value }),
+            Picked: ({ value }) => emit(AddBarEvents.PickedVoice({ value })),
           },
         }),
         Picker(h, {
           key: "voice-speed",
           props: {
-            label: `Voice speed: ${formatRate(model.speed)}`,
-            triggerText: formatRate(model.speed),
+            label: `Voice speed: ${formatRate(props.speed)}`,
+            triggerText: formatRate(props.speed),
             triggerKind: "voiceSpeed",
             triggerClass: buttonClass({ size: "sm" }),
-            selectedValue: String(model.speed),
+            selectedValue: String(props.speed),
             items: speedOptions,
           },
           onEmit: {
-            Picked: ({ value }) => AppMessage.PickedVoiceSpeed({ value }),
+            Picked: ({ value }) => emit(AddBarEvents.PickedVoiceSpeed({ value })),
           },
         }),
         Switch(h, {
-          props: { checked: model.isReviewOn },
-          onToggle: ({ checked }) => AppMessage.ToggledAddReview({ checked }),
+          props: { checked: props.isReviewOn },
+          onToggle: ({ checked }) => emit(AddBarEvents.ToggledReview({ checked })),
           view: (parts) =>
             parts
               .root(
@@ -206,7 +221,7 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
                 "Review",
               ),
         }),
-        Option.match(model.maybeAddError, {
+        Option.match(props.maybeAddError, {
           onNone: () => null,
           onSome: (error) =>
             h.p
@@ -216,7 +231,7 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
         }),
         h.button
           .attrs({ type: "submit", "aria-label": "Add" })
-          .disabled(draft._tag === "Empty" || model.isAdding)
+          .disabled(!props.canSubmit || props.isAdding)
           .class(buttonClass({ variant: "primary", size: "icon-sm" }, "ml-auto rounded-full"))
           .children(isBusy ? Icon.loaderCircle(h, "animate-spin") : Icon.arrowUp(h)),
       ),
@@ -224,7 +239,7 @@ export const AddBar = (model: AppModel, h: Html.H<AppMessage>) => {
 
   return [
     form,
-    isDragging &&
+    props.isDragging &&
       h.div
         .class(
           "pointer-events-none fixed inset-3 z-40 grid place-items-center rounded-3xl border-2 border-dashed border-foreground/40 bg-background/80 backdrop-blur-sm",

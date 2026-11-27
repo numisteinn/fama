@@ -2,8 +2,8 @@ import { Document, EpisodeId, FeedInfo, SampleList, Timing, VoiceRef } from "@fa
 import { Command, Component, Query } from "@effect/ui"
 import { AsyncResult } from "effect/reactivity"
 import { Effect, Option, Redacted, Schema } from "effect"
-import { ApiFailure, apiToken, episodePath } from "~/api"
-import { FamaApi } from "~/services"
+import { ApiFailure, apiToken, episodePath } from "~/core/api"
+import { FamaApi } from "~/core/services"
 
 const MEDIA_TOKEN_PATH = /^\/media\/[^/]+(\/.*)$/
 

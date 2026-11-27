@@ -6,8 +6,8 @@ import { Locator, Story, TestHost } from "@effect/ui/testing"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
 import { AppComponent } from "~/App"
-import { apiToken } from "~/api"
-import { LoadChapter } from "~/audio"
+import { apiToken } from "~/core/api"
+import { LoadChapter } from "~/core/audio"
 import {
   ChangeNarrateAgainVoice,
   FetchEpisodes,
@@ -17,8 +17,9 @@ import {
 } from "~/command"
 import { baseModel, connection, defaultFlags, harbourDays, queuedArticle, withEpisodes, withPlayback } from "~/fixture"
 import { AppMessage } from "~/message"
-import { Playback, Screen } from "~/model"
-import { InvalidateDocument } from "~/queries"
+import { Screen } from "~/model"
+import { Playback } from "~/playback/model"
+import { InvalidateDocument } from "~/core/queries"
 import { ReaderScreenNoDeps } from "~/reader/ReaderScreen"
 import {
   NarrateAgainEditor,
@@ -26,8 +27,8 @@ import {
   NarrateAgainEditorMessage,
   NarrateAgainScreen,
   NarrateAgainScreenEvents,
-} from "~/review/NarrateAgainScreen"
-import { FamaApi } from "~/services"
+} from "~/narrate-again/NarrateAgainScreen"
+import { FamaApi } from "~/core/services"
 import { OpenFilePickerOnKey } from "~/view/addBar"
 
 const storedDocument: Document = {

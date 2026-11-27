@@ -1,7 +1,7 @@
 import { Context, Effect, Layer } from "effect"
 import { HttpClient, type HttpClientRequest, type HttpClientResponse } from "effect/http"
 import type * as Schema from "effect/Schema"
-import { type ApiFailure, type Connection, apiToken, send, sendJson } from "~/api"
+import { type ApiFailure, type Connection, apiToken, send, sendJson } from "~/core/api"
 
 /**
  * Holds the active API connection in memory so `Query.Service` fetchers read the live

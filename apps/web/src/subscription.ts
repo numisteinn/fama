@@ -1,19 +1,14 @@
 import { Subscription } from "@effect/ui"
 import { Duration, Effect, Option, Queue, Stream } from "effect"
-import { AudioPlayer } from "~/audio"
-import { SETTING_KEYS, storedSettings } from "~/flags"
+import { AudioPlayer } from "~/core/audio"
+import { SETTING_KEYS, storedSettings } from "~/core/flags"
 import { AppMessage } from "~/message"
-import {
-  type AppModel,
-  POLL_MS,
-  SKIP_BACK_MS,
-  SKIP_FORWARD_MS,
-  current,
-  episodes,
-  isWorking,
-} from "~/model"
-import { FamaConnection } from "~/services"
-import { chapterStartMs, totalMs } from "~/timeline"
+import { type AppModel, current, episodes, isWorking } from "~/model"
+import { FamaConnection } from "~/core/services"
+import { chapterStartMs, totalMs } from "~/core/timeline"
+import { SKIP_BACK_MS, SKIP_FORWARD_MS } from "~/playback/model"
+
+const POLL_MS = 2000
 
 /** Focused controls keep their own keys. */
 const INTERACTIVE =
