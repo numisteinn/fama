@@ -480,7 +480,7 @@ fn py_def_name(line: &str) -> &str {
 fn python_imports(cleaned: &str) -> Vec<PyImport> {
     let mut imports = Vec::new();
     for stmt in py_logical_statements(cleaned) {
-        let t = stmt.trim();
+        let t = strip_py_suite_prefix(stmt.trim());
         if t.is_empty() {
             continue;
         }
@@ -520,6 +520,42 @@ fn python_imports(cleaned: &str) -> Vec<PyImport> {
         }
     }
     imports
+}
+
+/// Strips one-line compound statement headers (e.g. `if True: import a` or
+/// `try: from .b import x`) so inline suite imports are still recognized.
+fn strip_py_suite_prefix(mut stmt: &str) -> &str {
+    const HEADERS: &[&str] = &[
+        "if", "elif", "else", "try", "except", "finally", "with", "for", "while", "def",
+        "async", "class", "match", "case",
+    ];
+    loop {
+        let trimmed = stmt.trim_start();
+        let first_word = trimmed
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next()
+            .unwrap_or_default();
+        if !HEADERS.contains(&first_word) {
+            return trimmed;
+        }
+        let mut depth = 0usize;
+        let mut colon_idx = None;
+        for (idx, ch) in trimmed.char_indices() {
+            match ch {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ':' if depth == 0 => {
+                    colon_idx = Some(idx);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        match colon_idx {
+            Some(idx) => stmt = &trimmed[idx + 1..],
+            None => return trimmed,
+        }
+    }
 }
 
 fn split_from_import(rest: &str) -> Option<(&str, &str)> {
@@ -614,13 +650,13 @@ fn resolve_py(
     files: &HashSet<String>,
 ) -> Vec<String> {
     match imp {
-        PyImport::Module(module) => py_candidate_bases(module, file, project_source)
+        PyImport::Module(module) => py_candidate_bases(module, file, project_source, files)
             .into_iter()
             .find_map(|base| resolve_py_module(&base, files))
             .into_iter()
             .collect(),
         PyImport::From { module, names } => {
-            for base in py_candidate_bases(module, file, project_source) {
+            for base in py_candidate_bases(module, file, project_source, files) {
                 let mut resolved = Vec::new();
                 let mut need_base = names.is_empty();
                 for name in names {
@@ -653,7 +689,12 @@ fn resolve_py(
     }
 }
 
-fn py_candidate_bases(module: &str, file: &str, project_source: &str) -> Vec<String> {
+fn py_candidate_bases(
+    module: &str,
+    file: &str,
+    project_source: &str,
+    files: &HashSet<String>,
+) -> Vec<String> {
     if module.starts_with('.') {
         let dots = module.bytes().take_while(|&b| b == b'.').count();
         let rest = &module[dots..];
@@ -675,10 +716,24 @@ fn py_candidate_bases(module: &str, file: &str, project_source: &str) -> Vec<Str
 
     let rel = module.replace('.', "/");
     let source_parent = parent_dir(project_source);
-    let mut bases = vec![join_norm(&source_parent, &rel)];
-    let from_source = join_norm(project_source, &rel);
-    if !bases.contains(&from_source) {
-        bases.push(from_source);
+    let is_package_source = files.contains(&join_norm(project_source, "__init__.py"));
+    if is_package_source {
+        // Package source directory (e.g. `worker/src/fama_worker`): absolute
+        // imports resolve from its parent (`worker/src`), never as siblings.
+        return vec![join_norm(&source_parent, &rel)];
+    }
+
+    // Non-package source root (e.g. `worker/src`): resolve directly inside it,
+    // and also allow PEP 420 namespace package imports matching its basename.
+    let mut bases = vec![join_norm(project_source, &rel)];
+    let pkg_name = project_source.rsplit('/').next().unwrap_or(project_source);
+    if !pkg_name.is_empty()
+        && (rel == pkg_name || rel.starts_with(&format!("{pkg_name}/")))
+    {
+        let from_parent = join_norm(&source_parent, &rel);
+        if !bases.contains(&from_parent) {
+            bases.push(from_parent);
+        }
     }
     bases
 }
@@ -793,13 +848,13 @@ fn resolve_file(candidate: &str, files: &HashSet<String>) -> Option<String> {
 
 struct TsConfigResolved {
     base_url: Option<String>,
-    paths: HashMap<String, String>,
+    paths: Option<HashMap<String, String>>,
 }
 
 fn parse_aliases(root: &Path, tsconfig: &str) -> Result<Vec<(String, String)>, String> {
-    let mut visited = HashSet::new();
-    let resolved = load_tsconfig(root, tsconfig, &mut visited)?;
-    let mut out: Vec<(String, String)> = resolved.paths.into_iter().collect();
+    let mut stack = Vec::new();
+    let resolved = load_tsconfig(root, tsconfig, &mut stack)?;
+    let mut out: Vec<(String, String)> = resolved.paths.unwrap_or_default().into_iter().collect();
     // Longest pattern first so more specific aliases win.
     out.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
     Ok(out)
@@ -808,26 +863,25 @@ fn parse_aliases(root: &Path, tsconfig: &str) -> Result<Vec<(String, String)>, S
 fn load_tsconfig(
     root: &Path,
     tsconfig: &str,
-    visited: &mut HashSet<String>,
+    stack: &mut Vec<String>,
 ) -> Result<TsConfigResolved, String> {
     let norm = normalize(tsconfig);
-    if !visited.insert(norm.clone()) {
-        return Ok(TsConfigResolved {
-            base_url: None,
-            paths: HashMap::new(),
-        });
+    if stack.contains(&norm) {
+        return Err(format!("circular tsconfig extends: {norm}"));
     }
+    stack.push(norm.clone());
 
     let abs = root.join(&norm);
     let raw = std::fs::read_to_string(&abs)
         .map_err(|e| format!("cannot read tsconfig {}: {e}", abs.display()))?;
-    let stripped = strip_jsonc(&raw);
+    let stripped = strip_jsonc(&raw)
+        .map_err(|e| format!("invalid tsconfig {}: {e}", abs.display()))?;
     let value: serde_json::Value = serde_json::from_str(&stripped)
         .map_err(|e| format!("invalid tsconfig {}: {e}", abs.display()))?;
 
     let tsconfig_dir = parent_dir(&norm);
     let mut base_url: Option<String> = None;
-    let mut paths: HashMap<String, String> = HashMap::new();
+    let mut paths: Option<HashMap<String, String>> = None;
 
     // Follow relative `extends` (string or array of strings). External package
     // extends (e.g. "expo/tsconfig.base.json") are skipped.
@@ -847,11 +901,13 @@ fn load_tsconfig(
                 parent_rel = with_json;
             }
         }
-        let parent = load_tsconfig(root, &parent_rel, visited)?;
+        let parent = load_tsconfig(root, &parent_rel, stack)?;
         if parent.base_url.is_some() {
             base_url = parent.base_url;
         }
-        paths.extend(parent.paths);
+        if parent.paths.is_some() {
+            paths = parent.paths;
+        }
     }
 
     let compiler = &value["compilerOptions"];
@@ -861,6 +917,9 @@ fn load_tsconfig(
     let effective_base = base_url.clone().unwrap_or(tsconfig_dir);
 
     if let Some(local_paths) = compiler["paths"].as_object() {
+        // TypeScript replaces inherited `compilerOptions.paths` when a child
+        // tsconfig defines its own `paths` object.
+        let mut map = HashMap::new();
         for (pattern, targets) in local_paths {
             let Some(target) = targets
                 .as_array()
@@ -874,16 +933,18 @@ fn load_tsconfig(
             } else {
                 join_norm(&effective_base, target)
             };
-            paths.insert(pattern.clone(), resolved);
+            map.insert(pattern.clone(), resolved);
         }
+        paths = Some(map);
     }
 
+    stack.pop();
     Ok(TsConfigResolved { base_url, paths })
 }
 
 /// Strips `//` line comments, `/* */` block comments, and trailing commas
 /// before `}` or `]` outside of JSON string literals.
-fn strip_jsonc(raw: &str) -> String {
+fn strip_jsonc(raw: &str) -> Result<String, String> {
     let chars: Vec<char> = raw.chars().collect();
     let n = chars.len();
     let mut no_comments = String::with_capacity(raw.len());
@@ -918,13 +979,21 @@ fn strip_jsonc(raw: &str) -> String {
         }
         if c == '/' && i + 1 < n && chars[i + 1] == '*' {
             i += 2;
-            while i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/') {
+            let mut closed = false;
+            while i + 1 < n {
+                if chars[i] == '*' && chars[i + 1] == '/' {
+                    i += 2;
+                    closed = true;
+                    break;
+                }
                 if chars[i] == '\n' {
                     no_comments.push('\n');
                 }
                 i += 1;
             }
-            i = (i + 2).min(n);
+            if !closed {
+                return Err("unterminated block comment".to_owned());
+            }
             continue;
         }
         no_comments.push(c);
@@ -969,7 +1038,7 @@ fn strip_jsonc(raw: &str) -> String {
         out.push(c);
         i += 1;
     }
-    out
+    Ok(out)
 }
 
 // --- path helpers --------------------------------------------------------
@@ -1267,16 +1336,56 @@ async def _private():
             ),
             vec!["worker/src/fama_worker/extract/__init__.py"]
         );
+
+        // Absolute `import logging` must NOT resolve to sibling `fama_worker/logging.py`.
+        let mut with_logging = files.clone();
+        with_logging.insert("worker/src/fama_worker/logging.py".to_owned());
+        assert_eq!(
+            resolve_py(
+                &PyImport::Module("logging".to_owned()),
+                "worker/src/fama_worker/a.py",
+                src,
+                &with_logging
+            ),
+            Vec::<String>::new()
+        );
+        // Explicit package import `import fama_worker.logging` DOES resolve.
+        assert_eq!(
+            resolve_py(
+                &PyImport::Module("fama_worker.logging".to_owned()),
+                "worker/src/fama_worker/a.py",
+                src,
+                &with_logging
+            ),
+            vec!["worker/src/fama_worker/logging.py"]
+        );
     }
 
     #[test]
-    fn parses_jsonc_tsconfig_with_comments_trailing_commas_and_extends() {
+    fn scans_one_line_python_suite_imports() {
+        let source = "if True: import fama_worker.logging\ntry: from .b import helper\n";
+        let (_loc, _total, _exports, imports) = parse_py(source);
+        assert_eq!(
+            imports,
+            vec![
+                PyImport::Module("fama_worker.logging".to_owned()),
+                PyImport::From {
+                    module: ".b".to_owned(),
+                    names: vec!["helper".to_owned()],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_jsonc_tsconfig_inheritance_replacement_and_errors() {
         let dir = std::env::temp_dir().join(format!(
             "arch_check_tsconfig_test_{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("apps/web")).unwrap();
+        std::fs::create_dir_all(dir.join("apps/inherit")).unwrap();
         std::fs::write(
             dir.join("tsconfig.base.json"),
             r#"{
@@ -1290,6 +1399,16 @@ async def _private():
             }"#,
         )
         .unwrap();
+        // Child without `paths` inherits parent `paths`.
+        std::fs::write(
+            dir.join("apps/inherit/tsconfig.json"),
+            r#"{
+                "extends": "../../tsconfig.base.json",
+                "compilerOptions": {},
+            }"#,
+        )
+        .unwrap();
+        // Child with `paths` replaces (does not merge) parent `paths`.
         std::fs::write(
             dir.join("apps/web/tsconfig.json"),
             r#"{
@@ -1302,10 +1421,40 @@ async def _private():
             }"#,
         )
         .unwrap();
+        // Self-extending tsconfig must fail.
+        std::fs::write(
+            dir.join("tsconfig.self.json"),
+            r#"{ "extends": "./tsconfig.self.json" }"#,
+        )
+        .unwrap();
+        // Unterminated block comment must fail.
+        std::fs::write(dir.join("tsconfig.bad.json"), "{} /*").unwrap();
 
-        let aliases = parse_aliases(&dir, "apps/web/tsconfig.json").unwrap();
-        assert!(aliases.contains(&("@shared/*".to_owned(), "shared/*".to_owned())));
-        assert!(aliases.contains(&("~/*".to_owned(), "apps/web/src/*".to_owned())));
+        let inherited = parse_aliases(&dir, "apps/inherit/tsconfig.json").unwrap();
+        assert_eq!(
+            inherited,
+            vec![("@shared/*".to_owned(), "shared/*".to_owned())]
+        );
+
+        let replaced = parse_aliases(&dir, "apps/web/tsconfig.json").unwrap();
+        assert_eq!(
+            replaced,
+            vec![("~/*".to_owned(), "apps/web/src/*".to_owned())]
+        );
+
+        let cycle_err = parse_aliases(&dir, "tsconfig.self.json")
+            .err()
+            .expect("expected circular extends error");
+        assert!(cycle_err.contains("circular"), "unexpected error: {cycle_err}");
+
+        let comment_err = parse_aliases(&dir, "tsconfig.bad.json")
+            .err()
+            .expect("expected unterminated block comment error");
+        assert!(
+            comment_err.contains("unterminated block comment"),
+            "unexpected error: {comment_err}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -31,7 +31,7 @@ export function run(args = [], { cwd = process.cwd(), capture = false } = {}) {
     const hasConfig = args.some(arg => arg === '--config' || arg.startsWith('--config='))
     let finalArgs = [...args]
     if (!isHelp && !hasConfig) {
-        const config = path.join(cwd, 'arch.config.json')
+        const config = path.resolve(cwd, 'arch.config.json')
         if (!existsSync(config)) {
             throw new Error(`No arch.config.json at ${config}.`)
         }

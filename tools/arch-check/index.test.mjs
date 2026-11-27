@@ -130,3 +130,53 @@ test('fails fast when a configured source directory is missing', () => {
         assert.match(stderr, /does not exist/)
     })
 })
+
+test('does not confuse stdlib imports with sibling Python modules and catches one-line suite cycles', () => {
+    withTempFixture(dir => {
+        const pkg = path.join(dir, 'worker/src/fama_worker')
+        mkdirSync(pkg, { recursive: true })
+        writeFileSync(path.join(pkg, '__init__.py'), '')
+        writeFileSync(path.join(pkg, 'a.py'), 'import logging\n')
+        writeFileSync(path.join(pkg, 'logging.py'), 'import fama_worker.a\n')
+        writeFileSync(
+            path.join(dir, 'arch.config.json'),
+            JSON.stringify({
+                projects: [{ name: 'worker', kind: 'python', source: 'worker/src/fama_worker' }],
+                rules: [{ name: 'no-file-cycles', kind: 'no-file-cycles' }]
+            })
+        )
+
+        // Stdlib `import logging` must NOT form a cycle with sibling `logging.py`.
+        const clean = run(['--json'], { cwd: dir, capture: true })
+        assert.equal(clean.status, 0, clean.stderr)
+
+        // One-line suite `if True: import fama_worker.logging` MUST form a cycle.
+        writeFileSync(path.join(pkg, 'a.py'), 'if True: import fama_worker.logging\n')
+        const cyclic = run(['--json'], { cwd: dir, capture: true })
+        assert.equal(cyclic.status, 1, cyclic.stderr)
+        const report = JSON.parse(cyclic.stdout)
+        const cycles = report.rules.find(rule => rule.kind === 'no-file-cycles')
+        assert.deepEqual(cycles.violations, [
+            'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
+        ])
+    })
+})
+
+test('run() supports a relative cwd without duplicating it', () => {
+    withTempFixture(dir => {
+        const sub = path.join(dir, 'sub')
+        const src = path.join(sub, 'src')
+        mkdirSync(src, { recursive: true })
+        writeFileSync(path.join(src, 'index.ts'), 'export const x = 1\n')
+        writeFileSync(
+            path.join(sub, 'arch.config.json'),
+            JSON.stringify({
+                projects: [{ name: 'app', kind: 'ts', source: 'src' }],
+                rules: [{ name: 'no-file-cycles', kind: 'no-file-cycles' }]
+            })
+        )
+        const rel = path.relative(process.cwd(), sub)
+        const { status, stderr } = run(['--json'], { cwd: rel, capture: true })
+        assert.equal(status, 0, stderr)
+    })
+})
