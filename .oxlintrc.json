@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "import"],
+  "plugins": ["typescript", "import", "oxc", "unicorn", "promise", "vitest"],
+  "categories": { "correctness": "error", "suspicious": "error", "perf": "error" },
   "ignorePatterns": [
     "**/dist/**",
     "**/.wrangler/**",
@@ -12,51 +13,101 @@
     "worker/**",
     "tools/**"
   ],
-  "categories": {
-    "correctness": "error"
-  },
   "rules": {
-    "max-lines": ["error", { "max": 400, "skipBlankLines": true, "skipComments": true }],
-    "import/no-cycle": "error"
+    "max-lines": ["error", {"max": 400, "skipBlankLines": true, "skipComments": true}],
+    "import/no-cycle": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/switch-exhaustiveness-check": "error",
+    "typescript/no-unnecessary-condition": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/strict-boolean-expressions": ["error", {"allowNullableString": true}],
+    "typescript/no-explicit-any": "error",
+    "typescript/consistent-type-imports": "error",
+    "typescript/no-non-null-assertion": "error",
+    "eqeqeq": "error",
+    "no-underscore-dangle": ["error", {"allow": ["_tag"]}],
+    "no-console": "error",
+    "max-depth": ["error", 4],
+    "max-params": ["error", 5],
+    "complexity": ["error", { "max": 15, "variant": "modified" }],
+    "import/max-dependencies": ["error", {"max": 20}],
+    "typescript/no-misused-spread": "off",
+    "typescript/no-unsafe-type-assertion": "off",
+    "typescript/consistent-return": "off",
+    "unicorn/consistent-function-scoping": "off",
+    "import/no-unassigned-import": ["error", {"allow": ["**/*.css"]}],
+    "promise/always-return": ["error", {"ignoreLastCallback": true}]
   },
   "overrides": [
     {
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
       "rules": {
-        "max-lines": "off"
+        "max-lines": "off",
+        "no-console": "off",
+        "complexity": "off",
+        "import/max-dependencies": "off",
+        "vitest/valid-expect": ["error", {"maxArgs": 2}],
+        "no-await-in-loop": "off"
       }
     },
     {
       "files": ["apps/api/src/episode-repo.ts"],
-      "rules": { "max-lines": ["error", { "max": 692, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 692, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/review/VoiceSamples.ts"],
-      "rules": { "max-lines": ["error", { "max": 573, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 573, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/review/ReviewScreen.ts"],
-      "rules": { "max-lines": ["error", { "max": 555, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 555, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/screenUpdate.ts"],
-      "rules": { "max-lines": ["error", { "max": 546, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 546, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/narrate-again/NarrateAgainScreen.ts"],
-      "rules": { "max-lines": ["error", { "max": 465, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 454, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/playback/player.ts"],
-      "rules": { "max-lines": ["error", { "max": 448, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 254, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/update.ts"],
-      "rules": { "max-lines": ["error", { "max": 447, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 447, "skipBlankLines": true, "skipComments": true}] }
     },
     {
       "files": ["apps/web/src/reader/ReaderScreen.ts"],
-      "rules": { "max-lines": ["error", { "max": 411, "skipBlankLines": true, "skipComments": true }] }
+      "rules": { "max-lines": ["error", {"max": 411, "skipBlankLines": true, "skipComments": true}] }
+    },
+    {
+      "files": ["scripts/**", "**/scripts/**", "infra/**"],
+      "rules": { "no-console": "off" }
+    },
+    {
+      "files": ["apps/web/src/narrateAgain.test.ts", "apps/web/src/reader.test.ts", "apps/web/src/review.test.ts", "apps/web/src/scene.test.ts", "apps/web/src/voiceSamples.test.ts"],
+      "rules": { "vitest/no-standalone-expect": "off" }
+    },
+    {
+      "files": ["apps/api/scripts/smoke.ts", "apps/api/src/test-app.ts", "apps/mobile/src/lib/fetchPage.ts", "apps/mobile/src/lib/downloads.tsx", "apps/web/src/subscription.ts"],
+      "rules": { "no-await-in-loop": "off" }
+    },
+    {
+      "files": ["apps/mobile/src/lib/jsonFile.ts"],
+      "rules": { "no-console": ["error", {"allow": ["warn"]}] }
+    },
+    {
+      "files": ["apps/web/src/story.test.ts"],
+      "rules": { "vitest/expect-expect": ["error", {"assertFunctionNames": ["expect", "assert", "story", "steps", "commandStory", "playbackStory"]}] }
     }
   ]
 }

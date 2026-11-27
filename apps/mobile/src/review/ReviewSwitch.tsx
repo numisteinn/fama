@@ -1,7 +1,7 @@
 import { StyleSheet, Switch, Text, View } from "react-native"
 import { colors, fonts, space } from "../theme"
 
-export function ReviewSwitch({ value, onChange }: { value: boolean; onChange(value: boolean): void }) {
+export function ReviewSwitch({ value, onChange }: { value: boolean; onChange: (value: boolean) => void }) {
   return (
     <View style={styles.row}>
       <Text accessible={false} style={styles.label}>Review</Text>

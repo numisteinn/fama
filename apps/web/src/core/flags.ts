@@ -48,7 +48,7 @@ function storedProgressEntries(): Record<string, EpisodeProgress> {
   try {
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index)
-      if (!key?.startsWith(PROGRESS_PREFIX)) continue
+      if (key === null || !key.startsWith(PROGRESS_PREFIX)) continue
       Option.map(decodeProgress(read(key)), (progress) => {
         entries[key.slice(PROGRESS_PREFIX.length)] = progress
       })

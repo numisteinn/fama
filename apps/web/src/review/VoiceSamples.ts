@@ -76,7 +76,7 @@ export const reviewVoices = (
   const sampleByVoice = new Map<string, RedactedSample>(samples.map((sample) => [sample.voice, sample]))
   const matched = voices
     .filter((voice) => languageOf(voice.language) === target)
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
   const seen = new Set<string>(matched.map((voice) => voice.id))
   const extras = samples
     .filter((sample) => !seen.has(sample.voice))

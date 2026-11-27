@@ -17,7 +17,7 @@ export const segmentId = (mark: Mark): string => `segment-${mark.chapter}-${mark
 
 export const MARK_SELECTOR = '#reader [aria-current="true"]'
 const INTERACTIVE = "input, textarea, select, [contenteditable], button, a, [role=slider], [role^=menuitem], [role=menu]"
-const SCROLL_KEYS = ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"]
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"])
 const SETTLE_MS = 150
 
 const sightBottom = (): number => window.innerHeight - (document.querySelector("footer")?.offsetHeight ?? 0)
@@ -292,7 +292,7 @@ export const ReaderScreenNoDeps = Html.component({
               }
               const onKey = (event: KeyboardEvent) => {
                 const target = event.target instanceof Element ? event.target : null
-                if (SCROLL_KEYS.includes(event.key) && !target?.closest(INTERACTIVE)) byHand()
+                if (SCROLL_KEYS.has(event.key) && !target?.closest(INTERACTIVE)) byHand()
               }
               const onPointer = (event: PointerEvent) => {
                 if (event.target === document.documentElement) byHand()
@@ -391,8 +391,8 @@ export const ReaderScreenNoDeps = Html.component({
             return h.p.class("text-muted-foreground").children(...spans)
           case "Heading":
             return h.h2.class(headingClass).children(...spans)
-          default:
-            return h.p.class("mb-[1.1em]").children(...spans)
+          case "Text":
+          case undefined: return h.p.class("mb-[1.1em]").children(...spans)
         }
       })
       const hasTitle = listRoles.includes("Title")

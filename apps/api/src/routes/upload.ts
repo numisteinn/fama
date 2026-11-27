@@ -28,6 +28,34 @@ export const provisionalTitle = (source: Source) => {
   }
 }
 
+const uploadOptions = (form: FormData) => Effect.gen(function* () {
+  const voiceField = form.get("voice")
+  const speedField = form.get("speed")
+  const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
+  const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
+  if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
+  const reviewField = form.get("review") ?? "false"
+  if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
+  return { voice, speed, review: reviewField === "true" }
+})
+
+const uploadSource = (form: FormData, file: File) => Effect.gen(function* () {
+  const contentType = file.type || "application/octet-stream"
+  const urlField = form.get("url")
+  const url = typeof urlField === "string" ? URL.parse(urlField) : null
+  if (urlField !== null && (url === null || !["http:", "https:"].includes(url.protocol))) {
+    return yield* new BadRequest({ message: "Invalid URL" })
+  }
+  if (url !== null && linkedUploadMediaType(contentType) === undefined) {
+    return yield* new BadRequest({ message: "Linked files must be HTML, PDF or EPUB" })
+  }
+  const fileName = safeFileName(file.name)
+  const source: Source = url === null
+    ? { _tag: "File", fileName, contentType }
+    : { _tag: "Url", url: url.href }
+  return { source, fileName, contentType }
+})
+
 export const uploadRoutes = HttpRouter.addAll([
   HttpRouter.route(
     "POST",
@@ -44,27 +72,9 @@ export const uploadRoutes = HttpRouter.addAll([
         const file = form.get("file")
         if (file === null || typeof file === "string") return yield* new BadRequest({ message: "Missing file" })
         if (file.size > MAX_UPLOAD_BYTES) return yield* new TooLarge()
-        const voiceField = form.get("voice")
-        const speedField = form.get("speed")
-        const voice = typeof voiceField === "string" && voiceField !== "" ? VoiceRef.make(voiceField) : null
-        const speed = typeof speedField === "string" && speedField !== "" ? Number(speedField) : 1
-        if (!Number.isFinite(speed) || speed <= 0) return yield* new BadRequest({ message: "Invalid speed" })
-        const reviewField = form.get("review") ?? "false"
-        if (reviewField !== "true" && reviewField !== "false") return yield* new BadRequest({ message: "Invalid review" })
+        const options = yield* uploadOptions(form)
         const id = EpisodeId.make(crypto.randomUUID())
-        const contentType = file.type || "application/octet-stream"
-        const urlField = form.get("url")
-        const url = typeof urlField === "string" ? URL.parse(urlField) : null
-        if (urlField !== null && (url === null || !["http:", "https:"].includes(url.protocol))) {
-          return yield* new BadRequest({ message: "Invalid URL" })
-        }
-        if (url !== null && linkedUploadMediaType(contentType) === undefined) {
-          return yield* new BadRequest({ message: "Linked files must be HTML, PDF or EPUB" })
-        }
-        const fileName = safeFileName(file.name)
-        const source: Source = url === null
-          ? { _tag: "File", fileName, contentType }
-          : { _tag: "Url", url: url.href }
+        const { source, fileName, contentType } = yield* uploadSource(form, file)
         const key = source._tag === "File" ? keys.upload(userId, id, fileName) : keys.linkedUpload(userId, id)
         yield* (yield* MediaStore).put(key, file, contentType)
         const repo = yield* EpisodeRepo
@@ -72,9 +82,7 @@ export const uploadRoutes = HttpRouter.addAll([
           id,
           source,
           title: provisionalTitle(source),
-          voice,
-          speed,
-          review: reviewField === "true",
+          ...options,
         })
         if (source._tag === "Url") yield* Effect.logInfo(`Stored upload with url for episode ${id}`)
         yield* (yield* Wake).wake

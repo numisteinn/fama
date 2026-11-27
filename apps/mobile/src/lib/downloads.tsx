@@ -18,9 +18,9 @@ export type DownloadState = { readonly _tag: "None" } | { readonly _tag: "Downlo
 type Downloads = {
   state(episode: Episode): DownloadState
   /** The local file of a chapter's current URL, or null when that revision is not on the device. */
-  localUri(episodeId: string, index: number, url: string): string | null
+  localUri: (episodeId: string, index: number, url: string) => string | null
   /** The local timing file of a chapter's current timingUrl, or null when that revision is not on the device. */
-  localTimingUri(episodeId: string, index: number, timingUrl: string): string | null
+  localTimingUri: (episodeId: string, index: number, timingUrl: string) => string | null
   download(episode: Episode): Promise<void>
   remove(episodeId: string): void
 }
@@ -40,7 +40,27 @@ async function fetchFile(url: string, dir: Directory, target: File) {
   const partial = new File(dir, `${target.name}.part`)
   if (partial.exists) partial.delete()
   await File.downloadFileAsync(url, partial)
-  partial.move(target)
+  await partial.move(target)
+}
+
+function migrateFile(dir: Directory, names: Set<string>, legacyName: string, currentName: string): boolean {
+  if (!names.has(legacyName) || names.has(currentName)) return false
+  new File(dir, legacyName).moveSync(new File(dir, currentName))
+  names.delete(legacyName)
+  names.add(currentName)
+  return true
+}
+
+function migrateChapters(dir: Directory, names: Set<string>, chapters: Episode["chapters"], onChange: () => void) {
+  for (const { index, url, timingUrl } of chapters) {
+    if (isUnversionedChapterPath(url) && migrateFile(dir, names, legacyAudioFileName(index), audioFileName(index, url))) {
+      onChange()
+    }
+    if (timingUrl !== null && isUnversionedChapterPath(timingUrl) &&
+        migrateFile(dir, names, legacyTimingFileName(index), timingFileName(index, timingUrl))) {
+      onChange()
+    }
+  }
 }
 
 export function DownloadsProvider({ children }: { children: ReactNode }) {
@@ -62,28 +82,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         if (!dir.exists) continue
         const entries = dir.list()
         const names = new Set(entries.map((entry) => entry.name))
-        for (const chapter of episode.chapters) {
-          if (isUnversionedChapterPath(chapter.url)) {
-            const legacyName = legacyAudioFileName(chapter.index)
-            const currentName = audioFileName(chapter.index, chapter.url)
-            if (names.has(legacyName) && !names.has(currentName)) {
-              new File(dir, legacyName).move(new File(dir, currentName))
-              names.delete(legacyName)
-              names.add(currentName)
-              changed = true
-            }
-          }
-          if (chapter.timingUrl !== null && isUnversionedChapterPath(chapter.timingUrl)) {
-            const legacyName = legacyTimingFileName(chapter.index)
-            const currentName = timingFileName(chapter.index, chapter.timingUrl)
-            if (names.has(legacyName) && !names.has(currentName)) {
-              new File(dir, legacyName).move(new File(dir, currentName))
-              names.delete(legacyName)
-              names.add(currentName)
-              changed = true
-            }
-          }
-        }
+        migrateChapters(dir, names, episode.chapters, () => { changed = true })
         const stale = new Set(staleFileNames([...names], episode.chapters))
         for (const entry of entries) {
           if (stale.has(entry.name) && entry.exists) {
@@ -157,7 +156,6 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
       },
     }
     // version is a cache key for the file checks above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, accountKey, active, version])
 
   return <DownloadsContext value={value}>{children}</DownloadsContext>

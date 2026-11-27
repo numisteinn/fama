@@ -8,7 +8,7 @@ type Props = {
   duration: number
   /** Episode seconds where chapters 1..n start. */
   marks: ReadonlyArray<number>
-  onSeek(position: number): void
+  onSeek: (position: number) => void
 }
 
 /** Episode-wide scrubber. Tap or drag anywhere on the 44 pt strip; it seeks on release. */

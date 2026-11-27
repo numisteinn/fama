@@ -144,7 +144,7 @@ export const layer = Layer.effect(
       return yield* Schema.decodeUnknownEffect(ClaimedSample)({
         ...row,
         leaseToken,
-        documentPath: `/api/worker/samples/${row.episodeId}/document`,
+        documentPath: `/api/worker/samples/${String(row.episodeId)}/document`,
       })
     }).pipe(Effect.withSpan("SampleRepo.claim"))
 

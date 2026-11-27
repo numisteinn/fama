@@ -57,11 +57,10 @@ describe("narrateAgain state and API seam rules", () => {
     expect(editedChapterCount(state)).toBe(2)
     expect(hasTextEdits(state)).toBe(true)
     expect(canSaveText(state, episode.job)).toBe(true)
-    if (state.document._tag === "Ready") {
-      expect(isChapterEdited(state.document, 0)).toBe(true)
-      expect(isChapterEdited(state.document, 1)).toBe(false)
-      expect(isChapterEdited(state.document, 2)).toBe(true)
-    }
+    if (state.document._tag !== "Ready") throw new Error("Expected the Document to be ready")
+    expect(isChapterEdited(state.document, 0)).toBe(true)
+    expect(isChapterEdited(state.document, 1)).toBe(false)
+    expect(isChapterEdited(state.document, 2)).toBe(true)
 
     // Reverting both edits disables Save again so an unchanged Document does not queue narration.
     state = applyChapterText(applyChapterText(state, 0, "Quiet water."), 2, "The boats come home.")

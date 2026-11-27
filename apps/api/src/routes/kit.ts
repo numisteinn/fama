@@ -39,7 +39,7 @@ export const webRequest = Effect.flatMap(HttpServerRequest.HttpServerRequest, (r
 )
 
 export const handle = <E, R>(effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
-  Effect.catch(effect, errorResponse)
+  effect.pipe(Effect.catch(errorResponse))
 
 /** A client route: runs as the user of the client token. */
 export const api = <E, R>(effect: (user: User) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>

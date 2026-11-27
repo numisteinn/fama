@@ -19,12 +19,12 @@ export default function LibraryScreen() {
 
   const play = (episode: Episode) => {
     if (!source) return
-    void player.load(episode, source, true)
+    player.load(episode, source, true)
     router.push("/player")
   }
 
   const remove = (episode: Episode) => {
-    void player.forget(episode.id)
+    player.forget(episode.id)
     downloads.remove(episode.id)
     library.remove(episode.id).catch((error: Error) => Alert.alert("Could not delete", error.message))
   }
@@ -87,12 +87,12 @@ function ErrorBanner({ message }: { message: string }) {
   )
 }
 
-const pan = require("../../../../assets/pan-sleeping.png")
+const pan: unknown = require("../../../../assets/pan-sleeping.png")
 
 function Empty({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.empty}>
-      <Image source={pan} style={styles.emptyArt} accessibilityIgnoresInvertColors />
+      <Image source={typeof pan === "number" ? pan : undefined} style={styles.emptyArt} accessibilityIgnoresInvertColors />
       <Text style={styles.emptyTitle}>{title}</Text>
       {children}
     </View>

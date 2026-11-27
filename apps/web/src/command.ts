@@ -74,9 +74,9 @@ export class CreateEpisodeFromSource extends Command.Service<CreateEpisodeFromSo
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
       return ({ connection, input }) =>
-        sendJson(Episode, connection, "POST", "/api/episodes", (request) =>
-          HttpClientRequest.bodyJsonUnsafe(request, encodeCreate(input)),
-        ).pipe(
+        sendJson(Episode, connection, "POST", "/api/episodes", {
+          withBody: (request) => HttpClientRequest.bodyJsonUnsafe(request, encodeCreate(input)),
+        }).pipe(
           Effect.provideService(HttpClient.HttpClient, client),
           Effect.map((episode) => AppMessage.SucceededCreateEpisode({ episode })),
           Effect.catch((failure) => Effect.succeed(AppMessage.FailedCreateEpisode({ failure }))),
@@ -105,9 +105,9 @@ export class UploadEpisode extends Command.Service<UploadEpisode>()("app/UploadE
         if (voice) form.set("voice", voice)
         form.set("speed", String(speed))
         form.set("review", String(review))
-        return sendJson(Episode, connection, "POST", "/api/episodes/upload", (request) =>
-          HttpClientRequest.bodyFormData(request, form),
-        ).pipe(
+        return sendJson(Episode, connection, "POST", "/api/episodes/upload", {
+          withBody: (request) => HttpClientRequest.bodyFormData(request, form),
+        }).pipe(
           Effect.provideService(HttpClient.HttpClient, client),
           Effect.map((episode) => AppMessage.SucceededUploadFile({ key, episode })),
           Effect.catch((failure) => Effect.succeed(AppMessage.FailedUploadFile({ key, failure }))),
@@ -170,8 +170,10 @@ export class PushProgress extends Command.Service<PushProgress>()("app/PushProgr
           connection,
           "PUT",
           `${episodePath(episodeId)}/progress`,
-          (request) => HttpClientRequest.bodyJsonUnsafe(request, encodeProgress(progress)),
-          true,
+          {
+            withBody: (request) => HttpClientRequest.bodyJsonUnsafe(request, encodeProgress(progress)),
+            isKeepalive: true,
+          },
         ).pipe(
           Effect.provideService(HttpClient.HttpClient, client),
           Effect.map((stored) => AppMessage.SucceededPushProgress({ episodeId, sent: progress, stored })),
@@ -312,12 +314,12 @@ export class StartReviewNarration extends Command.Service<StartReviewNarration>(
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient
       return ({ connection, episodeId, document, voice }) =>
-        sendJson(Episode, connection, "POST", `${episodePath(episodeId)}/start`, (request) =>
-          HttpClientRequest.bodyJsonUnsafe(
+        sendJson(Episode, connection, "POST", `${episodePath(episodeId)}/start`, {
+          withBody: (request) => HttpClientRequest.bodyJsonUnsafe(
             request,
             encodeStartReview({ document, ...(voice !== undefined ? { voice } : {}) }),
           ),
-        ).pipe(Effect.provideService(HttpClient.HttpClient, client))
+        }).pipe(Effect.provideService(HttpClient.HttpClient, client))
     }),
   )
 }

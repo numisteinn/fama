@@ -1,6 +1,7 @@
 import type { Chapter, JobState } from "@fama/contracts"
 import { describe, expect, test } from "vitest"
 import { audioFileName, episodeFileNames, isEpisodeDownloaded, sha256Hex, staleFileNames, timingFileName } from "./downloadFiles"
+import { required } from "../../../../test/required.ts"
 
 const chapter = (index: number, rev: string | null, timed = true): Chapter => ({
   index,
@@ -36,10 +37,10 @@ describe("downloadFiles revision invalidation", () => {
 
     // Chapter 1 gets a new url and timingUrl after re-narration; chapter 0 is reused.
     const after = [chapter(0, "rev1"), chapter(1, "rev2")]
-    expect(disk.has(audioFileName(0, after[0]!.url))).toBe(true)
-    expect(disk.has(timingFileName(0, after[0]!.timingUrl!))).toBe(true)
-    expect(disk.has(audioFileName(1, after[1]!.url))).toBe(false)
-    expect(disk.has(timingFileName(1, after[1]!.timingUrl!))).toBe(false)
+    expect(disk.has(audioFileName(0, required(after[0]).url))).toBe(true)
+    expect(disk.has(timingFileName(0, required(required(after[0]).timingUrl)))).toBe(true)
+    expect(disk.has(audioFileName(1, required(after[1]).url))).toBe(false)
+    expect(disk.has(timingFileName(1, required(required(after[1]).timingUrl)))).toBe(false)
     expect(isEpisodeDownloaded({ job: ready, chapters: after }, (name) => disk.has(name))).toBe(false)
     expect(isEpisodeDownloaded({ job: queued, chapters: before }, (name) => disk.has(name))).toBe(false)
   })
@@ -47,14 +48,14 @@ describe("downloadFiles revision invalidation", () => {
   test("staleFileNames removes replaced revisions and legacy unkeyed files while keeping reused chapters", () => {
     const before = [chapter(0, "rev1"), chapter(1, "rev1")]
     const after = [chapter(0, "rev1"), chapter(1, "rev2")]
-    const existing = ["000.m4a", "000.json", ...episodeFileNames(before), ...episodeFileNames([after[1]!])]
+    const existing = ["000.m4a", "000.json", ...episodeFileNames(before), ...episodeFileNames([required(after[1])])]
 
     const stale = staleFileNames(existing, after)
     expect(stale).toEqual([
       "000.m4a",
       "000.json",
-      audioFileName(1, before[1]!.url),
-      timingFileName(1, before[1]!.timingUrl!),
+      audioFileName(1, required(before[1]).url),
+      timingFileName(1, required(required(before[1]).timingUrl)),
     ])
   })
 })

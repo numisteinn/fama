@@ -1,18 +1,21 @@
-import type { ClaimedJob, Document, Episode } from "@fama/contracts"
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest"
+import { type ClaimedJob, type Document, Episode } from "@fama/contracts"
+import { beforeAll, beforeEach, expect, it } from "vitest"
 import { keys } from "../media-store.ts"
-import { startApp, users } from "../test-app.ts"
+import { startApp, users, readJson, readNarrateJob } from "../test-app.ts"
+import { required } from "../../../../test/required.ts"
 
 let app: Awaited<ReturnType<typeof startApp>>
-beforeAll(async () => { app = await startApp() })
-afterAll(() => app?.dispose())
+beforeAll(async () => {
+  app = await startApp()
+  return () => app.dispose()
+})
 beforeEach(() => app.reset())
 
 const original = {
   title: "Harbour Days", author: null, language: "en",
   chapters: [{ title: "Morning", text: "Quiet water." }, { title: "Evening", text: "The boats come home." }],
 } satisfies Document
-const edited = { ...original, chapters: [original.chapters[0]!, { ...original.chapters[1]!, text: "The boats stay out." }] }
+const edited = { ...original, chapters: [required(original.chapters[0]), { ...required(original.chapters[1]), text: "The boats stay out." }] }
 const voice = { voice: "kokoro:af_heart", speed: 1.25 }
 const inputHash = "a".repeat(64)
 const nextHash = "b".repeat(64)
@@ -20,17 +23,17 @@ const nextHash = "b".repeat(64)
 const claim = async () => {
   const response = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
   expect(response.status).toBe(200)
-  return (await response.json() as { work: ClaimedJob }).work
+  return readNarrateJob(response)
 }
 const add = async () => {
   const response = await app.alice("POST", "/api/episodes", {
-    json: { source: { _tag: "Text", title: null, text: original.chapters[0]!.text }, voice: null, speed: 1 },
+    json: { source: { _tag: "Text", title: null, text: required(original.chapters[0]).text }, voice: null, speed: 1 },
   })
   expect(response.status).toBe(201)
-  return (await response.json() as Episode).id
+  return (await readJson(Episode, response)).id
 }
 const apiPath = (id: string) => `/api/episodes/${id}`
-const view = async (id: string) => await (await app.alice("GET", apiPath(id))).json() as Episode
+const view = async (id: string) => await readJson(Episode, await app.alice("GET", apiPath(id)))
 const workerPath = (job: ClaimedJob, path: string, query = "") =>
   `/api/worker/jobs/${job.episodeId}/${path}?workerId=w1&leaseToken=${job.leaseToken}${query}`
 const putTiming = (job: ClaimedJob, index: number, hash: string, text: string) =>
@@ -63,7 +66,7 @@ it("publishes the new audio and timing together, remaps progress and rebuilds th
   expect((await finish(first, "complete")).status).toBe(204)
   const before = await view(id)
   const transcriptPath = `/media/${users.alice.feed}/episodes/${id}/transcript.vtt`
-  expect(await (await app.call(null, "GET", transcriptPath)).text()).toContain(original.chapters[1]!.text)
+  expect(await (await app.request(null, "GET", transcriptPath)).text()).toContain(required(original.chapters[1]).text)
   if (before.job._tag !== "Ready") throw new Error("Expected Ready")
   const transcriptKey = keys.transcriptRevision(users.alice.id, id, before.job.finishedAt)
   expect(await app.env.MEDIA.head(transcriptKey)).not.toBeNull()
@@ -73,37 +76,37 @@ it("publishes the new audio and timing together, remaps progress and rebuilds th
   expect((await app.alice("PUT", `${path}/document`, { json: edited })).status).toBe(204)
   expect(await view(id)).toMatchObject({ job: { _tag: "Queued" }, bookUrl: null, chapters: before.chapters, progress })
   expect(await app.env.MEDIA.head(transcriptKey)).toBeNull()
-  expect((await app.call(null, "GET", transcriptPath)).status).toBe(404)
+  expect((await app.request(null, "GET", transcriptPath)).status).toBe(404)
 
   const again = await claim()
   expect(again.chapters).toEqual([{ index: 0, inputHash }, { index: 1, inputHash }])
   expect(await (await app.asWorker("GET", workerPath(again, "document"))).json()).toEqual(edited)
   expect(await (await app.asWorker("GET", workerPath(again, "chapters/0"))).text()).toBe("audio-0")
   expect((await putTiming(first, 1, nextHash, "old worker")).status).toBe(409)
-  expect((await putTiming(again, 1, nextHash, edited.chapters[1]!.text)).status).toBe(204)
+  expect((await putTiming(again, 1, nextHash, required(edited.chapters[1]).text)).status).toBe(204)
   expect((await view(id)).chapters).toEqual(before.chapters)
-  expect(await (await app.call(null, "GET", before.chapters[1]!.url)).text()).toBe("audio-1")
+  expect(await (await app.request(null, "GET", required(before.chapters[1]).url)).text()).toBe("audio-1")
 
   expect((await putAudio(again, 1, nextHash, 6000, "edited audio")).status).toBe(204)
   expect((await putAudio(again, 1, nextHash, 6000, "edited audio")).status).toBe(204)
   const running = await view(id)
   expect(running.chapters[0]).toEqual(before.chapters[0])
-  expect(running.chapters[1]!.url).not.toBe(before.chapters[1]!.url)
-  expect(running.chapters[1]!.timingUrl).not.toBe(before.chapters[1]!.timingUrl)
-  expect(await (await app.call(null, "GET", running.chapters[1]!.url)).text()).toBe("edited audio")
-  expect(await (await app.call(null, "GET", running.chapters[1]!.timingUrl!)).text()).toContain(edited.chapters[1]!.text)
+  expect(required(running.chapters[1]).url).not.toBe(required(before.chapters[1]).url)
+  expect(required(running.chapters[1]).timingUrl).not.toBe(required(before.chapters[1]).timingUrl)
+  expect(await (await app.request(null, "GET", required(running.chapters[1]).url)).text()).toBe("edited audio")
+  expect(await (await app.request(null, "GET", required(required(running.chapters[1]).timingUrl))).text()).toContain(required(edited.chapters[1]).text)
   expect(running.progress?.positionMs).toBe(13_000)
-  expect(running.progress!.updatedAt > progress.updatedAt).toBe(true)
+  expect(required(running.progress).updatedAt > progress.updatedAt).toBe(true)
 
   expect((await putBytes(again, "book", "new book")).status).toBe(204)
   expect((await finish(again, "complete", 16_000)).status).toBe(204)
   const ready = await view(id)
   expect(ready.durationMs).toBe(16_000)
   expect(ready.bookUrl).not.toBe(before.bookUrl)
-  expect(await (await app.call(null, "GET", ready.bookUrl!)).text()).toBe("new book")
-  const transcript = await (await app.call(null, "GET", transcriptPath)).text()
-  expect(transcript).toContain(edited.chapters[1]!.text)
-  expect(transcript).not.toContain(original.chapters[1]!.text)
+  expect(await (await app.request(null, "GET", required(ready.bookUrl))).text()).toBe("new book")
+  const transcript = await (await app.request(null, "GET", transcriptPath)).text()
+  expect(transcript).toContain(required(edited.chapters[1]).text)
+  expect(transcript).not.toContain(required(original.chapters[1]).text)
 })
 
 it("guards editing by owner and state and only allows chapter text to change after narration starts", async () => {
@@ -121,7 +124,7 @@ it("guards editing by owner and state and only allows chapter text to change aft
   expect((await app.bob("PUT", `${path}/document`, { json: edited })).status).toBe(404)
   expect((await app.bob("PUT", `${path}/voice`, { json: voice })).status).toBe(404)
   expect((await document({ ...edited, title: "New title" })).status).toBe(400)
-  expect((await document({ ...edited, chapters: [...edited.chapters].reverse() })).status).toBe(400)
+  expect((await document({ ...edited, chapters: edited.chapters.toReversed() })).status).toBe(400)
   expect((await document({ ...edited, chapters: edited.chapters.slice(1) })).status).toBe(400)
   expect((await document(edited)).status).toBe(204)
   const again = await claim()

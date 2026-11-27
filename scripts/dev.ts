@@ -44,7 +44,7 @@ try {
   process.exit(1)
 }
 
-const services: Array<{ name: string; color: number; cwd: string; command: Array<string> }> = [
+const services: Array<{ name: string; color: number; cwd: string; command: [string, ...Array<string>] }> = [
   { name: "api", color: 36, cwd: "apps/api", command: [bin("api", "wrangler"), "dev"] },
   { name: "web", color: 35, cwd: "apps/web", command: [bin("web", "vite"), "build", "--watch"] },
   {
@@ -77,14 +77,14 @@ function signal(child: ChildProcess, name: NodeJS.Signals) {
 
 for (const service of services) {
   const [command, ...args] = service.command
-  const child = spawn(command!, args, {
+  const child = spawn(command, args, {
     cwd: root + service.cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, FORCE_COLOR: "1" },
   })
   const prefix = `\x1b[${service.color}m${service.name.padEnd(6)}\x1b[0m│ `
-  for (const stream of [child.stdout!, child.stderr!]) {
+  for (const stream of [child.stdout, child.stderr]) {
     createInterface({ input: stream }).on("line", (line) => console.log(prefix + line))
   }
   child.on("exit", (code, signalName) => {

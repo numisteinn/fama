@@ -35,7 +35,7 @@ export function sampleTapAction(
 }
 
 /** The voices of the episode's language, each reading the start of the stored Document. Pick one by ear. */
-export function Samples(props: { id: string; api: Api; selected: VoiceRef | null; onSelect(voice: VoiceRef): void }) {
+export function Samples(props: { id: string; api: Api; selected: VoiceRef | null; onSelect: (voice: VoiceRef) => void }) {
   const { id, api, selected, onSelect } = props
   const [samples, setSamples] = useState<ReadonlyArray<Sample> | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -59,23 +59,21 @@ export function Samples(props: { id: string; api: Api; selected: VoiceRef | null
     let live = true
     const gen = ++listGen.current
     setError(null)
-    api.samples(id).then(
-      async (list) => {
-        if (!live || gen !== listGen.current) return
-        try {
-          const next = list.length === 0 ? await api.requestSamples(id, null) : list
-          if (live && gen === listGen.current) {
-            setSamples(next)
-            setError(null)
-          }
-        } catch (cause) {
-          if (live && gen === listGen.current) setError(message(cause))
+    const isCurrent = () => live && gen === listGen.current
+    const load = async () => {
+      try {
+        const list = await api.samples(id)
+        if (!isCurrent()) return
+        const next = list.length === 0 ? await api.requestSamples(id, null) : list
+        if (isCurrent()) {
+          setSamples(next)
+          setError(null)
         }
-      },
-      (cause: unknown) => {
-        if (live && gen === listGen.current) setError(message(cause))
-      },
-    )
+      } catch (cause) {
+        if (isCurrent()) setError(message(cause))
+      }
+    }
+    void load()
     return () => {
       live = false
     }
@@ -196,9 +194,9 @@ function SampleRow(props: {
   label: string
   selected: boolean
   playing: boolean
-  onSelect(): void
-  onToggle(): void
-  onRetry(): void
+  onSelect: () => void
+  onToggle: () => void
+  onRetry: () => void
 }) {
   const { sample, label, selected, playing, onSelect, onToggle, onRetry } = props
   const failed = sample.state._tag === "Failed"

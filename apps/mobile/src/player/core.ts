@@ -9,6 +9,7 @@
 import { type Episode, type EpisodeProgress, awaitedAfter, playStart } from "@fama/contracts"
 import { isActive } from "../lib/format"
 import type { NativeStatus } from "./native"
+import { remapReplacedPosition } from "./remapPosition"
 import { IDLE_TRACKER, type Tracker, isSameProgress, planSync, restMs, startMs, takesAnswer, track } from "./progressRules"
 
 export const IDLE_STATUS: NativeStatus = {
@@ -29,40 +30,6 @@ export interface Told {
   readonly urls: ReadonlyArray<string>
   readonly durations: ReadonlyArray<number>
   readonly expectsMore: boolean
-}
-
-/**
- * Remaps an episode position from the chapter timeline the native player was told onto a replacement chapter list,
- * matching the server rule in `docs/api.md`: same fraction inside a replaced chapter, shifted by duration deltas after it.
- */
-export function remapReplacedPosition(
-  posMs: number,
-  oldDurations: ReadonlyArray<number>,
-  oldUrls: ReadonlyArray<string>,
-  newChapters: ReadonlyArray<{ readonly url: string; readonly durationMs: number }>,
-): number {
-  const newTotal = newChapters.reduce((sum, chapter) => sum + chapter.durationMs, 0)
-  if (oldDurations.length === 0 || newChapters.length === 0) return Math.min(Math.max(0, posMs), newTotal)
-  let elapsed = 0
-  let index = oldDurations.length - 1
-  let offset = Math.max(0, posMs)
-  for (let i = 0; i < oldDurations.length; i++) {
-    const duration = oldDurations[i]!
-    if (posMs < elapsed + duration || i === oldDurations.length - 1) {
-      index = i
-      offset = Math.max(0, Math.min(posMs - elapsed, duration))
-      break
-    }
-    elapsed += duration
-  }
-  const targetIndex = Math.min(index, newChapters.length - 1)
-  let newStart = 0
-  for (let i = 0; i < targetIndex; i++) newStart += newChapters[i]!.durationMs
-  const oldDuration = oldDurations[targetIndex] ?? 0
-  const newDuration = newChapters[targetIndex]!.durationMs
-  const replaced = oldUrls[targetIndex] !== newChapters[targetIndex]!.url
-  const newOffset = replaced && oldDuration > 0 ? Math.round((offset / oldDuration) * newDuration) : Math.min(offset, newDuration)
-  return Math.max(0, Math.min(newTotal, newStart + newOffset))
 }
 
 export interface Core {
@@ -232,17 +199,18 @@ const saveNow = (core: Core, now: string): Outcome => {
   return stamp({ ...core, tracker: { ...tracker, savedMs: ms } }, status.episodeId, ms, now)
 }
 
+// At the end of a growing queue, only native intent distinguishes a wait from a Pause.
+const stillWantsPlay = (core: Core, status: NativeStatus, episode: Episode | undefined): boolean =>
+  !core.awaitingPause && status.episodeId !== null &&
+  (status.playing || (status.ended && (status.wantsPlay ?? core.wantsPlay) && (episode === undefined || isActive(episode.job))))
+
 /** The native player said where it is. The save rule (`track`) says whether that is the listener's progress. */
 const takeStatus = (core: Core, status: NativeStatus, now: string): Outcome => {
   const ms = positionMs(status)
   const episode = listed(core, status.episodeId)
   const awaitingPause = core.awaitingPause &&
     !(status.episodeId === core.told?.episodeId && !status.playing && status.wantsPlay !== true)
-  // At the end of a growing queue, only native intent distinguishes a wait from a Pause.
-  const wantsPlay =
-    core.awaitingPause || status.episodeId === null
-      ? false
-      : status.playing || (status.ended && (status.wantsPlay ?? core.wantsPlay) && (episode === undefined || isActive(episode.job)))
+  const wantsPlay = stillWantsPlay(core, status, episode)
   const next = { ...core, status, wantsPlay, awaitingPause }
   if (core.landingMs !== null && status.episodeId === core.tracker.episodeId) {
     // `plan` moved the native player. A status that still has the old place is from before the move.
@@ -287,6 +255,38 @@ const askPlay = (core: Core, episodeId: string): Core =>
     ? { ...core, held: { episodeId, awaiting: core.inFlight } }
     : actPlay(core, episodeId)
 
+const refreshAnswered = (core: Core, event: Extract<PlayerEvent, { _tag: "RefreshAnswered" }>): Outcome => {
+  const answered = { ...core, inFlight: core.inFlight.filter((sent) => sent !== event.request) }
+  const merged =
+    event.episodes === null
+      ? { core: answered, effects: [] }
+      : mergeProgress({ ...answered, library: event.episodes }, event.episodes)
+  const { held } = merged.core
+  if (held === null) return merged
+  const awaiting = awaitedAfter(held.awaiting, event.request, event.episodes !== null)
+  return {
+    core: awaiting.length > 0 ? { ...merged.core, held: { ...held, awaiting } } : actPlay(merged.core, held.episodeId),
+    effects: merged.effects,
+  }
+}
+
+const pushAnswered = (core: Core, event: Extract<PlayerEvent, { _tag: "PushAnswered" }>): Outcome => {
+  // A clamped stamp included, so a fast device clock does not win every later write.
+  if (!takesAnswer(core.entries[event.episodeId], event.sent) || isSameProgress(event.stored, event.sent)) {
+    return { core, effects: [] }
+  }
+  // The same position with the server's stamp is still the listener's own entry. Another one is news.
+  const isOwn = event.stored.positionMs === event.sent.positionMs && core.followedAt === event.sent.updatedAt
+  return {
+    core: {
+      ...core,
+      entries: { ...core.entries, [event.episodeId]: event.stored },
+      followedAt: isOwn ? event.stored.updatedAt : core.followedAt,
+    },
+    effects: [],
+  }
+}
+
 /** Changes intent and facts for `event`. It makes no native call. */
 const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
   switch (event._tag) {
@@ -296,20 +296,8 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
       const request = core.requests + 1
       return { core: { ...core, requests: request, inFlight: [...core.inFlight, request] }, effects: [] }
     }
-    case "RefreshAnswered": {
-      const answered = { ...core, inFlight: core.inFlight.filter((sent) => sent !== event.request) }
-      const merged =
-        event.episodes === null
-          ? { core: answered, effects: [] }
-          : mergeProgress({ ...answered, library: event.episodes }, event.episodes)
-      const { held } = merged.core
-      if (held === null) return merged
-      const awaiting = awaitedAfter(held.awaiting, event.request, event.episodes !== null)
-      return {
-        core: awaiting.length > 0 ? { ...merged.core, held: { ...held, awaiting } } : actPlay(merged.core, held.episodeId),
-        effects: merged.effects,
-      }
-    }
+    case "RefreshAnswered":
+      return refreshAnswered(core, event)
     case "PlayEpisode": {
       // The row the listener tapped lists the episode. The library's own entry of it is newer, when it has one.
       const known = listed(core, event.episode.id) ? core : { ...core, library: [...core.library, event.episode] }
@@ -327,7 +315,7 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
     }
     // A move takes a held Play back. The listener chose the place, so it is their own.
     case "Seek":
-      return { core: { ...core, ask: event.play ? "Play" : core.ask, held: null, shortOfMs: null, move: { _tag: "Seek", positionMs: event.positionMs } }, effects: [] }
+      return { core: { ...core, ask: event.play === true ? "Play" : core.ask, held: null, shortOfMs: null, move: { _tag: "Seek", positionMs: event.positionMs } }, effects: [] }
     case "Skip":
       return { core: { ...core, held: null, shortOfMs: null, move: { _tag: "Skip", deltaMs: event.deltaMs } }, effects: [] }
     case "Forget": {
@@ -346,26 +334,118 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
       return takeStatus(core, event.status, now)
     case "Background":
       return saveNow(core, now)
-    case "PushAnswered": {
-      // A clamped stamp included, so a fast device clock does not win every later write.
-      if (!takesAnswer(core.entries[event.episodeId], event.sent) || isSameProgress(event.stored, event.sent)) {
-        return { core, effects: [] }
-      }
-      // The same position with the server's stamp is still the listener's own entry. Another one is news.
-      const isOwn = event.stored.positionMs === event.sent.positionMs && core.followedAt === event.sent.updatedAt
-      return {
-        core: {
-          ...core,
-          entries: { ...core.entries, [event.episodeId]: event.stored },
-          followedAt: isOwn ? event.stored.updatedAt : core.followedAt,
-        },
-        effects: [],
-      }
-    }
+    case "PushAnswered":
+      return pushAnswered(core, event)
   }
 }
 
 // PLAN
+
+const done = { ask: null, move: null } as const
+
+const loadEpisode = (core: Core, episode: Episode | undefined, now: string): Outcome => {
+  if (episode === undefined || episode.chapters.length === 0) {
+    return { core: { ...core, ...done, episodeId: core.told?.episodeId ?? null }, effects: [] }
+  }
+  const saved = saveNow(core, now)
+  const entry = saved.core.entries[episode.id] ?? null
+  const autoplay = core.ask === "Play"
+  return {
+    core: {
+      ...saved.core,
+      ...done,
+      told: {
+        episodeId: episode.id,
+        urls: episode.chapters.map((chapter) => chapter.url),
+        durations: episode.chapters.map((chapter) => chapter.durationMs),
+        expectsMore: isActive(episode.job),
+      },
+      wantsPlay: autoplay,
+      awaitingPause: false,
+      followedAt: entry?.updatedAt ?? null,
+      landingMs: null,
+      shortOfMs: entry !== null && entry.positionMs > lengthMs(episode) ? entry.positionMs : null,
+    },
+    effects: [
+      ...saved.effects,
+      { _tag: "Load", episode, positionMs: autoplay ? startMs(entry, episode) : restMs(entry, episode), autoplay },
+    ],
+  }
+}
+
+const trackChanges = (told: Told, episode: Episode | undefined) => {
+  if (episode === undefined) return { nextTold: told, urlsReplaced: false, hasNewTracks: false }
+  const expectsMore = isActive(episode.job)
+  // A late, shorter library list keeps all known tracks unless a shared URL changed.
+  const { chapters } = episode
+  const urlsReplaced = chapters.some((chapter, index) => index < told.urls.length && chapter.url !== told.urls[index])
+  const keepToldChapters = !urlsReplaced && chapters.length < told.urls.length
+  return {
+    nextTold: {
+      ...told,
+      urls: keepToldChapters ? told.urls : chapters.map((chapter) => chapter.url),
+      durations: keepToldChapters ? told.durations : chapters.map((chapter) => chapter.durationMs),
+      expectsMore,
+    },
+    urlsReplaced,
+    hasNewTracks: urlsReplaced || chapters.length > told.urls.length || expectsMore !== told.expectsMore,
+  }
+}
+
+const followEntry = (core: Core, episode: Episode, entry: EpisodeProgress, hasNewTracks: boolean, autoplay: boolean) => {
+  const targetMs = autoplay ? startMs(entry, episode) : restMs(entry, episode)
+  const totalMs = lengthMs(episode)
+  const shortOfMs = entry.positionMs > totalMs ? entry.positionMs : null
+  let landingMs: number | null = Math.min(targetMs, totalMs)
+  const effects: Array<NativeCall> = []
+  if (hasNewTracks) effects.push({ _tag: "Load", episode, positionMs: targetMs, autoplay })
+  else {
+    // Seeking again at the end of the queue would play its last moment again.
+    if (Math.abs(targetMs - positionMs(core.status)) >= 1) effects.push({ _tag: "Seek", positionMs: targetMs })
+    else landingMs = core.landingMs
+    if (core.ask === "Play") effects.push({ _tag: "Play" })
+    if (core.ask === "Pause") effects.push({ _tag: "Pause" })
+  }
+  return { landingMs, shortOfMs, effects }
+}
+
+const replaceTracks = (core: Core, told: Told, episode: Episode, autoplay: boolean) => {
+  const here = remapReplacedPosition(core.landingMs ?? positionMs(core.status), told.durations, told.urls, episode.chapters)
+  const totalMs = lengthMs(episode)
+  const targetMs =
+    core.move?._tag === "Seek" ? core.move.positionMs
+      : core.move?._tag === "Skip" ? Math.max(0, Math.min(totalMs, here + core.move.deltaMs))
+      : core.ask === "Play" ? playStart(here, episode.chapters, episode.job).positionMs
+      : Math.min(here, totalMs)
+  return {
+    landingMs: Math.min(targetMs, totalMs),
+    shortOfMs: core.shortOfMs,
+    effects: [{ _tag: "Load", episode, positionMs: targetMs, autoplay }] satisfies Array<NativeCall>,
+  }
+}
+
+const applyIntent = (core: Core, episode: Episode | undefined, hasNewTracks: boolean) => {
+  const effects: Array<NativeCall> = []
+  if (hasNewTracks && episode !== undefined) effects.push({ _tag: "UpdateTracks", episode })
+  if (core.move !== null) effects.push(core.move)
+  if (core.ask === "Play") {
+    // The native player waits by itself at the end of its queue.
+    const here = positionMs(core.status)
+    const start = episode !== undefined && core.move === null ? playStart(here, episode.chapters, episode.job) : undefined
+    if (start !== undefined && !start.isWaiting && Math.abs(start.positionMs - here) >= 1) {
+      effects.push({ _tag: "Seek", positionMs: start.positionMs })
+    }
+    effects.push({ _tag: "Play" })
+  }
+  if (core.ask === "Pause") effects.push({ _tag: "Pause" })
+  return { landingMs: core.landingMs, shortOfMs: core.shortOfMs, effects }
+}
+
+const shouldFollowEntry = (core: Core, hasNews: boolean, hasNewTracks: boolean): boolean => {
+  if (core.ask === "Play" && core.move !== null) return false
+  if (core.shortOfMs !== null) return hasNews || hasNewTracks
+  return hasNews && !(core.wantsPlay && !core.status.ended)
+}
 
 /**
  * The one step that decides what the native player does. It is a function of the `Core` alone: intent and facts in,
@@ -386,7 +466,6 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
  */
 export const plan = (core: Core, now: string): Outcome => {
   const { told } = core
-  const done = { ask: null, move: null } as const
   if (core.episodeId === null) {
     return told === null
       ? { core: { ...core, ...done }, effects: [] }
@@ -396,107 +475,19 @@ export const plan = (core: Core, now: string): Outcome => {
         }
   }
   const episode = listed(core, core.episodeId)
-  const isPlay = core.ask === "Play"
+  if (told === null || told.episodeId !== core.episodeId) return loadEpisode(core, episode, now)
 
-  if (told === null || told.episodeId !== core.episodeId) {
-    // The library does not list it, or it has no audio yet: nothing new loads.
-    if (episode === undefined || episode.chapters.length === 0) {
-      return { core: { ...core, ...done, episodeId: told?.episodeId ?? null }, effects: [] }
-    }
-    const saved = saveNow(core, now)
-    const entry = saved.core.entries[episode.id] ?? null
-    return {
-      core: {
-        ...saved.core,
-        ...done,
-        told: {
-          episodeId: episode.id,
-          urls: episode.chapters.map((chapter) => chapter.url),
-          durations: episode.chapters.map((chapter) => chapter.durationMs),
-          expectsMore: isActive(episode.job),
-        },
-        wantsPlay: isPlay,
-        awaitingPause: false,
-        followedAt: entry?.updatedAt ?? null,
-        landingMs: null,
-        shortOfMs: entry !== null && entry.positionMs > lengthMs(episode) ? entry.positionMs : null,
-      },
-      effects: [
-        ...saved.effects,
-        { _tag: "Load", episode, positionMs: isPlay ? startMs(entry, episode) : restMs(entry, episode), autoplay: isPlay },
-      ],
-    }
-  }
-
-  // The native player has the episode. A late list may no longer have it: then only the listener's asks go on.
-  const effects: Array<NativeCall> = []
-  const expectsMore = episode ? isActive(episode.job) : told.expectsMore
-  // Compare only shared indices so a late, shorter library list never falsely triggers a reload.
-  const sharedCount = episode ? Math.min(episode.chapters.length, told.urls.length) : 0
-  const urlsReplaced =
-    episode !== undefined &&
-    episode.chapters.length > 0 &&
-    Array.from({ length: sharedCount }, (_, index) => index).some((index) => episode.chapters[index]!.url !== told.urls[index])
-  const hasNewTracks =
-    episode !== undefined && (urlsReplaced || episode.chapters.length > told.urls.length || expectsMore !== told.expectsMore)
-  const keepToldChapters = episode !== undefined && !urlsReplaced && episode.chapters.length < told.urls.length
-  const nextTold = episode
-    ? {
-        ...told,
-        urls: keepToldChapters ? told.urls : episode.chapters.map((c) => c.url),
-        durations: keepToldChapters ? told.durations : episode.chapters.map((c) => c.durationMs),
-        expectsMore,
-      }
-    : told
+  const { nextTold, urlsReplaced, hasNewTracks } = trackChanges(told, episode)
   const entry = core.entries[told.episodeId]
-  const hasNews = entry !== undefined && entry.updatedAt !== core.followedAt
-  /** Audio plays, as far as the phone knows. */
-  const isOn = core.wantsPlay && !core.status.ended
-  const wantsPlay = core.ask === null ? core.wantsPlay : isPlay
-  let { landingMs, shortOfMs } = core
-  /** The player moves to its entry: to news, or on to an entry it rested short of, now that the list has its audio. */
-  const isMoved =
-    !(isPlay && core.move) && episode !== undefined && entry !== undefined && (shortOfMs !== null ? hasNews || hasNewTracks : hasNews && !isOn)
+  const nextStamp = entry?.updatedAt ?? core.followedAt
+  const wantsPlay = core.ask === null ? core.wantsPlay : core.ask === "Play"
+  const { landingMs, shortOfMs, effects } =
+    episode !== undefined && entry !== undefined && shouldFollowEntry(core, nextStamp !== core.followedAt, hasNewTracks)
+      ? followEntry(core, episode, entry, hasNewTracks, wantsPlay)
+      : urlsReplaced && episode !== undefined
+        ? replaceTracks(core, told, episode, wantsPlay)
+        : applyIntent(core, episode, hasNewTracks)
 
-  if (isMoved && episode !== undefined && entry !== undefined) {
-    // A Play that is on or asked for starts from the entry.
-    const targetMs = wantsPlay ? startMs(entry, episode) : restMs(entry, episode)
-    landingMs = Math.min(targetMs, lengthMs(episode))
-    shortOfMs = entry.positionMs > lengthMs(episode) ? entry.positionMs : null
-    if (hasNewTracks) effects.push({ _tag: "Load", episode, positionMs: targetMs, autoplay: wantsPlay })
-    else {
-      // A player that is there already stays as it is: a seek to the end of the queue would play its last moment again.
-      if (Math.abs(targetMs - positionMs(core.status)) >= 1) effects.push({ _tag: "Seek", positionMs: targetMs })
-      else landingMs = core.landingMs
-      if (isPlay) effects.push({ _tag: "Play" })
-      if (core.ask === "Pause") effects.push({ _tag: "Pause" })
-    }
-  } else if (urlsReplaced && episode !== undefined) {
-    // A re-narrated chapter got a new URL: UpdateTracks keeps existing items, so reload the queue with the new tracks
-    // and remap the current position across any duration changes so playback stays in the same place.
-    const here = remapReplacedPosition(core.landingMs ?? positionMs(core.status), told.durations, told.urls, episode.chapters)
-    const targetMs =
-      core.move?._tag === "Seek"
-        ? core.move.positionMs
-        : core.move?._tag === "Skip"
-          ? Math.max(0, Math.min(lengthMs(episode), here + core.move.deltaMs))
-          : isPlay
-            ? playStart(here, episode.chapters, episode.job).positionMs
-            : Math.min(here, lengthMs(episode))
-    landingMs = Math.min(targetMs, lengthMs(episode))
-    effects.push({ _tag: "Load", episode, positionMs: targetMs, autoplay: wantsPlay })
-  } else {
-    if (hasNewTracks && episode) effects.push({ _tag: "UpdateTracks", episode })
-    if (core.move) effects.push(core.move)
-    if (isPlay) {
-      // Where the Play starts, on the newest list. The native player waits by itself at the end of its queue.
-      const here = positionMs(core.status)
-      const start = episode && !core.move ? playStart(here, episode.chapters, episode.job) : undefined
-      if (start && !start.isWaiting && Math.abs(start.positionMs - here) >= 1) effects.push({ _tag: "Seek", positionMs: start.positionMs })
-      effects.push({ _tag: "Play" })
-    }
-    if (core.ask === "Pause") effects.push({ _tag: "Pause" })
-  }
   return {
     core: {
       ...core,
@@ -504,7 +495,7 @@ export const plan = (core: Core, now: string): Outcome => {
       told: nextTold,
       wantsPlay,
       awaitingPause: core.ask === null ? core.awaitingPause : core.ask === "Pause",
-      followedAt: hasNews ? entry.updatedAt : core.followedAt,
+      followedAt: nextStamp,
       landingMs,
       shortOfMs,
     },

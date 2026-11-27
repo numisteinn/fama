@@ -91,7 +91,7 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
           onTextLayout={({ nativeEvent }) => {
             const old = lines.current.get(item.key)
             const next = nativeEvent.lines
-            if (old?.length === next.length && next.every((l, i) => old[i]?.text === l.text && old[i]?.y === l.y))
+            if (old?.length === next.length && next.every((l, i) => old[i]?.text === l.text && old[i].y === l.y))
               return
             lines.current.set(item.key, next)
             if (item.key === rows[current]?.key) setLayoutVersion((v) => v + 1)

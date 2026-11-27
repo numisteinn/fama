@@ -9,8 +9,7 @@ const MEDIA_TOKEN_PATH = /^\/media\/[^/]+(\/.*)$/
 
 /** Strips `/media/<feedToken>` so query diagnostics never expose the private feed token. */
 export const publicMediaPath = (url: string): string => {
-  const match = MEDIA_TOKEN_PATH.exec(url)
-  return match ? match[1]! : url
+  return MEDIA_TOKEN_PATH.exec(url)?.[1] ?? url
 }
 
 export const RedactedFeedInfo = Schema.Struct({
@@ -147,7 +146,7 @@ export class TimingQuery extends Query.Service<TimingQuery>()("fama/TimingQuery"
     Effect.gen(function* () {
       const api = yield* FamaApi
       return ({ origin, url }) =>
-        api.sendJson(Timing, "GET", Redacted.value(url), undefined, false, { origin, token: apiToken("") })
+        api.sendJson(Timing, "GET", Redacted.value(url), undefined, { origin, token: apiToken("") })
     }),
   )
 }

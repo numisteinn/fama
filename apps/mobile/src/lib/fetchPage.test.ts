@@ -21,8 +21,8 @@ async function serve(handler: RequestListener) {
 it("sends the original link alone when the phone cannot reach the site", async () => {
   const site = await serve((_, response) => response.end())
   await site.stop()
-  const create = vi.fn(async () => "queued")
-  const upload = vi.fn(async () => "uploaded")
+  const create = vi.fn<() => Promise<string>>(async () => "queued")
+  const upload = vi.fn<() => Promise<string>>(async () => "uploaded")
 
   expect(await submitLink(site.url, create, upload)).toBe("queued")
   expect(create).toHaveBeenCalledOnce()

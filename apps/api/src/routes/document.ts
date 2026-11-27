@@ -59,8 +59,8 @@ export const documentRoutes = HttpRouter.addAll([
         const job = yield* repo.storeDocument(params.id, params.leaseToken, revision, {
           title: document.title, author: document.author, language: document.language, voice: params.voice ?? null,
         })
-        const stored: DocumentStored = { next: job._tag === "Review" ? "Review" : "Narrate" }
-        return json(stored)
+        const result: DocumentStored = { next: job._tag === "Review" ? "Review" : "Narrate" }
+        return json(result)
       }),
     ),
   ),

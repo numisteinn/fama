@@ -1,13 +1,13 @@
-import type { ClaimedJob, Episode } from "@fama/contracts"
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest"
-import { startApp } from "../test-app.ts"
+import { Episode } from "@fama/contracts"
+import { beforeAll, beforeEach, expect, it } from "vitest"
+import { startApp, readJson, readNarrateJob } from "../test-app.ts"
 
 let app: Awaited<ReturnType<typeof startApp>>
 
 beforeAll(async () => {
   app = await startApp()
+  return () => app.dispose()
 })
-afterAll(() => app?.dispose())
 beforeEach(() => app.reset())
 
 const source = { _tag: "Url", url: "https://example.com/news/harbour" } as const
@@ -15,7 +15,7 @@ const source = { _tag: "Url", url: "https://example.com/news/harbour" } as const
 async function claim() {
   const response = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
   expect(response.status).toBe(200)
-  return ((await response.json()) as { work: ClaimedJob }).work
+  return readNarrateJob(response)
 }
 
 it("keeps the Url source and serves its uploaded bytes to the worker holding the lease", async () => {
@@ -27,7 +27,7 @@ it("keeps the Url source and serves its uploaded bytes to the worker holding the
 
   const response = await app.alice("POST", "/api/episodes/upload", { body: form })
   expect(response.status).toBe(201)
-  const episode = (await response.json()) as Episode
+  const episode = await readJson(Episode, response)
   expect(episode).toMatchObject({ source, title: "example.com/news/harbour" })
 
   const job = await claim()

@@ -42,7 +42,6 @@ export interface FamaApiShape {
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     withBody?: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest,
-    isKeepalive?: boolean,
     overrideConnection?: Connection,
   ) => Effect.Effect<S["Type"], ApiFailure>
 }
@@ -58,8 +57,8 @@ export class FamaApi extends Context.Service<FamaApi, FamaApiShape>()("fama/web/
           send(overrideConnection ?? connection.get(), method, path, withBody, isKeepalive).pipe(
             Effect.provideService(HttpClient.HttpClient, client),
           ),
-        sendJson: (schema, method, path, withBody, isKeepalive, overrideConnection) =>
-          sendJson(schema, overrideConnection ?? connection.get(), method, path, withBody, isKeepalive).pipe(
+        sendJson: (schema, method, path, withBody, overrideConnection) =>
+          sendJson(schema, overrideConnection ?? connection.get(), method, path, { withBody }).pipe(
             Effect.provideService(HttpClient.HttpClient, client),
           ),
       }

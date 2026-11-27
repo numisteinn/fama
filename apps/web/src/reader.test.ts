@@ -17,14 +17,15 @@ import {
   ReaderScreenNoDeps,
   ScrollToMark,
 } from "~/reader/ReaderScreen"
+import { required } from "../../../test/required.ts"
 
 const url = "/media/secret-feed-token/episodes/harbour-days/chapters/001.timing.json"
 const timingArgs = { origin: "", path: publicMediaPath(url), url: Redacted.make(url) }
 const episode = {
   ...harbourDays,
-  chapters: harbourDays.chapters.map((chapter) => ({
-    ...chapter,
-    timingUrl: chapter.index === 1 ? url : null,
+  chapters: harbourDays.chapters.map(({ index, title, durationMs, url: audioUrl }) => ({
+    index, title, durationMs, url: audioUrl,
+    timingUrl: index === 1 ? url : null,
   })),
 }
 const segments = [
@@ -55,7 +56,7 @@ describe("ReaderScreen", () => {
       const scrollKey1 = s.subscriptions.find((key) => key.startsWith("scroll-to-mark:"))
       expect(scrollKey1).toBeDefined()
       s.subscription(
-        scrollKey1!,
+        required(scrollKey1),
         ReaderScreenMessage.RequestedScrollToMark({ mark: { chapter: 1, segment: 0 }, isInstant: true }),
       )
         .expectExact(ScrollToMark.make({ id: "segment-1-0", isInstant: true }))
@@ -70,7 +71,7 @@ describe("ReaderScreen", () => {
       const scrollKey2 = s.subscriptions.find((key) => key.startsWith("scroll-to-mark:"))
       expect(scrollKey2).toBeDefined()
       s.subscription(
-        scrollKey2!,
+        required(scrollKey2),
         ReaderScreenMessage.RequestedScrollToMark({ mark: { chapter: 1, segment: 1 }, isInstant: false }),
       )
         .expectExact(ScrollToMark.make({ id: "segment-1-1", isInstant: false }))
@@ -91,7 +92,7 @@ describe("ReaderScreen", () => {
   it.effect("clicks a later chapter's Segment to emit PlayFrom and App loads and saves its position", () =>
     Effect.gen(function* () {
       const mark = { chapter: 1, segment: 1 }
-      const positionMs = episode.chapters[0]!.durationMs + segments[1]!.startMs
+      const positionMs = required(episode.chapters[0]).durationMs + required(segments[1]).startMs
 
       const reader = yield* Story.make(ReaderScreenNoDeps, {
         episode,
@@ -113,7 +114,7 @@ describe("ReaderScreen", () => {
         Playback.Loaded({
           episodeId: episode.id,
           chapter: 0,
-          url: episode.chapters[0]!.url,
+          url: required(episode.chapters[0]).url,
           offsetMs: 0,
           isPlaying: true,
           isWaiting: false,
@@ -125,7 +126,7 @@ describe("ReaderScreen", () => {
         .send(AppMessage.RequestedPlayFromReader({ positionMs }))
         .expectExact(
           SaveProgress.make({ episodeId: episode.id, positionMs }),
-          LoadChapter.make({ src: episode.chapters[1]!.url, offsetMs: 800, rate: 1, isAutoplay: true }),
+          LoadChapter.make({ src: required(episode.chapters[1]).url, offsetMs: 800, rate: 1, isAutoplay: true }),
         )
       expect(app.model.playback).toMatchObject({ chapter: 1, offsetMs: 800 })
       app

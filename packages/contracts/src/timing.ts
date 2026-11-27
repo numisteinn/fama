@@ -19,9 +19,10 @@ export const Segment = Schema.Struct({
 export interface Segment extends Schema.Schema.Type<typeof Segment> {}
 
 const inOrder = (segments: ReadonlyArray<Segment>) =>
-  segments.every(
-    (segment, index) => segment.startMs <= segment.endMs && (index === 0 || segments[index - 1]!.endMs <= segment.startMs),
-  )
+  segments.every((segment, index) => {
+    const previous = segments[index - 1]
+    return segment.startMs <= segment.endMs && (index === 0 || (previous !== undefined && previous.endMs <= segment.startMs))
+  })
 
 /** The timing file of one chapter: its Segments in the order the voice reads them. No two overlap. */
 export const Timing = Schema.Struct({
@@ -44,7 +45,8 @@ export const segmentIndexAt = (
   let high = segments.length
   while (low < high) {
     const middle = (low + high) >> 1
-    if (segments[middle]!.startMs <= positionMs) low = middle + 1
+    const segment = segments[middle]
+    if (segment !== undefined && segment.startMs <= positionMs) low = middle + 1
     else high = middle
   }
   return low === 0 ? null : low - 1

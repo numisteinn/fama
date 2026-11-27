@@ -5,15 +5,11 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native"
-import { SafeAreaView } from "react-native-safe-area-context"
 import { NARRATION_SPEEDS, useVoices } from "../components/Options"
 import { Button, Icon, Label, Tap } from "../components/ui"
 import { ApiError, type Api } from "../lib/api"
@@ -21,6 +17,7 @@ import { speed as speedLabel } from "../lib/format"
 import { useEpisode, useLibrary } from "../lib/library"
 import { useSettings } from "../lib/settings"
 import { colors, fonts, radius, space } from "../theme"
+import { ChapterEditor } from "./ChapterEditor"
 import {
   applyChapterText,
   canApplyVoice,
@@ -185,12 +182,8 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   }
 
   const busy = state.operation !== "idle"
-  const editable = isEditableJob(episode?.job)
-  const title = episode?.title ?? (state.document._tag === "Ready" ? state.document.loaded.title : "")
-  const currentVoice = voices.find((voice) => voice.id === state.voice)
-  const voiceDisplay = currentVoice ? voiceName(currentVoice) : (state.voice ?? "Choose voice")
-  const speedDisplay = speedLabel(state.speed)
-  const activeChapter = editor !== null && state.document._tag === "Ready" ? state.document.edited.chapters[editor] : undefined
+  const editable = editableNow
+  const { title, activeChapter } = documentView(state.document, episode?.title, editor)
 
   return (
     <>
@@ -211,116 +204,30 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
 
         <View style={styles.section}>
           <Label>Chapters</Label>
-          {state.document._tag === "Loading" ? (
-            <View style={[styles.card, styles.centered]}>
-              <ActivityIndicator color={colors.textSecondary} />
-            </View>
-          ) : state.document._tag === "Missing" ? (
-            <View style={styles.card}>
-              <Text style={styles.note}>
-                Chapter text is unavailable for this episode. You can still narrate again with a different voice or speed below.
-              </Text>
-            </View>
-          ) : state.document._tag === "Failed" ? (
-            <View style={styles.card}>
-              <Text accessibilityRole="alert" style={styles.note}>
-                {state.document.message}
-              </Text>
-              <Button
-                variant="secondary"
-                title="Try again"
-                disabled={busy}
-                onPress={() => {
-                  setState((current) => retryDocumentLoad(current))
-                  setAttempt((n) => n + 1)
-                }}
-              />
-            </View>
-          ) : (
-            <>
-              <View style={styles.group}>
-                {state.document.edited.chapters.map((chapter, index) => {
-                  const chapterTitle = chapter.title || `Chapter ${index + 1}`
-                  const edited = state.document._tag === "Ready" && isChapterEdited(state.document, index)
-                  return (
-                    <View key={index}>
-                      {index > 0 ? <View style={styles.separator} /> : null}
-                      <Tap
-                        accessibilityRole="button"
-                        accessibilityLabel={edited ? `Edit ${chapterTitle}, edited` : `Edit ${chapterTitle}`}
-                        disabled={busy || !editable}
-                        style={styles.chapterRow}
-                        onPress={() => setEditor(index)}
-                      >
-                        <Text style={styles.chapterIndex}>{index + 1}</Text>
-                        <Text style={[styles.rowLabel, styles.flex]} numberOfLines={2}>
-                          {chapterTitle}
-                        </Text>
-                        {edited ? <Text style={styles.editedBadge}>Edited</Text> : null}
-                        <Icon name="pencil" color={edited ? colors.accent : colors.textSecondary} size={18} />
-                      </Tap>
-                    </View>
-                  )
-                })}
-              </View>
-              <Button
-                title="Save chapter text"
-                disabled={!canSaveText(state, episode?.job)}
-                busy={state.operation === "savingDocument"}
-                onPress={onSaveText}
-              />
-            </>
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <Label>Voice & speed</Label>
-          <View style={styles.group}>
-            <Tap
-              style={styles.optionRow}
-              accessibilityRole="button"
-              accessibilityLabel={`Voice, ${voiceDisplay}`}
-              disabled={busy || !editable || voices.length === 0}
-              onPress={() =>
-                pickAction(voices.map(voiceName), (index) => {
-                  const chosen = voices[index]
-                  if (chosen) setState((current) => selectVoice(current, chosen.id))
-                })
-              }
-            >
-              <Text style={styles.rowLabel}>Voice</Text>
-              <Text style={styles.rowValue} numberOfLines={1}>
-                {voiceDisplay}
-              </Text>
-              <Icon name="chevron.up.chevron.down" size={14} color={colors.textTertiary} />
-            </Tap>
-            <View style={styles.separator} />
-            <Tap
-              style={styles.optionRow}
-              accessibilityRole="button"
-              accessibilityLabel={`Speed, ${speedDisplay}`}
-              disabled={busy || !editable}
-              onPress={() =>
-                pickAction(NARRATION_SPEEDS.map(speedLabel), (index) => {
-                  const chosen = NARRATION_SPEEDS[index]
-                  if (chosen !== undefined) setState((current) => selectSpeed(current, chosen))
-                })
-              }
-            >
-              <Text style={styles.rowLabel}>Speed</Text>
-              <Text style={styles.rowValue} numberOfLines={1}>
-                {speedDisplay}
-              </Text>
-              <Icon name="chevron.up.chevron.down" size={14} color={colors.textTertiary} />
-            </Tap>
-          </View>
-          <Button
-            title="Apply voice & speed"
-            disabled={!canApplyVoice(state, episode)}
-            busy={state.operation === "changingVoice"}
-            onPress={onApplyVoice}
+          <ChaptersSection
+            document={state.document}
+            busy={busy}
+            editable={editable}
+            canSave={canSaveText(state, episode?.job)}
+            saving={state.operation === "savingDocument"}
+            setEditor={setEditor}
+            onSaveText={onSaveText}
+            retry={() => {
+              setState((current) => retryDocumentLoad(current))
+              setAttempt((n) => n + 1)
+            }}
           />
         </View>
+
+        <VoiceSpeedOptions
+          voices={voices}
+          state={state}
+          disabled={busy || !editable}
+          canApply={canApplyVoice(state, episode)}
+          onVoice={(voice) => setState((current) => selectVoice(current, voice))}
+          onSpeed={(speed) => setState((current) => selectSpeed(current, speed))}
+          onApplyVoice={onApplyVoice}
+        />
       </ScrollView>
 
       {activeChapter !== undefined && editor !== null ? (
@@ -338,47 +245,151 @@ function NarrateAgainEpisode({ id, api }: { id: string; api: Api }) {
   )
 }
 
-function ChapterEditor({
-  title,
-  initial,
-  onDone,
-  onCancel,
-}: {
-  title: string
-  initial: string
-  onDone(text: string): void
-  onCancel(): void
+const documentView = (document: ReturnType<typeof initialNarrateAgain>["document"], episodeTitle: string | undefined, editor: number | null) => ({
+  title: episodeTitle ?? (document._tag === "Ready" ? document.loaded.title : ""),
+  activeChapter: editor !== null && document._tag === "Ready" ? document.edited.chapters[editor] : undefined,
+})
+
+function VoiceSpeedOptions({ voices, state, disabled, canApply, onVoice, onSpeed, onApplyVoice }: {
+  voices: ReadonlyArray<Voice>
+  state: ReturnType<typeof initialNarrateAgain>
+  disabled: boolean
+  canApply: boolean
+  onVoice: (voice: Voice["id"]) => void
+  onSpeed: (speed: number) => void
+  onApplyVoice: () => void
 }) {
-  const [text, setText] = useState(initial)
+  const currentVoice = voices.find((voice) => voice.id === state.voice)
+  const voiceDisplay = currentVoice ? voiceName(currentVoice) : (state.voice ?? "Choose voice")
+  const speedDisplay = speedLabel(state.speed)
   return (
-    <Modal visible animationType="slide" onRequestClose={onCancel}>
-      <SafeAreaView style={styles.page}>
-        <KeyboardAvoidingView behavior="padding" style={styles.page}>
-          <View style={styles.editor}>
-            <Text accessibilityRole="header" style={styles.title}>
-              {title}
-            </Text>
-            <TextInput
-              accessibilityLabel="Chapter text"
-              style={[styles.editorText, styles.input]}
-              multiline
-              value={text}
-              onChangeText={setText}
-              selectionColor={colors.accent}
-            />
-            <View style={styles.actions}>
-              <Button variant="secondary" title="Cancel" style={styles.flex} onPress={onCancel} />
-              <Button title="Done" style={styles.flex} onPress={() => onDone(text)} />
-            </View>
+    <View style={styles.section}>
+      <Label>Voice & speed</Label>
+      <View style={styles.group}>
+        <Tap
+          style={styles.optionRow}
+          accessibilityRole="button"
+          accessibilityLabel={`Voice, ${voiceDisplay}`}
+          disabled={disabled || voices.length === 0}
+          onPress={() =>
+            pickAction(voices.map(voiceName), (index) => {
+              const chosen = voices[index]
+              if (chosen) onVoice(chosen.id)
+            })
+          }
+        >
+          <Text style={styles.rowLabel}>Voice</Text>
+          <Text style={styles.rowValue} numberOfLines={1}>
+            {voiceDisplay}
+          </Text>
+          <Icon name="chevron.up.chevron.down" size={14} color={colors.textTertiary} />
+        </Tap>
+        <View style={styles.separator} />
+        <Tap
+          style={styles.optionRow}
+          accessibilityRole="button"
+          accessibilityLabel={`Speed, ${speedDisplay}`}
+          disabled={disabled}
+          onPress={() =>
+            pickAction(NARRATION_SPEEDS.map(speedLabel), (index) => {
+              const chosen = NARRATION_SPEEDS[index]
+              if (chosen !== undefined) onSpeed(chosen)
+            })
+          }
+        >
+          <Text style={styles.rowLabel}>Speed</Text>
+          <Text style={styles.rowValue} numberOfLines={1}>
+            {speedDisplay}
+          </Text>
+          <Icon name="chevron.up.chevron.down" size={14} color={colors.textTertiary} />
+        </Tap>
+      </View>
+      <Button
+        title="Apply voice & speed"
+        disabled={!canApply}
+        busy={state.operation === "changingVoice"}
+        onPress={onApplyVoice}
+      />
+    </View>
+  )
+}
+
+function ChaptersSection({
+  document, busy, editable, canSave, saving, setEditor, onSaveText, retry,
+}: {
+  document: ReturnType<typeof initialNarrateAgain>["document"]
+  busy: boolean
+  editable: boolean
+  canSave: boolean
+  saving: boolean
+  setEditor: (index: number) => void
+  onSaveText: () => void
+  retry: () => void
+}) {
+  return (
+    <>
+      {document._tag === "Loading" ? (
+        <View style={[styles.card, styles.centered]}>
+          <ActivityIndicator color={colors.textSecondary} />
+        </View>
+      ) : document._tag === "Missing" ? (
+        <View style={styles.card}>
+          <Text style={styles.note}>
+            Chapter text is unavailable for this episode. You can still narrate again with a different voice or speed below.
+          </Text>
+        </View>
+      ) : document._tag === "Failed" ? (
+        <View style={styles.card}>
+          <Text accessibilityRole="alert" style={styles.note}>
+            {document.message}
+          </Text>
+          <Button
+            variant="secondary"
+            title="Try again"
+            disabled={busy}
+            onPress={retry}
+          />
+        </View>
+      ) : (
+        <>
+          <View style={styles.group}>
+            {document.edited.chapters.map((chapter, index) => {
+              const chapterTitle = chapter.title || `Chapter ${index + 1}`
+              const edited = isChapterEdited(document, index)
+              return (
+                <View key={index}>
+                  {index > 0 ? <View style={styles.separator} /> : null}
+                  <Tap
+                    accessibilityRole="button"
+                    accessibilityLabel={edited ? `Edit ${chapterTitle}, edited` : `Edit ${chapterTitle}`}
+                    disabled={busy || !editable}
+                    style={styles.chapterRow}
+                    onPress={() => setEditor(index)}
+                  >
+                    <Text style={styles.chapterIndex}>{index + 1}</Text>
+                    <Text style={[styles.rowLabel, styles.flex]} numberOfLines={2}>
+                      {chapterTitle}
+                    </Text>
+                    {edited ? <Text style={styles.editedBadge}>Edited</Text> : null}
+                    <Icon name="pencil" color={edited ? colors.accent : colors.textSecondary} size={18} />
+                  </Tap>
+                </View>
+              )
+            })}
           </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
-    </Modal>
+          <Button
+            title="Save chapter text"
+            disabled={!canSave}
+            busy={saving}
+            onPress={onSaveText}
+          />
+        </>
+      )}
+    </>
   )
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: colors.background },
   content: { padding: space.lg, gap: space.xl, paddingBottom: 120 },
   section: { gap: space.md },
   title: { color: colors.text, fontFamily: fonts.bold, fontSize: 26 },
@@ -394,8 +405,4 @@ const styles = StyleSheet.create({
   rowLabel: { fontFamily: fonts.medium, fontSize: 17, color: colors.text },
   rowValue: { flex: 1, textAlign: "right", fontFamily: fonts.regular, fontSize: 17, color: colors.textSecondary },
   flex: { flex: 1 },
-  editor: { flex: 1, padding: space.lg, gap: space.md },
-  editorText: { color: colors.text, fontFamily: fonts.regular, fontSize: 18, lineHeight: 26 },
-  input: { flex: 1, backgroundColor: colors.surface, borderRadius: radius.md, padding: space.md, textAlignVertical: "top" },
-  actions: { flexDirection: "row", gap: space.sm },
 })

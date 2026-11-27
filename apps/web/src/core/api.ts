@@ -29,7 +29,7 @@ export function messageFor(status: number, body: string): string {
   if (status === 413) return "The file is too large"
   try {
     const parsed: unknown = JSON.parse(body)
-    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") {
+    if (parsed !== null && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") {
       return parsed.message
     }
   } catch {
@@ -71,10 +71,12 @@ export const sendJson = <S extends Schema.Decoder<unknown>>(
   connection: Connection,
   method: Method,
   path: string,
-  withBody?: (request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest,
-  isKeepalive = false,
+  options: {
+    readonly withBody?: ((request: HttpClientRequest.HttpClientRequest) => HttpClientRequest.HttpClientRequest) | undefined
+    readonly isKeepalive?: boolean | undefined
+  } = {},
 ): Effect.Effect<S["Type"], ApiFailure, HttpClient.HttpClient> =>
-  send(connection, method, path, withBody, isKeepalive).pipe(
+  send(connection, method, path, options.withBody, options.isKeepalive).pipe(
     Effect.flatMap((response) =>
       response.json.pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(schema)),

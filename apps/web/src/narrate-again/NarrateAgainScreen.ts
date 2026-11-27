@@ -5,7 +5,7 @@ import { Html } from "@effect/ui/html"
 import { Cause, Effect, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { formatRate } from "~/lib/format"
-import { NarrateAgainSubmitTarget } from "~/narrate-again/model"
+import { NarrateAgainSubmitTarget, toEditedDocument } from "~/narrate-again/model"
 import { NarrateAgainDocumentQuery } from "~/core/queries"
 import { SPEEDS, languageName, sortedVoices } from "~/core/voices"
 import { buttonClass } from "~/ui/button"
@@ -68,18 +68,6 @@ const isTextDirty = (doc: Option.Option<Document>, texts: ReadonlyArray<string>)
 
 const isVoiceDirty = (model: NarrateAgainEditorModel): boolean =>
   model.voice !== model.initialVoice || model.speed !== model.initialSpeed
-
-const toEditedDocument = (
-  doc: Option.Option<Document>,
-  texts: ReadonlyArray<string>,
-): Option.Option<Document> =>
-  Option.map(doc, (document) => {
-    const chapters = document.chapters.map((chapter, index) => ({
-      ...chapter,
-      text: texts[index] ?? chapter.text,
-    }))
-    return { ...document, chapters: [chapters[0]!, ...chapters.slice(1)] }
-  })
 
 export const NarrateAgainEditor = Html.component({
   name: "NarrateAgainEditor",
@@ -172,7 +160,7 @@ export const NarrateAgainEditor = Html.component({
         : registered
     const speeds = SPEEDS.includes(model.speed as (typeof SPEEDS)[number])
       ? SPEEDS
-      : [...SPEEDS, model.speed].sort((a, b) => a - b)
+      : [...SPEEDS, model.speed].toSorted((a, b) => a - b)
 
     const chapterSection = Option.match(model.loaded, {
       onNone: () =>

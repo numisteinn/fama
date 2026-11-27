@@ -1,13 +1,13 @@
-import type { ClaimedJob, Document, Episode } from "@fama/contracts"
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest"
-import { startApp } from "../test-app.ts"
+import { type ClaimedJob, type Document, Episode } from "@fama/contracts"
+import { beforeAll, beforeEach, expect, it } from "vitest"
+import { startApp, readJson, readNarrateJob } from "../test-app.ts"
 
 let app: Awaited<ReturnType<typeof startApp>>
 
 beforeAll(async () => {
   app = await startApp()
+  return () => app.dispose()
 })
-afterAll(() => app?.dispose())
 beforeEach(() => app.reset())
 
 const document = {
@@ -29,13 +29,13 @@ const add = async () => {
     json: { source: { _tag: "Text", title: null, text: "A day at sea." }, voice: null, speed: 1, review: true },
   })
   expect(response.status).toBe(201)
-  return (await response.json() as Episode).id
+  return (await readJson(Episode, response)).id
 }
 
 const take = async () => {
   const response = await claim()
   expect(response.status).toBe(200)
-  return (await response.json() as { work: ClaimedJob }).work
+  return readNarrateJob(response)
 }
 
 const upload = (job: ClaimedJob) =>
@@ -107,7 +107,7 @@ it("keeps the winning Document when a second start was already writing to R2", a
   const job = await review()
   const path = episodePath(job.episodeId)
   const media = app.env.MEDIA
-  const put = media.put
+  const put = media.put.bind(media)
   const staged = Promise.withResolvers<void>()
   const resume = Promise.withResolvers<void>()
   media.put = async (key, value, options) => {

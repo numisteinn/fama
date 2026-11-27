@@ -36,9 +36,9 @@ function tracksOf(episode: Episode, from: TrackSource): Track[] {
   }))
 }
 
-function remember(lastEpisodeId: string | null) {
-  if (prefs.lastEpisodeId === lastEpisodeId) return
-  prefs = { ...prefs, lastEpisodeId }
+function remember(episodeId: string | null) {
+  if (prefs.lastEpisodeId === episodeId) return
+  prefs = { ...prefs, lastEpisodeId: episodeId }
   prefsFile.write(prefs)
 }
 

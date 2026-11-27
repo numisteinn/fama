@@ -1,13 +1,14 @@
 // The stored Document: the worker writes it once under its lease, a later claim points at it, and its owner reads it.
-import { afterAll, beforeAll, beforeEach, expect, it } from "vitest"
-import { startApp, users } from "../test-app.ts"
+import { beforeAll, beforeEach, expect, it } from "vitest"
+import { startApp, users, readJson, readNarrateJob } from "../test-app.ts"
+import { Episode } from "@fama/contracts"
 
 let app: Awaited<ReturnType<typeof startApp>>
 
 beforeAll(async () => {
   app = await startApp()
+  return () => app.dispose()
 })
-afterAll(() => app?.dispose())
 beforeEach(() => app.reset())
 
 const document = {
@@ -30,7 +31,7 @@ interface Claimed {
 const claim = async () => {
   const response = await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } })
   expect(response.status).toBe(200)
-  return ((await response.json()) as { work: Claimed }).work
+  return readNarrateJob(response)
 }
 
 /** Alice adds a text episode and a worker claims it. */
@@ -40,7 +41,7 @@ const claimed = async () => {
   })
   expect(created.status).toBe(201)
   const job = await claim()
-  expect(job.episodeId).toBe(((await created.json()) as { id: string }).id)
+  expect(job.episodeId).toBe((await readJson(Episode, created)).id)
   return job
 }
 
@@ -121,7 +122,7 @@ it("the Document routes need the current lease and the right token", async () =>
 
   expect((await app.alice("PUT", `/api/worker/jobs/${id}/document?workerId=w1&leaseToken=${again.leaseToken}`, { json: document })).status).toBe(401)
   expect((await app.asWorker("GET", `/api/episodes/${id}/document`)).status).toBe(401)
-  expect((await app.call(users.alice.feed, "GET", `/api/episodes/${id}/document`)).status).toBe(401)
+  expect((await app.request(users.alice.feed, "GET", `/api/episodes/${id}/document`)).status).toBe(401)
 })
 
 it("a body that is not a Document is refused and stores nothing", async () => {

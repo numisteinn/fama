@@ -35,8 +35,8 @@ function pick(options: ReadonlyArray<string>, onPick: (index: number) => void) {
 export function EpisodeOptions(props: {
   voice: VoiceRef | null
   speed: number
-  onVoice(voice: VoiceRef | null): void
-  onSpeed(speed: number): void
+  onVoice: (voice: VoiceRef | null) => void
+  onSpeed: (speed: number) => void
 }) {
   const voices = useVoices()
   const current = voices.find((voice) => voice.id === props.voice)
@@ -57,7 +57,7 @@ export function EpisodeOptions(props: {
   )
 }
 
-function Row({ label, value, onPress }: { label: string; value: string; onPress(): void }) {
+function Row({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
   return (
     <Tap style={styles.row} accessibilityRole="button" accessibilityLabel={`${label}, ${value}`} onPress={onPress}>
       <Text style={styles.rowLabel}>{label}</Text>

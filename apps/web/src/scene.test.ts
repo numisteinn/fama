@@ -40,6 +40,7 @@ import { StoredProgress } from "~/core/flags"
 import { FamaApi } from "~/core/services"
 import { FILE_INPUT_ID } from "~/ui/refs"
 import { OpenFilePickerOnKey } from "~/view/addBar"
+import { required } from "../../../test/required.ts"
 
 const linkOrText = HtmlLocator.role("textbox", { name: "Link or text" })
 const fileInput = Locator.attr("id", FILE_INPUT_ID)
@@ -139,7 +140,7 @@ describe("settings", () => {
         .resolve(CopyFeedUrl, SettingsFormMessage.SucceededCopyFeedUrl())
         .expect(HtmlLocator.role("button", { name: "Copied" })).toExist()
         .resolve(
-          s.pending[0]!.command as never,
+          required(s.pending[0]).command as never,
           SettingsFormMessage.CompletedWaitBeforeResetCopied() as never,
         )
         .expect(HtmlLocator.role("button", { name: "Copy feed URL" })).toExist()

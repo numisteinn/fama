@@ -5,16 +5,18 @@
   "packageManager": "pnpm@11.19.0",
   "scripts": {
     "dev": "node scripts/dev.ts",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm -r typecheck && tsc -p scripts",
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter @fama/api dev",
     "smoke:api": "pnpm --filter @fama/api smoke",
-    "lint": "oxlint",
+    "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives-severity=error",
     "check:arch": "node tools/arch-check/index.mjs",
     "fama": "pnpm --filter @fama/infra fama"
   },
   "devDependencies": {
+    "@types/node": "26.6.6",
     "oxlint": "^1.95.0",
+    "oxlint-tsgolint": "^7.0.2009",
     "typescript": "catalog:"
   }
 }
