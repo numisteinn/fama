@@ -7,7 +7,7 @@ A Sample lets the User hear a Voice read the first body paragraph of their store
 - Ask for all registered Voices of the Document’s language, or ask for specific Voices.
 - List the Sample state and play Ready clips through private media URLs with byte ranges.
 - Ask again while the Samples are Requested or Ready. The API creates no new work for those Samples.
-- In web Review, list available voices for the Document's language (`role="radiogroup"` named `Voice`), highlight the current voice, request all language samples with `Hear voices`, show `Generating…`, `Play`/`Pause`, or failure reason + `Retry` per voice, play clips inline without colliding with main episode playback, persist the chosen voice (`PUT /api/episodes/:id/voice`), and apply it on `Start`.
+- In web Review, list available voices for the Document's language (`role="radiogroup"` named `Voice`), highlight the current voice, request all language samples with `Hear voices`, show `Generating…`, `Play`/`Pause`, or failure reason + `Retry` per voice, play clips inline without colliding with main episode playback, persist the chosen voice (`PUT /api/episodes/:id/voice`) at app scope so leaving Review does not cancel the write, offer `Retry saving voice` if the voice write fails, and apply the chosen voice on `Start`.
 
 ## How to get to it (user POV)
 
@@ -25,7 +25,7 @@ Through the API directly, once an Episode has a stored Document, request Samples
 4. Wait for `role=button[name="Review Höfnin hljóða"]` and click it. Wait for `role=button[name="Hear voices"]` and confirm `role=radio[name="Steinn"]` is checked. Capture a before screenshot.
 5. Click `role=button[name="Hear voices"]`. Confirm `Generating…` indicators appear while polling `GET /api/episodes/:id/samples`, then wait for all four voices (`Búi`, `Salka`, `Steinn`, `Ugla`) to show `Play <name> sample`.
 6. Click `role=button[name="Play Salka sample"]`. Confirm it switches to `role=button[name="Pause Salka sample"]`, the preview network log records a `206` for Salka's `.m4a` sample clip, and `ffprobe` confirms AAC audio. Capture a screenshot while playing.
-7. Click `role=radio[name="Salka"]` and confirm `aria-checked="true"`. Verify `GET /api/episodes/<id>` shows `voice: "piper:is_IS-salka-medium"` while `job._tag === "Review"`. Capture a 390 px mobile screenshot.
+7. Click `role=radio[name="Salka"]` and confirm `aria-checked="true"`. Verify `GET /api/episodes/<id>` shows `voice: "piper:is_IS-salka-medium"` while `job._tag === "Review"`. Capture a 390 px mobile screenshot. If `PUT /api/episodes/<id>/voice` fails, confirm an alert and `role=button[name="Retry saving voice"]` appear and clicking it re-sends the selected voice.
 8. Click `role=button[name="Start · 1 chapter"]`, wait for `role=button[name="Play Höfnin hljóða"]` and `fama-verify wait <id>`. Confirm `GET /api/episodes/<id>` shows `job._tag === "Ready"` with `voice: "piper:is_IS-salka-medium"` and a valid `.m4b` book file (`206`, AAC via `ffprobe`).
 9. Close the preview tab (`t3_preview_close`) and run `fama-verify down`.
 

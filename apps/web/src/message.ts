@@ -1,23 +1,21 @@
-import { Episode, EpisodeId, EpisodeProgress, Voice, VoiceRef } from "@fama/contracts"
-import { Dialog } from "@foldkit/ui"
+import { ChangeVoice, Document, Episode, EpisodeId, EpisodeProgress, Voice, VoiceRef } from "@fama/contracts"
+import { UiSchema } from "@effect/ui"
 import { Schema } from "effect"
-import { File } from "foldkit"
-import { defineMessageUnion } from "foldkit/message"
-import { ApiFailure, ApiToken, Connection } from "~/api"
-import { PickerId, StoredProgress } from "~/model"
-import { ReaderMessage } from "~/reader/message"
-import { NarrateAgainMessage } from "~/review/narrateAgainMessage"
-import { ReviewMessage } from "~/review/message"
+import { ApiFailure, Connection } from "~/api"
+import { NarrateAgainSubmitTarget, StoredProgress } from "~/model"
 
 export const PlayerShortcut = Schema.Literals(["Toggle", "Back", "Forward"])
 export type PlayerShortcut = typeof PlayerShortcut.Type
 
-export const Message = defineMessageUnion({
+export const AppMessage = UiSchema.TaggedEnum({
   // Library
-  /** Library results carry the connection generation they were fetched for, so a late one from an old connection is dropped. */
-  SucceededFetchEpisodes: { generation: Schema.Number, request: Schema.Number, episodes: Schema.Array(Episode) },
+  SucceededFetchEpisodes: {
+    generation: Schema.Number,
+    request: Schema.Number,
+    episodes: Schema.Array(Episode),
+  },
   FailedFetchEpisodes: { generation: Schema.Number, request: Schema.Number, failure: ApiFailure },
-  SucceededFetchVoices: { voices: Schema.Array(Voice) },
+  SucceededFetchVoices: { generation: Schema.Number, voices: Schema.Array(Voice) },
   FailedFetchVoices: {},
   ClickedTryAgain: {},
   TickedPoll: {},
@@ -28,35 +26,28 @@ export const Message = defineMessageUnion({
   UpdatedAddText: { value: Schema.String },
   PressedEnterInAddText: {},
   SubmittedAddForm: {},
-  ToggledAddReview: {},
-  ChangedFileInput: { files: Schema.Array(File.File) },
+  ToggledAddReview: { checked: Schema.Boolean },
+  ChangedFileInput: { files: Schema.Array(Schema.instanceOf(File)) },
   ClickedRemoveFile: { key: Schema.Number },
   ClickedRetryFile: { key: Schema.Number },
   EnteredFileDrag: {},
   LeftFileDrag: {},
-  /** The files of a drop, with the files of each dropped folder. */
-  DroppedFiles: { files: Schema.Array(File.File) },
+  DroppedFiles: { files: Schema.Array(Schema.instanceOf(File)) },
   SucceededCreateEpisode: { episode: Episode },
   FailedCreateEpisode: { failure: ApiFailure },
   SucceededUploadFile: { key: Schema.Number, episode: Episode },
   FailedUploadFile: { key: Schema.Number, failure: ApiFailure },
-  CompletedMountFilePickerKeys: {},
-  CompletedFocusAddText: {},
 
-  // Menus
-  ClickedPickerTrigger: { pickerId: PickerId },
-  PressedPickerTriggerKey: { pickerId: PickerId, key: Schema.String },
-  PressedPickerKey: { key: Schema.String },
-  ClickedPickerItem: { pickerId: PickerId, index: Schema.Number },
-  ClickedPickerBackdrop: {},
-  CompletedFocusPicker: {},
-  CompletedFocusPickerTrigger: {},
-  CompletedScrollPickerItem: {},
-  CompletedAnchorPicker: {},
-  CompletedWaitBeforeResetTypeAhead: { keys: Schema.Number },
+  // Pickers (child events from `Picker`)
+  PickedVoice: { value: Schema.String },
+  PickedVoiceSpeed: { value: Schema.String },
+  PickedPlaybackSpeed: { value: Schema.String },
+  PickedChapter: { value: Schema.String },
 
   // Library rows
   ClickedPlayEpisode: { episodeId: EpisodeId },
+  ClickedOpenReview: { episodeId: EpisodeId },
+  ClickedOpenNarrateAgain: { episodeId: EpisodeId },
   ClickedRetry: { episodeId: EpisodeId },
   SucceededRetryEpisode: { episode: Episode },
   FailedRetryEpisode: { episodeId: EpisodeId, failure: ApiFailure },
@@ -65,39 +56,48 @@ export const Message = defineMessageUnion({
   SucceededDeleteEpisode: { episodeId: EpisodeId },
   FailedDeleteEpisode: { episodeId: EpisodeId, failure: ApiFailure },
   CompletedWaitBeforeDisarmDelete: { episodeId: EpisodeId },
-  CompletedFocusDeleteConfirm: {},
 
-  // Narrate again
-  GotNarrateAgainMessage: { message: NarrateAgainMessage },
+  // Sub-screen child events & app-scoped episode lifecycle writes (Review, NarrateAgain, Reader)
+  ClosedSubScreen: {},
+  SubmittedSaveReview: { episodeId: EpisodeId, document: Document },
+  SucceededSaveReview: { episodeId: EpisodeId, document: Document },
+  FailedSaveReview: { episodeId: EpisodeId, failure: ApiFailure },
+  SubmittedStartReview: {
+    episodeId: EpisodeId,
+    document: Document,
+    voice: Schema.optionalKey(VoiceRef),
+  },
+  SucceededStartReview: { episode: Episode },
+  FailedStartReview: { episodeId: EpisodeId, failure: ApiFailure },
+  ClearedReviewError: { episodeId: EpisodeId },
+  RequestedChangeReviewVoice: { episodeId: EpisodeId, voice: VoiceRef, speed: Schema.Number },
+  SucceededChangeReviewVoice: {
+    episodeId: EpisodeId,
+    origin: Schema.String,
+    request: Schema.Number,
+    voice: VoiceRef,
+    speed: Schema.Number,
+  },
+  FailedChangeReviewVoice: { episodeId: EpisodeId, request: Schema.Number, voice: VoiceRef, failure: ApiFailure },
+  RequestedPauseMainPlayback: {},
+  SubmittedNarrateAgainText: { episodeId: EpisodeId, document: Document },
+  SubmittedNarrateAgainVoice: { episodeId: EpisodeId, input: ChangeVoice },
+  SucceededNarrateAgain: { episodeId: EpisodeId },
+  FailedNarrateAgain: { episodeId: EpisodeId, target: NarrateAgainSubmitTarget, failure: ApiFailure },
+  ClearedNarrateAgainError: { episodeId: EpisodeId, target: NarrateAgainSubmitTarget },
+  ClickedToggleReader: {},
+  RequestedPlayFromReader: { positionMs: Schema.Number },
 
-  // Reader
-  GotReaderMessage: { message: ReaderMessage },
-
-  // Review
-  GotReviewMessage: { message: ReviewMessage },
-
-  // Settings
-  ClickedSettings: {},
-  GotSettingsDialogMessage: { message: Dialog.Message },
-  /** Redacted from the input handler on, so DevTools history never holds the token. */
-  UpdatedTokenDraft: { value: ApiToken },
-  UpdatedOriginDraft: { value: Schema.String },
-  SubmittedSettings: {},
-  /** Another tab saved a token, server, Voice, Voice speed or Playback speed. Carries all of them, as stored now. */
+  // Settings (child events from `SettingsDialog`)
+  RequestedOpenSettings: {},
+  RequestedCloseSettings: {},
+  SavedSettings: { connection: Connection },
   ChangedStoredSettings: {
     connection: Connection,
     maybeVoice: Schema.Option(VoiceRef),
     speed: Schema.Number,
     rate: Schema.Number,
   },
-  /** Feed results carry the number of their request. Only the latest request's result shows. */
-  SucceededFetchFeed: { request: Schema.Number, url: Schema.String },
-  FailedFetchFeed: { request: Schema.Number, failure: ApiFailure },
-  ClickedCopyFeedUrl: {},
-  SucceededCopyFeedUrl: {},
-  FailedCopyFeedUrl: {},
-  CompletedWaitBeforeResetCopied: { copy: Schema.Number },
-  CompletedStoreSetting: {},
 
   // Player controls
   ClickedPlayPause: {},
@@ -117,27 +117,17 @@ export const Message = defineMessageUnion({
   StartedAudio: {},
   PausedAudio: {},
   EndedChapter: {},
-  CompletedLoadChapter: {},
-  /** The browser refused to play: no user gesture, or a file it cannot play. */
   FailedPlayAudio: {},
-  CompletedPlayAudio: {},
-  CompletedPauseAudio: {},
-  CompletedSeekAudio: {},
-  CompletedSetAudioRate: {},
-  CompletedStopAudio: {},
-  /**
-   * The progress storage holds for an episode when it starts, so a pause in another tab is honored.
-   * `intent` is the playback action that started it.
-   */
   GotStoredProgress: { episodeId: EpisodeId, intent: Schema.Number, stored: StoredProgress },
 
   // Progress sync
-  /** A listener's action stamped and stored this progress on the device. */
   SavedProgress: { episodeId: EpisodeId, progress: EpisodeProgress },
-  /** The server answered a push with what it stores now, `sent` or a newer entry. */
-  SucceededPushProgress: { episodeId: EpisodeId, sent: EpisodeProgress, stored: EpisodeProgress },
-  /** The push did not arrive. The local entry stays newer, so the next library load sends it again. */
+  SucceededPushProgress: {
+    episodeId: EpisodeId,
+    sent: EpisodeProgress,
+    stored: EpisodeProgress,
+  },
   FailedPushProgress: { episodeId: EpisodeId },
-  CompletedStoreProgress: {},
 })
-export type Message = typeof Message.Type
+export type AppMessage = typeof AppMessage.Type
+export { AppMessage as Message }

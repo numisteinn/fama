@@ -1,31 +1,33 @@
-import { type Html, inertHtml as ih } from "foldkit/html"
+import type { Html } from "@effect/ui/html"
 
-/** Lucide icons (ISC license), drawn inline with the same attributes lucide-react set. */
+/** Lucide icons (ISC license), drawn inline via `h.el("svg")`. */
 type Shape = readonly ["path", string] | readonly ["circle", string, string, string]
 
 const icon =
   (name: string, shapes: ReadonlyArray<Shape>) =>
-  (className = ""): Html =>
-    ih.svg(
-      [
-        ih.Xmlns("http://www.w3.org/2000/svg"),
-        ih.Width("24"),
-        ih.Height("24"),
-        ih.ViewBox("0 0 24 24"),
-        ih.Fill("none"),
-        ih.Stroke("currentColor"),
-        ih.StrokeWidth("2"),
-        ih.StrokeLinecap("round"),
-        ih.StrokeLinejoin("round"),
-        ih.Class(["lucide", `lucide-${name}`, className].filter(Boolean).join(" ")),
-        ih.AriaHidden(true),
-      ],
-      shapes.map((shape) =>
-        shape[0] === "path"
-          ? ih.path([ih.D(shape[1])])
-          : ih.circle([ih.Cx(shape[1]), ih.Cy(shape[2]), ih.R(shape[3])]),
-      ),
-    )
+  <M>(h: Html.H<M>, className = "") =>
+    h
+      .el("svg")
+      .attrs({
+        xmlns: "http://www.w3.org/2000/svg",
+        width: "24",
+        height: "24",
+        viewBox: "0 0 24 24",
+        fill: "none",
+        stroke: "currentColor",
+        "stroke-width": "2",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        class: ["lucide", `lucide-${name}`, className].filter(Boolean).join(" "),
+        "aria-hidden": "true",
+      })
+      .children(
+        ...shapes.map((shape) =>
+          shape[0] === "path"
+            ? h.el("path").attr("d", shape[1])
+            : h.el("circle").attrs({ cx: shape[1], cy: shape[2], r: shape[3] }),
+        ),
+      )
 
 const rect = (x: number, y: number, width: number, height: number, r: number): Shape => [
   "path",
@@ -96,7 +98,10 @@ export const play = icon("play", [
 ])
 export const pause = icon("pause", [rect(14, 3, 5, 18, 1), rect(5, 3, 5, 18, 1)])
 export const pencil = icon("pencil", [
-  ["path", "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"],
+  [
+    "path",
+    "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+  ],
   ["path", "m15 5 4 4"],
 ])
 export const rotateCw = icon("rotate-cw", [
@@ -130,7 +135,10 @@ export const bookOpenText = icon("book-open-text", [
   ["path", "M12 7v14"],
   ["path", "M16 12h2"],
   ["path", "M16 8h2"],
-  ["path", "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"],
+  [
+    "path",
+    "M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z",
+  ],
   ["path", "M6 12h2"],
   ["path", "M6 8h2"],
 ])

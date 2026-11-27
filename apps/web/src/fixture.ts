@@ -1,14 +1,23 @@
 import type { Episode, EpisodeId, EpisodeProgress, VoiceRef } from "@fama/contracts"
 import { Option } from "effect"
 import { apiToken } from "~/api"
-import type { LoadedPlayback, Model } from "~/model"
-import { init } from "~/update"
+import type { AppModel, Flags, LoadedPlayback } from "~/model"
+import { initApp } from "~/update"
 
 export const connection = { origin: "", token: apiToken("dev-api-token") }
 
-/** A fresh Model, as `init` makes it from empty storage plus a stored token and `localProgress`. */
-export const baseModel = (localProgress: Record<string, EpisodeProgress> = {}): Model =>
-  init({ token: connection.token, origin: "", voice: null, speed: 1, rate: 1, localProgress }).model
+export const defaultFlags = (localProgress: Record<string, EpisodeProgress> = {}): Flags => ({
+  token: connection.token,
+  origin: "",
+  voice: null,
+  speed: 1,
+  rate: 1,
+  localProgress,
+})
+
+/** A fresh Model, as `initApp` makes it from empty storage plus a stored token and `localProgress`. */
+export const baseModel = (localProgress: Record<string, EpisodeProgress> = {}): AppModel =>
+  initApp(defaultFlags(localProgress)).model
 
 /** Progress at `positionMs`, stamped `updatedAt`. */
 export const progressAt = (positionMs: number, updatedAt = "2026-11-23T10:00:00.000Z"): EpisodeProgress => ({
@@ -17,7 +26,7 @@ export const progressAt = (positionMs: number, updatedAt = "2026-11-23T10:00:00.
 })
 
 /** `model` after the library loaded `episodes`: no library request is in flight. The next request is number 2. */
-export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Model => ({
+export const withEpisodes = (model: AppModel, episodes: ReadonlyArray<Episode>): AppModel => ({
   ...model,
   libraryRequestsInFlight: [],
   maybeEpisodes: Option.some(episodes),
@@ -27,7 +36,7 @@ export const withEpisodes = (model: Model, episodes: ReadonlyArray<Episode>): Mo
  * `model` with `playback` in the audio element, as the listener left it: the intent is Play when the audio plays or
  * waits for a chapter, and the player follows the entry the device holds.
  */
-export const withPlayback = (model: Model, playback: LoadedPlayback): Model => ({
+export const withPlayback = (model: AppModel, playback: LoadedPlayback): AppModel => ({
   ...model,
   playback,
   maybeListening: Option.some({

@@ -1,57 +1,152 @@
-import { Command, given, message, model, story } from "foldkit/story"
-import * as Scene from "foldkit/scene"
-import { expect, test } from "vitest"
+import { Component } from "@effect/ui"
+import { HtmlLocator, HtmlScene } from "@effect/ui/html/testing"
+import { Story } from "@effect/ui/testing"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Option, Redacted } from "effect"
+import { AppComponent } from "~/App"
 import { LoadChapter } from "~/audio"
 import { PushProgress, SaveProgress } from "~/command"
-import { baseModel, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
-import { Message } from "~/message"
+import { baseModel, defaultFlags, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
+import { AppMessage } from "~/message"
 import { Playback } from "~/model"
-import { FetchTiming, ReadSelection, ScrollToMark } from "~/reader/command"
-import { ReaderMessage as R } from "~/reader/message"
-import { update } from "~/update"
-import { view } from "~/view"
+import { publicMediaPath } from "~/queries"
+import {
+  ReadSelection,
+  ReaderScreenEvents,
+  ReaderScreenMessage,
+  ReaderScreenNoDeps,
+  ScrollToMark,
+} from "~/reader/ReaderScreen"
 
-const wrap = (message: R) => Message.GotReaderMessage({ message })
-const url = "/chapter.json"
-const episode = { ...harbourDays, chapters: harbourDays.chapters.map((c) => ({ ...c, timingUrl: c.index === 1 ? url : null })) }
+const url = "/media/secret-feed-token/episodes/harbour-days/chapters/001.timing.json"
+const timingArgs = { origin: "", path: publicMediaPath(url), url: Redacted.make(url) }
+const episode = {
+  ...harbourDays,
+  chapters: harbourDays.chapters.map((chapter) => ({
+    ...chapter,
+    timingUrl: chapter.index === 1 ? url : null,
+  })),
+}
 const segments = [
   { text: "First sentence.", startMs: 100, endMs: 600, endsParagraph: false },
   { text: "Next sentence.", startMs: 800, endMs: 1600, endsParagraph: true },
 ]
-const start = (chapter: number) => withPlayback(withEpisodes(baseModel(), [episode]),
-  Playback.Loaded({ episodeId: episode.id, chapter, url: episode.chapters[chapter]!.url, offsetMs: 0, isPlaying: true, isWaiting: false }))
-const loaded = wrap(R.SucceededFetchTiming({ url, timing: { segments } }))
-const scrolled = wrap(R.CompletedScrollToMark())
-const tick = (offsetMs: number) => Message.UpdatedAudioTime({ offsetMs, atMs: 1000 })
 
-test("follow the voice across a pause, stop on manual scroll and return to the current Segment", () => {
-  story(update, given(start(1)), message(wrap(R.ClickedText())),
-    Command.expectExact(FetchTiming({ url, origin: "" })), Command.resolve(FetchTiming, loaded),
-    message(tick(100)), Command.expectExact(ScrollToMark({ id: "segment-1-0", isInstant: true })),
-    Command.resolve(ScrollToMark, scrolled), message(tick(799)), Command.expectNone(),
-    message(tick(800)), Command.expectExact(ScrollToMark({ id: "segment-1-1", isInstant: false })),
-    Command.resolve(ScrollToMark, scrolled), message(wrap(R.SettledScrollByHand({ isMarkInView: false }))),
-    message(tick(500)), Command.expectNone(), message(wrap(R.ClickedFollow())),
-    Command.expectExact(ScrollToMark({ id: "segment-1-0", isInstant: true })), Command.resolve(ScrollToMark, scrolled))
-})
+describe("ReaderScreen", () => {
+  it("strips the private feed token from publicMediaPath", () => {
+    expect(publicMediaPath(url)).toBe("/episodes/harbour-days/chapters/001.timing.json")
+    expect(publicMediaPath("/chapter.json")).toBe("/chapter.json")
+    expect(JSON.stringify(timingArgs)).not.toContain("secret-feed-token")
+  })
 
-test("click a later chapter's Segment to play and save its episode position", () => {
-  const mark = { chapter: 1, segment: 1 }
-  const positionMs = episode.chapters[0]!.durationMs + segments[1]!.startMs
-  const progress = progressAt(positionMs)
-  story(update, given(start(0)), message(wrap(R.ClickedText())), Command.resolve(FetchTiming, loaded),
-    message(wrap(R.ClickedSegment(mark))), Command.resolve(ReadSelection, wrap(R.GotSelectionOnClick({ ...mark, isSelecting: false }))),
-    Command.expectExact(LoadChapter({ src: episode.chapters[1]!.url, offsetMs: 800, rate: 1, isAutoplay: true }),
-      SaveProgress({ episodeId: episode.id, positionMs })),
-    model((next) => expect(next.playback).toMatchObject({ chapter: 1, offsetMs: 800 })),
-    Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
-    Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: episode.id, progress })),
-    Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: episode.id, sent: progress, stored: progress })))
-})
+  it.effect("follows the voice across a pause, stops on manual scroll, and returns to the current Segment", () =>
+    Effect.gen(function* () {
+      const s = yield* Story.make(ReaderScreenNoDeps, {
+        episode,
+        origin: "",
+        chapter: 1,
+        offsetMs: 0,
+        isPlaying: true,
+      })
+      s.loaded("timings", timingArgs, { segments })
 
-test("a chapter without timing contributes no text to the open reader", () => {
-  const open = update(start(0), wrap(R.ClickedText())).model
-  Scene.scene({ update, view }, Scene.given(update(open, loaded).model),
-    Scene.expect(Scene.role("heading", { name: "Morning" })).toBeAbsent(),
-    Scene.expect(Scene.role("button", { name: "Next sentence." })).toExist())
+      // Move to offset 100 ms: first mark appears and scrolls instantly.
+      s.props((prev) => ({ ...prev, offsetMs: 100 }))
+      const scrollKey1 = s.subscriptions.find((key) => key.startsWith("scroll-to-mark:"))
+      expect(scrollKey1).toBeDefined()
+      s.subscription(
+        scrollKey1!,
+        ReaderScreenMessage.RequestedScrollToMark({ mark: { chapter: 1, segment: 0 }, isInstant: true }),
+      )
+        .expectExact(ScrollToMark.make({ id: "segment-1-0", isInstant: true }))
+        .resolve(ScrollToMark, Component.noop)
+
+      // Still inside first segment (799 ms): no new scroll subscription.
+      s.props((prev) => ({ ...prev, offsetMs: 799 }))
+      expect(s.subscriptions.some((key) => key.startsWith("scroll-to-mark:"))).toBe(false)
+
+      // Cross into segment 1 (800 ms): smooth scroll to segment-1-1.
+      s.props((prev) => ({ ...prev, offsetMs: 800 }))
+      const scrollKey2 = s.subscriptions.find((key) => key.startsWith("scroll-to-mark:"))
+      expect(scrollKey2).toBeDefined()
+      s.subscription(
+        scrollKey2!,
+        ReaderScreenMessage.RequestedScrollToMark({ mark: { chapter: 1, segment: 1 }, isInstant: false }),
+      )
+        .expectExact(ScrollToMark.make({ id: "segment-1-1", isInstant: false }))
+        .resolve(ScrollToMark, Component.noop)
+
+      // User scrolls away: following pauses, so moving back to 500 ms does not scroll.
+      s.send(ReaderScreenMessage.SettledScrollByHand({ isMarkInView: false }))
+      s.props((prev) => ({ ...prev, offsetMs: 500 }))
+      expect(s.subscriptions.some((key) => key.startsWith("scroll-to-mark:"))).toBe(false)
+
+      // Clicking Follow jumps straight back to segment-1-0.
+      s.send(ReaderScreenMessage.ClickedFollow())
+        .expectExact(ScrollToMark.make({ id: "segment-1-0", isInstant: true }))
+        .resolve(ScrollToMark, Component.noop)
+    }),
+  )
+
+  it.effect("clicks a later chapter's Segment to emit PlayFrom and App loads and saves its position", () =>
+    Effect.gen(function* () {
+      const mark = { chapter: 1, segment: 1 }
+      const positionMs = episode.chapters[0]!.durationMs + segments[1]!.startMs
+
+      const reader = yield* Story.make(ReaderScreenNoDeps, {
+        episode,
+        origin: "",
+        chapter: 0,
+        offsetMs: 0,
+        isPlaying: true,
+      })
+      reader
+        .loaded("timings", timingArgs, { segments })
+        .send(ReaderScreenMessage.ClickedSegment(mark))
+        .expectExact(ReadSelection.make(mark))
+        .resolve(ReadSelection, ReaderScreenMessage.GotSelectionOnClick({ ...mark, isSelecting: false }))
+        .emitted(ReaderScreenEvents.PlayFrom({ positionMs }))
+
+      const progress = progressAt(positionMs)
+      const startModel = withPlayback(
+        withEpisodes(baseModel(), [episode]),
+        Playback.Loaded({
+          episodeId: episode.id,
+          chapter: 0,
+          url: episode.chapters[0]!.url,
+          offsetMs: 0,
+          isPlaying: true,
+          isWaiting: false,
+        }),
+      )
+      const app = yield* Story.make(AppComponent, defaultFlags())
+      app
+        .given({ ...startModel, maybeReaderEpisodeId: Option.some(episode.id) })
+        .send(AppMessage.RequestedPlayFromReader({ positionMs }))
+        .expectExact(
+          SaveProgress.make({ episodeId: episode.id, positionMs }),
+          LoadChapter.make({ src: episode.chapters[1]!.url, offsetMs: 800, rate: 1, isAutoplay: true }),
+        )
+      expect(app.model.playback).toMatchObject({ chapter: 1, offsetMs: 800 })
+      app
+        .resolve(LoadChapter, Component.noop)
+        .resolve(SaveProgress, AppMessage.SavedProgress({ episodeId: episode.id, progress }))
+        .resolve(PushProgress, AppMessage.SucceededPushProgress({ episodeId: episode.id, sent: progress, stored: progress }))
+    }),
+  )
+
+  it.effect("a chapter without timing contributes no text to the open reader", () =>
+    Effect.gen(function* () {
+      const s = yield* HtmlScene.make(ReaderScreenNoDeps, {
+        episode,
+        origin: "",
+        chapter: 0,
+        offsetMs: 0,
+        isPlaying: false,
+      })
+      s.loaded("timings", timingArgs, { segments })
+        .expect(HtmlLocator.role("heading", { name: "Morning" })).toBeAbsent()
+        .expect(HtmlLocator.role("button", { name: "Next sentence." })).toExist()
+    }),
+  )
 })

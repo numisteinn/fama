@@ -1,18 +1,26 @@
-import { Dialog } from "@foldkit/ui"
-import { Effect, Option, Redacted } from "effect"
-import { Command, type StorySimulation, given, message, model, steps, story } from "foldkit/story"
+import type { EpisodeId, VoiceRef } from "@fama/contracts"
+import { Component } from "@effect/ui"
+import { HtmlCommand } from "@effect/ui/html"
+import { Story } from "@effect/ui/testing"
+import { Effect, Layer, Option, Redacted } from "effect"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { AudioPlayer, LoadChapter, PauseAudio, PlayAudio, SeekAudio, SetAudioRate, StopAudio } from "~/audio"
+import { AppComponent } from "~/App"
+import { apiToken } from "~/api"
 import {
-  CopyFeedUrl,
+  AudioPlayer,
+  LoadChapter,
+  PauseAudio,
+  PlayAudio,
+  SeekAudio,
+  SetAudioRate,
+  StopAudio,
+  audioCommandsLayer,
+} from "~/audio"
+import {
   CreateEpisodeFromSource,
   DeleteEpisode,
   FetchEpisodes,
-  FetchFeed,
-  FocusAddText,
-  FocusDeleteConfirm,
-  FocusPicker,
-  FocusPickerTrigger,
+  FetchVoices,
   PushProgress,
   ReadStoredProgress,
   SaveProgress,
@@ -20,17 +28,11 @@ import {
   StoreSetting,
   UploadEpisode,
   WaitBeforeDisarmDelete,
-  ScrollPickerItem,
-  WaitBeforeResetCopied,
-  WaitBeforeResetTypeAhead,
 } from "~/command"
-import { Message } from "~/message"
-import { apiToken } from "~/api"
-import { Feed, type Model, Picker, Playback } from "~/model"
-import type { EpisodeId, Voice, VoiceRef } from "@fama/contracts"
 import {
   baseModel,
   connection,
+  defaultFlags,
   harbourDays,
   progressAt,
   queuedArticle,
@@ -38,8 +40,60 @@ import {
   withEpisodes,
   withPlayback,
 } from "~/fixture"
+import { AppMessage as Message } from "~/message"
+import { type AppModel as Model, Playback } from "~/model"
 import { storageEventMessage } from "~/subscription"
-import { update } from "~/update"
+import { updateApp as update } from "~/update"
+
+type AppCursor = Story.Steps<typeof AppComponent>
+type Step = (s: AppCursor) => void
+
+const given = (initial: Model): Step => (s) => {
+  s.given(initial)
+}
+const message = (msg: Message): Step => (s) => {
+  s.send(msg)
+}
+const model = (check: (next: Model) => void): Step => (s) => {
+  check(s.model)
+}
+const steps = (...list: ReadonlyArray<Step>): Step => (s) => {
+  for (const step of list) step(s)
+}
+const Command = {
+  expectNone: (): Step => (s) => {
+    s.expectNone()
+  },
+  expectExact: (...targets: ReadonlyArray<Story.Target>): Step => (s) => {
+    const pending = s.pending.filter((item) => item.status === "running")
+    if (pending.length !== targets.length) {
+      s.expectExact(...targets)
+      return
+    }
+    const remaining = [...targets]
+    const ordered: Array<Story.Target> = []
+    const targetName = (t: Story.Target): string =>
+      "key" in t ? String((t as { readonly key: string }).key) : "name" in t ? String(t.name) : ""
+    for (const item of pending) {
+      const idx = remaining.findIndex((t) => targetName(t) === item.command.name)
+      if (idx === -1) {
+        s.expectExact(...targets)
+        return
+      }
+      ordered.push(remaining.splice(idx, 1)[0]!)
+    }
+    s.expectExact(...ordered)
+  },
+  resolve: (target: Story.Target, result: unknown): Step => (s) => {
+    s.resolve(target as never, result as never)
+  },
+}
+
+const story = (_update: unknown, ...run: ReadonlyArray<Step>) =>
+  Effect.gen(function* () {
+    const s = yield* Story.make(AppComponent, defaultFlags())
+    for (const step of run) step(s)
+  }).pipe(Effect.scoped, Effect.runSync)
 
 const unauthorized = { status: 401, message: "The API token is wrong or missing" }
 
@@ -49,17 +103,15 @@ describe("library", () => {
       update,
       given(baseModel()),
       message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
-      model((next) => expect(next.settingsDialog.isOpen).toBe(true)),
-      Command.expectExact(Dialog.ShowDialog, FetchFeed),
-      Command.resolve(Dialog.ShowDialog, Dialog.Message.SucceededShowDialog()),
-      Command.resolve(FetchFeed, Message.FailedFetchFeed({ request: 1, failure: unauthorized })),
+      model((next) => expect(next.isSettingsOpen).toBe(true)),
+      Command.expectNone(),
     )
     const stillUnauthorized = { ...baseModel(), maybeLibraryFailure: Option.some(unauthorized) }
     story(
       update,
       given(stillUnauthorized),
       message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
-      model((next) => expect(next.settingsDialog.isOpen).toBe(false)),
+      model((next) => expect(next.isSettingsOpen).toBe(false)),
       Command.expectNone(),
     )
   })
@@ -71,7 +123,7 @@ describe("library", () => {
       given({ ...withEpisodes(baseModel(), [harbourDays]), connectionGeneration: 1 }),
       message(Message.FailedFetchEpisodes({ generation: 0, request: 1, failure: unauthorized })),
       model((next) => {
-        expect(next.settingsDialog.isOpen).toBe(false)
+        expect(next.isSettingsOpen).toBe(false)
         expect(next.maybeLibraryFailure).toEqual(Option.none())
       }),
       Command.expectNone(),
@@ -85,7 +137,7 @@ describe("library", () => {
       update,
       given(withEpisodes(baseModel(), [queuedArticle])),
       message(Message.TickedPoll()),
-      Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 2 })),
+      Command.expectExact(FetchEpisodes.make({ connection, generation: 0, request: 2 })),
       Command.resolve(
         FetchEpisodes,
         Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [harbourDays] }),
@@ -100,8 +152,8 @@ describe("library", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedArmDelete({ episodeId: harbourDays.id })),
       model((next) => expect(next.armedDeletes).toEqual([harbourDays.id])),
-      Command.expectExact(WaitBeforeDisarmDelete, FocusDeleteConfirm),
-      Command.resolve(FocusDeleteConfirm, Message.CompletedFocusDeleteConfirm()),
+      Command.expectExact(WaitBeforeDisarmDelete, HtmlCommand.Focus),
+      Command.resolve(HtmlCommand.Focus, { found: true }),
       Command.resolve(WaitBeforeDisarmDelete, Message.CompletedWaitBeforeDisarmDelete({ episodeId: harbourDays.id })),
       model((next) => expect(next.armedDeletes).toEqual([])),
     )
@@ -112,107 +164,124 @@ describe("settings", () => {
   /** What the storage Subscription sends when another tab saves a setting. */
   const storedSettings = (fields: Partial<Omit<Extract<Message, { _tag: "ChangedStoredSettings" }>, "_tag">>) =>
     Message.ChangedStoredSettings({ connection, maybeVoice: Option.none(), speed: 1, rate: 1, ...fields })
-  const newFeed = "http://localhost:8788/feed/new/rss.xml"
-
-  test("a late feed response for a previous connection does not replace the current feed", () => {
-    story(
-      update,
-      given({ ...baseModel(), connectionGeneration: 1, feedRequests: 1, feed: Feed.Ready({ url: newFeed }) }),
-      message(Message.SucceededFetchFeed({ request: 0, url: "http://localhost:8788/feed/old/rss.xml" })),
-      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-      message(Message.FailedFetchFeed({ request: 0, failure: { status: 500, message: "Boom" } })),
-      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-    )
-  })
-
-  test("a late feed failure from an earlier Settings open does not replace the feed of a later open", () => {
-    const open = (start: ReturnType<typeof baseModel>) => update(start, Message.ClickedSettings()).model
-    const first = open(baseModel())
-    const second = open({ ...first, settingsDialog: { ...first.settingsDialog, isOpen: false } })
-    story(
-      update,
-      given(second),
-      message(Message.SucceededFetchFeed({ request: second.feedRequests, url: newFeed })),
-      message(Message.FailedFetchFeed({ request: first.feedRequests, failure: { status: 500, message: "Boom" } })),
-      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-    )
-  })
 
   test("switching A to B and back to A drops a library response fetched before the switch", () => {
     const tokenB = { origin: "", token: apiToken("token-b") }
-    // A poll for A is in flight when another tab saves B, and then A again.
     const polledA = update(withEpisodes(baseModel(), [harbourDays]), Message.TickedPoll())
-    const pollA = polledA.commands?.find((command) => command.name === FetchEpisodes.name) as
-      | ReturnType<typeof FetchEpisodes>
-      | undefined
-    if (!pollA) throw new Error("the poll issued no FetchEpisodes")
+    const pollA = polledA.commands.find((command) => command.name === FetchEpisodes.key)
+    if (!pollA || !("args" in pollA)) throw new Error("the poll issued no FetchEpisodes")
+    const pollAArgs = pollA.args as { readonly generation: number; readonly request: number }
     story(
       update,
       given(polledA.model),
       message(storedSettings({ connection: tokenB })),
-      Command.expectExact(FetchEpisodes({ connection: tokenB, generation: 1, request: 3 })),
+      Command.expectExact(
+        FetchEpisodes.make({ connection: tokenB, generation: 1, request: 3 }),
+        FetchVoices.make({ connection: tokenB, generation: 1 }),
+      ),
       Command.resolve(
         FetchEpisodes,
         Message.SucceededFetchEpisodes({ generation: 1, request: 3, episodes: [harbourDays] }),
       ),
+      Command.resolve(
+        FetchVoices,
+        Message.SucceededFetchVoices({
+          generation: 1,
+          voices: [{ id: "piper:is_IS-salka-medium" as VoiceRef, engine: "piper", name: "Salka", language: "is", gender: "female" }],
+        }),
+      ),
       message(storedSettings({ connection })),
-      Command.expectExact(FetchEpisodes({ connection, generation: 2, request: 4 })),
+      Command.expectExact(
+        FetchEpisodes.make({ connection, generation: 2, request: 4 }),
+        FetchVoices.make({ connection, generation: 2 }),
+      ),
       Command.resolve(
         FetchEpisodes,
         Message.SucceededFetchEpisodes({ generation: 2, request: 4, episodes: [harbourDays] }),
       ),
-      // The poll for A from before the switch returns now, with an older list.
+      Command.resolve(
+        FetchVoices,
+        Message.SucceededFetchVoices({
+          generation: 2,
+          voices: [{ id: "kokoro:af_heart" as VoiceRef, engine: "kokoro", name: "Heart", language: "en", gender: "female" }],
+        }),
+      ),
+      // Late library and voice responses from generation 0 are dropped.
       message(
         Message.SucceededFetchEpisodes({
-          generation: pollA.args.generation,
-          request: pollA.args.request,
+          generation: pollAArgs.generation,
+          request: pollAArgs.request,
           episodes: [queuedArticle],
         }),
       ),
-      model((next) => expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])),
+      message(
+        Message.SucceededFetchVoices({
+          generation: 0,
+          voices: [{ id: "piper:stale" as VoiceRef, engine: "piper", name: "Stale", language: "en", gender: null }],
+        }),
+      ),
+      model((next) => {
+        expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([harbourDays])
+        expect(next.voices.map((voice) => voice.name)).toEqual(["Heart"])
+      }),
     )
   })
 
-  test("Copy feed URL shows Copied until its own timer ends", () => {
+  test("changing the server clears stale Voices so a failed Voice fetch retries on opening Review", () => {
+    const serverB = { origin: "https://other.example", token: apiToken("token-b") }
+    const reviewEpisode = {
+      ...harbourDays,
+      id: "rev-1" as EpisodeId,
+      chapters: [],
+      durationMs: null,
+      bookUrl: null,
+      job: { _tag: "Review" as const },
+    }
+    const oldVoice = {
+      id: "piper:old" as VoiceRef,
+      engine: "piper",
+      name: "Old",
+      language: "en",
+      gender: null,
+    }
     story(
       update,
-      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }) }),
-      message(Message.ClickedCopyFeedUrl()),
-      Command.resolve(CopyFeedUrl, Message.SucceededCopyFeedUrl()),
-      model((next) => expect(next.isFeedUrlCopied).toBe(true)),
-      Command.expectExact(WaitBeforeResetCopied({ copy: 1 })),
-      Command.resolve(WaitBeforeResetCopied, Message.CompletedWaitBeforeResetCopied({ copy: 1 })),
-      model((next) => expect(next.isFeedUrlCopied).toBe(false)),
+      given({ ...withEpisodes(baseModel(), [reviewEpisode]), voices: [oldVoice] }),
+      message(storedSettings({ connection: serverB })),
+      model((next) => {
+        expect(next.voices).toEqual([])
+        expect(next.connectionGeneration).toBe(1)
+      }),
+      Command.expectExact(
+        FetchEpisodes.make({ connection: serverB, generation: 1, request: 2 }),
+        FetchVoices.make({ connection: serverB, generation: 1 }),
+      ),
+      Command.resolve(
+        FetchEpisodes,
+        Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [reviewEpisode] }),
+      ),
+      Command.resolve(FetchVoices, Message.FailedFetchVoices()),
+      // Opening Review sees empty voices and retries FetchVoices for the new server.
+      message(Message.ClickedOpenReview({ episodeId: reviewEpisode.id })),
+      Command.expectExact(FetchVoices.make({ connection: serverB, generation: 1 })),
+      Command.resolve(FetchVoices, Message.SucceededFetchVoices({ generation: 1, voices: [] })),
     )
   })
 
-  test("the timer of an earlier copy does not clear the Copied of a later one", () => {
-    // Copy, close, reopen and copy again within 1.5 s: the first timer ends while the second copy shows Copied.
-    story(
-      update,
-      given({ ...baseModel(), feed: Feed.Ready({ url: newFeed }), isFeedUrlCopied: true, feedUrlCopies: 2 }),
-      message(Message.CompletedWaitBeforeResetCopied({ copy: 1 })),
-      model((next) => expect(next.isFeedUrlCopied).toBe(true)),
-      message(Message.CompletedWaitBeforeResetCopied({ copy: 2 })),
-      model((next) => expect(next.isFeedUrlCopied).toBe(false)),
-    )
-  })
-
-  test("a token saved in another tab refetches the library, and the feed while Settings is open", () => {
+  test("a token saved in another tab refetches the library and bumps connectionGeneration", () => {
     const otherTab = { origin: "", token: apiToken("token-from-another-tab") }
-    const open = baseModel()
     story(
       update,
-      given({ ...open, settingsDialog: { ...open.settingsDialog, isOpen: true }, feed: Feed.Ready({ url: newFeed }) }),
+      given({ ...baseModel(), isSettingsOpen: true }),
       message(storedSettings({ connection: otherTab })),
       model((next) => {
         expect(next.connection.origin).toBe("")
         expect(Redacted.value(next.connection.token)).toBe("token-from-another-tab")
-        expect(next.feed).toEqual(Feed.Loading())
+        expect(next.connectionGeneration).toBe(1)
       }),
-      Command.expectExact(FetchEpisodes, FetchFeed),
+      Command.expectExact(FetchEpisodes, FetchVoices),
       Command.resolve(FetchEpisodes, Message.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] })),
-      Command.resolve(FetchFeed, Message.SucceededFetchFeed({ request: 1, url: newFeed })),
+      Command.resolve(FetchVoices, Message.SucceededFetchVoices({ generation: 1, voices: [] })),
     )
   })
 
@@ -227,17 +296,17 @@ describe("settings", () => {
         expect(next.speed).toBe(1.2)
         expect(next.rate).toBe(2)
       }),
-      Command.expectExact(SetAudioRate({ rate: 2 })),
-      Command.resolve(SetAudioRate, Message.CompletedSetAudioRate()),
+      Command.expectExact(SetAudioRate.make({ rate: 2 })),
+      Command.resolve(SetAudioRate, Component.noop),
       message(Message.SubmittedAddForm()),
       Command.expectExact(
-        CreateEpisodeFromSource({
+        CreateEpisodeFromSource.make({
           connection,
           input: { source: { _tag: "Text", title: null, text: "A short note." }, voice: sarah, speed: 1.2, review: false },
         }),
       ),
       Command.resolve(CreateEpisodeFromSource, Message.SucceededCreateEpisode({ episode: queuedArticle })),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      Command.resolve(HtmlCommand.Focus, { found: true }),
     )
   })
 
@@ -270,182 +339,6 @@ describe("settings", () => {
       Command.expectNone(),
     )
   })
-
-  test("a feed response for the current connection shows the feed", () => {
-    story(
-      update,
-      given(baseModel()),
-      message(Message.SucceededFetchFeed({ request: 0, url: newFeed })),
-      model((next) => expect(next.feed).toEqual(Feed.Ready({ url: newFeed }))),
-    )
-  })
-})
-
-describe("menus", () => {
-  const voices: ReadonlyArray<Voice> = ["Heart", "Sarah", "Sky", "Steinn"].map((name) => ({
-    id: `kokoro:${name.toLowerCase()}` as VoiceRef,
-    engine: "kokoro",
-    name,
-    language: "en",
-    gender: null,
-  }))
-  const voiceMenu = (typedText: string, active: number) => ({
-    ...baseModel(),
-    voices,
-    // The prefix started with nothing highlighted.
-    picker: Picker.Open({ pickerId: "Voice", maybeActiveIndex: Option.some(active), typedText, typeAheadFrom: -1 }),
-    typeAheadKeys: typedText.length,
-  })
-  const activeIndex = (next: { picker: Picker }) => next.picker._tag === "Open" && Option.getOrNull(next.picker.maybeActiveIndex)
-  /** Voices with these names, all in one language, so the Voice menu is Auto and then the names in order. */
-  const named = (names: ReadonlyArray<string>): ReadonlyArray<Voice> =>
-    names.map((name) => ({ id: `kokoro:${name.toLowerCase()}` as VoiceRef, engine: "kokoro", name, language: "en", gender: null }))
-  /**
-   * A key in the open menu that highlights an item. The next key comes within 750 ms, so this key's reset
-   * timer ends after it, stale: a Story must resolve it first, so it resolves with a key count no key has.
-   */
-  const typeKey = (key: string) =>
-    steps(
-      message(Message.PressedPickerKey({ key })),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: -1 })),
-    )
-  /** The last key of a prefix: 750 ms pass and its reset timer, the `keys`th, clears the prefix. */
-  const typeLastKey = (key: string, keys: number) =>
-    steps(
-      message(Message.PressedPickerKey({ key })),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys })),
-    )
-
-  test("after cycling with a repeated letter, the next key extends it: s, s, k goes to Sky", () => {
-    story(
-      update,
-      given({ ...baseModel(), voices: named(["Santa", "Sarah", "Sky"]) }),
-      message(Message.ClickedPickerTrigger({ pickerId: "Voice" })),
-      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
-      typeKey("s"),
-      model((next) => expect(activeIndex(next)).toBe(1)),
-      typeKey("s"),
-      model((next) => expect(activeIndex(next)).toBe(2)),
-      typeLastKey("k", 3),
-      model((next) => {
-        expect(activeIndex(next)).toBe(3)
-        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")
-      }),
-    )
-  })
-
-  test("a list with a doubled first letter does not cycle: l, l searches for `ll`, as in base-ui", () => {
-    story(
-      update,
-      // Lena sits between Lara and Llama, so a cycle (Lena) and an `ll` search (Llama) give different results.
-      given({ ...baseModel(), voices: named(["Lara", "Lena", "Llama", "Lukas"]) }),
-      message(Message.ClickedPickerTrigger({ pickerId: "Voice" })),
-      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
-      typeKey("l"),
-      model((next) => expect(activeIndex(next)).toBe(1)),
-      typeLastKey("l", 2),
-      model((next) => expect(activeIndex(next)).toBe(3)),
-    )
-  })
-
-  test("keys typed close together make one prefix: S, t, e goes to Steinn", () => {
-    story(
-      update,
-      given(voiceMenu("s", 2)),
-      message(Message.PressedPickerKey({ key: "t" })),
-      model((next) => expect(activeIndex(next)).toBe(4)),
-      Command.expectExact(WaitBeforeResetTypeAhead({ keys: 2 }), ScrollPickerItem),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
-      model((next) => expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")),
-    )
-  })
-
-  test("the reset timer of an earlier key keeps the prefix of a later one", () => {
-    story(
-      update,
-      given(voiceMenu("st", 4)),
-      message(Message.CompletedWaitBeforeResetTypeAhead({ keys: 1 })),
-      model((next) => expect(next.picker._tag === "Open" && next.picker.typedText).toBe("st")),
-    )
-  })
-
-  test("a key with no match clears the prefix, so the next key starts a new search", () => {
-    story(
-      update,
-      given(voiceMenu("", 0)),
-      message(Message.PressedPickerKey({ key: "x" })),
-      model((next) => {
-        expect(activeIndex(next)).toBe(0)
-        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("")
-      }),
-      // An empty prefix has nothing to reset, so `s` right after `x` starts a new search.
-      Command.expectNone(),
-      message(Message.PressedPickerKey({ key: "s" })),
-      model((next) => expect(activeIndex(next)).toBe(2)),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
-    )
-  })
-
-  test("Space inside a typed prefix extends the search; with no prefix it selects", () => {
-    const spaced: ReadonlyArray<Voice> = ["Heart", "The Beginning", "The End"].map((name) => ({
-      id: `kokoro:${name.toLowerCase().replace(" ", "_")}` as VoiceRef,
-      engine: "kokoro",
-      name,
-      language: "en",
-      gender: null,
-    }))
-    const spacedMenu = (typedText: string, active: number) => ({
-      ...voiceMenu(typedText, active),
-      voices: spaced,
-    })
-    story(
-      update,
-      given(spacedMenu("the", 2)),
-      message(Message.PressedPickerKey({ key: " " })),
-      model((next) => {
-        expect(next.picker._tag === "Open" && next.picker.typedText).toBe("the ")
-        expect(activeIndex(next)).toBe(2)
-      }),
-      Command.expectExact(WaitBeforeResetTypeAhead({ keys: 4 }), ScrollPickerItem),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 4 })),
-    )
-    story(
-      update,
-      given(spacedMenu("the ", 2)),
-      message(Message.PressedPickerKey({ key: "E" })),
-      model((next) => expect(activeIndex(next)).toBe(3)),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 5 })),
-    )
-    story(
-      update,
-      given(spacedMenu("", 3)),
-      message(Message.PressedPickerKey({ key: " " })),
-      model((next) => {
-        expect(next.picker._tag).toBe("Closed")
-        expect(Option.getOrNull(next.maybeVoice)).toBe("kokoro:the_end")
-      }),
-      Command.expectExact(FocusPickerTrigger, StoreSetting),
-      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
-      Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
-    )
-  })
-
-  test("the same letter again cycles through the items that start with it", () => {
-    story(
-      update,
-      given(voiceMenu("s", 2)),
-      message(Message.PressedPickerKey({ key: "s" })),
-      model((next) => expect(activeIndex(next)).toBe(3)),
-      Command.resolve(ScrollPickerItem, Message.CompletedScrollPickerItem()),
-      Command.resolve(WaitBeforeResetTypeAhead, Message.CompletedWaitBeforeResetTypeAhead({ keys: 2 })),
-    )
-  })
 })
 
 describe("add bar", () => {
@@ -463,8 +356,8 @@ describe("add bar", () => {
         expect(next.isAdding).toBe(false)
         expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([queuedArticle])
       }),
-      Command.expectExact(FocusAddText),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      Command.expectExact(HtmlCommand.Focus),
+      Command.resolve(HtmlCommand.Focus, { found: true }),
     )
   })
 
@@ -487,9 +380,9 @@ describe("add bar", () => {
         expect(fileStates(next)).toEqual(["harbour-days.epub Attached", "harbour-notes.pdf Attached", "cover.png Refused"]),
       ),
       message(Message.SubmittedAddForm()),
-      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
+      Command.expectExact(UploadEpisode.make({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.FailedUploadFile({ key: 0, failure: serverFailed })),
-      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice: null, speed: 1.2, review: false })),
+      Command.expectExact(UploadEpisode.make({ connection, key: 1, file: pdf, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: notes })),
       model((next) => {
         expect(fileStates(next)).toEqual(["harbour-days.epub Failed", "cover.png Refused"])
@@ -503,13 +396,13 @@ describe("add bar", () => {
         expect(Option.getOrThrow(next.maybeEpisodes)).toEqual([notes])
       }),
       message(Message.ClickedRetryFile({ key: 0 })),
-      Command.expectExact(UploadEpisode({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
+      Command.expectExact(UploadEpisode.make({ connection, key: 0, file: epub, voice: null, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
       model((next) => expect(fileStates(next)).toEqual(["cover.png Refused"])),
       message(Message.ClickedRemoveFile({ key: 2 })),
       model((next) => expect(next.batch).toEqual([])),
-      Command.expectExact(FocusAddText),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      Command.expectExact(HtmlCommand.Focus),
+      Command.resolve(HtmlCommand.Focus, { found: true }),
     )
   })
 
@@ -531,10 +424,10 @@ describe("add bar", () => {
         ],
       }),
       message(Message.SucceededUploadFile({ key: 0, episode: harbourDays })),
-      Command.expectExact(UploadEpisode({ connection, key: 1, file: pdf, voice, speed: 1.2, review: false })),
+      Command.expectExact(UploadEpisode.make({ connection, key: 1, file: pdf, voice, speed: 1.2, review: false })),
       Command.resolve(UploadEpisode, Message.SucceededUploadFile({ key: 1, episode: queuedArticle })),
       model((next) => expect(next.batch).toEqual([])),
-      Command.resolve(FocusAddText, Message.CompletedFocusAddText()),
+      Command.resolve(HtmlCommand.Focus, { found: true }),
     )
   })
 
@@ -552,20 +445,14 @@ describe("add bar", () => {
 })
 
 describe("player", () => {
-  /** The ReadStoredProgress Commands update returned, oldest first, so a step can run their real storage read. */
-  const issuedReads: Array<ReturnType<typeof ReadStoredProgress>> = []
-  const updateKeepingReads: typeof update = (current, sent) => {
-    const result = update(current, sent)
-    for (const command of result.commands ?? []) {
-      if (command.name === ReadStoredProgress.name) issuedReads.push(command as ReturnType<typeof ReadStoredProgress>)
-    }
-    return result
-  }
-  /** Runs the oldest ReadStoredProgress against the real localStorage and feeds its Message back. */
-  const readStorage = <M, Msg, Out>(simulation: StorySimulation<M, Msg, Out>): StorySimulation<M, Msg, Out> => {
-    const command = issuedReads.shift()
-    if (!command) throw new Error("update issued no ReadStoredProgress")
-    return Command.resolve(command, Effect.runSync(command.effect))(simulation)
+  const updateKeepingReads = update
+  /** Runs the oldest pending ReadStoredProgress against the real localStorage and feeds its Message back. */
+  const readStorage: Step = (s) => {
+    const item = s.pending.find((entry) => entry.command.name === ReadStoredProgress.name)
+    if (!item) throw new Error("update issued no ReadStoredProgress")
+    const args = item.command.args as { readonly episodeId: EpisodeId; readonly intent: number }
+    const result = Effect.runSync(ReadStoredProgress.make(args).effect)
+    s.resolve(ReadStoredProgress, result)
   }
   const storeProgress = (positionMs: number, updatedAt?: string) =>
     localStorage.setItem(`fama.progress.${harbourDays.id}`, JSON.stringify(progressAt(positionMs, updatedAt)))
@@ -582,7 +469,6 @@ describe("player", () => {
 
   afterEach(() => {
     localStorage.clear()
-    issuedReads.length = 0
   })
 
   /** A stand-in for the audio element that counts what the audio Commands tell it. */
@@ -604,13 +490,16 @@ describe("player", () => {
       this.paused = true
     },
   })
-  /** Runs the audio Commands of one `update` on `audio`, and gives the Messages they answer with. */
+  /** Runs the audio Commands of one `update` on `audio`, and gives the Messages/Noop they answer with. */
   const runAudio = async (commands: ReturnType<typeof update>["commands"], audio: ReturnType<typeof fakeAudio>) => {
-    const names: ReadonlyArray<string> = [LoadChapter.name, PlayAudio.name, PauseAudio.name, SeekAudio.name, StopAudio.name]
-    const answers: Array<Message> = []
-    for (const command of (commands ?? []).filter((item) => names.includes(item.name))) {
-      const effect = command.effect as Effect.Effect<Message, never, AudioPlayer>
-      answers.push(await Effect.runPromise(Effect.provideService(effect, AudioPlayer, audio as unknown as HTMLAudioElement)))
+    const names: ReadonlyArray<string> = [LoadChapter.key, PlayAudio.key, PauseAudio.key, SeekAudio.key, StopAudio.key]
+    const layer = audioCommandsLayer.pipe(
+      Layer.provide(Layer.succeed(AudioPlayer, audio as unknown as HTMLAudioElement)),
+    )
+    const answers: Array<Message | Component.Noop> = []
+    for (const command of commands.filter((item) => names.includes(item.name))) {
+      const effect = (command as unknown as { readonly effect: Effect.Effect<Message | Component.Noop, never, never> }).effect
+      answers.push(await Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<Message | Component.Noop>))
     }
     return answers
   }
@@ -629,8 +518,8 @@ describe("player", () => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
       }),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -647,7 +536,7 @@ describe("player", () => {
         expect(next.localProgress[harbourDays.id]).toBeUndefined()
       }),
       Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -660,8 +549,8 @@ describe("player", () => {
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(20_000)),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
     )
     storeProgress(25_000, "2026-11-23T11:00:00.000Z")
     story(
@@ -670,8 +559,8 @@ describe("player", () => {
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(25_000)),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -690,7 +579,7 @@ describe("player", () => {
           expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
           expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(30_000 - 26_825)
         }),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(LoadChapter, Component.noop),
       )
     } finally {
       blocked.mockRestore()
@@ -705,8 +594,8 @@ describe("player", () => {
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
     )
     // Finished on another device: the server holds the total length.
     story(
@@ -718,8 +607,8 @@ describe("player", () => {
         expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
       }),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -729,12 +618,12 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.EndedChapter()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
       message(Message.EndedChapter()),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
+      Command.expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 46_525 })),
       saved(46_525),
       model((next) => {
         expect(next.localProgress[harbourDays.id]?.positionMs).toBe(46_525)
@@ -746,7 +635,7 @@ describe("player", () => {
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(0)
       }),
       Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -767,7 +656,7 @@ describe("player", () => {
         isWaiting: false,
       }),
     )
-    expect(released.commands?.map((command) => [command.name, command.args])).toContainEqual([
+    expect(released.commands.map((command) => [command.name, "args" in command ? command.args : undefined])).toContainEqual([
       SaveProgress.name,
       { episodeId: harbourDays.id, positionMs: 46_525 },
     ])
@@ -799,20 +688,19 @@ describe("player", () => {
     )
     // Play on B. Its storage read is still running when the user clicks Pause on A.
     const clickedB = update(playingA, Message.ClickedPlayEpisode({ episodeId: tideTables.id }))
-    const readB = clickedB.commands?.find((command) => command.name === ReadStoredProgress.name) as
-      | ReturnType<typeof ReadStoredProgress>
-      | undefined
-    if (!readB) throw new Error("Play on B issued no ReadStoredProgress")
+    const readB = clickedB.commands.find((command) => command.name === ReadStoredProgress.name)
+    if (!readB || !("args" in readB)) throw new Error("Play on B issued no ReadStoredProgress")
+    const readBArgs = readB.args as { readonly episodeId: EpisodeId; readonly intent: number }
     story(
       update,
       given(clickedB.model),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
-      Command.expectExact(PauseAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 1_000 })),
-      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
+      Command.expectExact(PauseAudio, SaveProgress.make({ episodeId: harbourDays.id, positionMs: 1_000 })),
+      Command.resolve(PauseAudio, Component.noop),
       saved(1_000),
       message(Message.PausedAudio()),
       // B's read returns now, late.
-      message(Effect.runSync(readB.effect)),
+      message(Effect.runSync(ReadStoredProgress.make(readBArgs).effect)),
       model((next) => {
         expect(next.playback._tag === "Loaded" && next.playback.episodeId).toBe(harbourDays.id)
         expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
@@ -827,7 +715,7 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [runningHarbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.EndedChapter()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(true)),
       // The end of the audio made so far is not the end of the episode.
@@ -838,7 +726,7 @@ describe("player", () => {
         expect(next.playback._tag === "Loaded" && next.playback.isWaiting).toBe(false)
       }),
       Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -867,7 +755,7 @@ describe("player", () => {
           episodes: [{ ...harbourDays, progress: progressAt(42_500) }],
         }),
       ),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 46_525 })),
+      Command.expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 46_525 })),
       saved(46_525),
       model((next) => {
         expect(next.localProgress[harbourDays.id]?.positionMs).toBe(46_525)
@@ -885,7 +773,7 @@ describe("player", () => {
       message(Message.ClickedPlayPause()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -895,12 +783,12 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.ClickedSkip({ deltaMs: 15_000 })),
-      Command.expectExact(SeekAudio, SaveProgress({ episodeId: harbourDays.id, positionMs: 15_000 })),
-      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+      Command.expectExact(SeekAudio, SaveProgress.make({ episodeId: harbourDays.id, positionMs: 15_000 })),
+      Command.resolve(SeekAudio, Component.noop),
       Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(15_000, T) })),
-      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: progressAt(15_000, T) })),
+      Command.expectExact(PushProgress.make({ connection, episodeId: harbourDays.id, progress: progressAt(15_000, T) })),
       Command.resolve(
         PushProgress,
         Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: progressAt(15_000, T), stored: progressAt(15_000, T) }),
@@ -922,13 +810,13 @@ describe("player", () => {
       update,
       given(playing),
       message(Message.UpdatedAudioTime({ offsetMs: 5_000, atMs: 5_000 })),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 5_000 })),
+      Command.expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 5_000 })),
       saved(5_000),
       message(Message.UpdatedAudioTime({ offsetMs: 6_000, atMs: 6_000 })),
       message(Message.UpdatedAudioTime({ offsetMs: 9_000, atMs: 9_000 })),
       Command.expectNone(),
       message(Message.UpdatedAudioTime({ offsetMs: 10_100, atMs: 10_100 })),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 10_100 })),
+      Command.expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 10_100 })),
       saved(10_100),
     )
   })
@@ -949,7 +837,7 @@ describe("player", () => {
       update,
       given(withPlayback(paused, Playback.Loaded({ ...at12s, offsetMs: 14_000 }))),
       message(Message.HidPage()),
-      Command.expectExact(SaveProgress({ episodeId: harbourDays.id, positionMs: 14_000 })),
+      Command.expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 14_000 })),
       saved(14_000),
     )
   })
@@ -960,9 +848,9 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.EndedChapter()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
       message(Message.EndedChapter()),
       saved(46_525),
@@ -976,7 +864,7 @@ describe("player", () => {
       message(Message.ClickedPlayPause()),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(0)),
       Command.expectExact(LoadChapter),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
     )
   })
 
@@ -986,18 +874,18 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.EndedChapter()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.UpdatedAudioTime({ offsetMs: 19_700, atMs: 0 })),
       message(Message.EndedChapter()),
       saved(46_525),
       message(Message.ClickedSkip({ deltaMs: -15_000 })),
-      Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+      Command.resolve(SeekAudio, Component.noop),
       saved(46_525 - 15_000),
       message(Message.ClickedPlayPause()),
       Command.expectExact(PlayAudio),
-      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+      Command.resolve(PlayAudio, Component.noop),
     )
   })
 
@@ -1016,7 +904,7 @@ describe("player", () => {
       Message.SucceededFetchEpisodes({ generation: 0, request, episodes: [{ ...harbourDays, progress }] })
     const unavailable = { status: 503, message: "Server unavailable" }
     const secondChapter = (offsetMs: number, isAutoplay: boolean) =>
-      LoadChapter({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
+      LoadChapter.make({ src: harbourDays.chapters[1]!.url, offsetMs, rate: 1, isAutoplay })
 
     test("Play waits for the answer, starts at the phone's newer position, and saves only from there", () => {
       story(
@@ -1046,11 +934,11 @@ describe("player", () => {
             }),
           )
         }),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
-        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        Command.expectExact(SaveProgress.make({ episodeId: id, positionMs: 45_000 })),
         saved(45_000),
       )
     })
@@ -1073,7 +961,7 @@ describe("player", () => {
           expect(Option.isSome(next.maybeLibraryFailure)).toBe(true)
         }),
         Command.expectExact(PlayAudio),
-        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+        Command.resolve(PlayAudio, Component.noop),
       )
     })
 
@@ -1088,8 +976,8 @@ describe("player", () => {
         message(answer(phone)),
         model((next) => expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)),
         Command.expectExact(StoreProgress, secondChapter(40_000 - 26_825, false)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
       )
       story(
         update,
@@ -1097,8 +985,8 @@ describe("player", () => {
         message(Message.ClickedPlayPause()),
         message(Message.ClickedSkip({ deltaMs: 5_000 })),
         model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
-        Command.expectExact(SeekAudio, SaveProgress({ episodeId: id, positionMs: 15_000 })),
-        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        Command.expectExact(SeekAudio, SaveProgress.make({ episodeId: id, positionMs: 15_000 })),
+        Command.resolve(SeekAudio, Component.noop),
         saved(15_000),
       )
     })
@@ -1112,7 +1000,7 @@ describe("player", () => {
         message(Message.ClickedPlayPause()),
         model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
         Command.expectExact(PlayAudio),
-        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+        Command.resolve(PlayAudio, Component.noop),
       )
     })
 
@@ -1124,7 +1012,7 @@ describe("player", () => {
         // The audio element reports play though the tab sent it no command: the tab stops it, as the Play waits.
         message(Message.StartedAudio()),
         Command.expectExact(PauseAudio),
-        Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
+        Command.resolve(PauseAudio, Component.noop),
         message(Message.UpdatedAudioTime({ offsetMs: 11_000, atMs: 6_000 })),
         Command.expectNone(),
         message(answer(phone)),
@@ -1132,11 +1020,11 @@ describe("player", () => {
           expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
           expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
         }),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         message(Message.UpdatedAudioTime({ offsetMs: 46_000 - 26_825, atMs: 12_000 })),
-        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 46_000 })),
+        Command.expectExact(SaveProgress.make({ episodeId: id, positionMs: 46_000 })),
         saved(46_000),
       )
     })
@@ -1154,9 +1042,9 @@ describe("player", () => {
           expect(next.localProgress[id]).toEqual(same)
           expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
         }),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: same }), PlayAudio),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: same }), PlayAudio),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(PlayAudio, Component.noop),
       )
       // The Commands of that answer, run on an audio element: one `play`, no `pause`.
       const held = update(refreshing, Message.ClickedPlayPause()).model
@@ -1172,7 +1060,7 @@ describe("player", () => {
         message(Message.ClickedPlayPause()),
         // A poll (3) goes out while the foreground request (2) is still out, and the server refuses it.
         message(Message.TickedPoll()),
-        Command.expectExact(FetchEpisodes({ connection, generation: 0, request: 3 })),
+        Command.expectExact(FetchEpisodes.make({ connection, generation: 0, request: 3 })),
         Command.resolve(FetchEpisodes, Message.FailedFetchEpisodes({ generation: 0, request: 3, failure: unavailable })),
         // Nothing plays from the old 10 s, so no pause can stamp it over the phone's 40 s.
         Command.expectNone(),
@@ -1188,11 +1076,11 @@ describe("player", () => {
           expect(next.maybePendingPlay).toEqual(Option.none())
           expect(next.localProgress[id]).toEqual(phone)
         }),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 5_000 })),
-        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        Command.expectExact(SaveProgress.make({ episodeId: id, positionMs: 45_000 })),
         saved(45_000),
       )
     })
@@ -1205,14 +1093,14 @@ describe("player", () => {
         message(Message.TickedPoll()),
         Command.resolve(FetchEpisodes, answer(phone, 3)),
         model((next) => expect(next.maybePendingPlay).toEqual(Option.none())),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), secondChapter(40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         message(Message.StartedAudio()),
         // The awaited request answers late, with the list from before the phone's save: playback stays. The tab
         // sends the entry it took, with the phone's stamp, as it does for every list older than what it holds.
         message(answer(old)),
-        Command.expectExact(PushProgress({ connection, episodeId: id, progress: phone })),
+        Command.expectExact(PushProgress.make({ connection, episodeId: id, progress: phone })),
         Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: id, sent: phone, stored: phone })),
         Command.expectNone(),
         model((next) => {
@@ -1232,15 +1120,15 @@ describe("player", () => {
         Command.expectNone(),
         model((next) => expect(next.playback).toEqual(Playback.Stopped())),
         message(answer(phone)),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), ReadStoredProgress),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), ReadStoredProgress),
+        Command.resolve(StoreProgress, Component.noop),
         readStorage,
         model((next) => {
           expect(next.playback._tag === "Loaded" && next.playback.chapter).toBe(1)
           expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
         }),
         Command.expectExact(LoadChapter),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(LoadChapter, Component.noop),
       )
     })
 
@@ -1249,7 +1137,7 @@ describe("player", () => {
       const growing = { ...runningHarbourDays, progress: old }
       /** The answer lists the job Ready with both chapters, and the phone played the episode to the end. */
       const finishedElsewhere = progressAt(46_525, phone.updatedAt)
-      const firstChapter = LoadChapter({ src: harbourDays.chapters[0]!.url, offsetMs: 0, rate: 1, isAutoplay: true })
+      const firstChapter = LoadChapter.make({ src: harbourDays.chapters[0]!.url, offsetMs: 0, rate: 1, isAutoplay: true })
       const listedGrowing = update(withEpisodes(baseModel({ [id]: old }), [growing]), Message.BecameVisible()).model
       const loadedGrowing = update(withEpisodes(paused, [growing]), Message.BecameVisible()).model
       const answerWithout = Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [queuedArticle] })
@@ -1261,8 +1149,8 @@ describe("player", () => {
           message(Message.ClickedPlayEpisode({ episodeId: id })),
           Command.expectNone(),
           message(answer(finishedElsewhere)),
-          Command.expectExact(StoreProgress({ episodeId: id, progress: finishedElsewhere }), ReadStoredProgress),
-          Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+          Command.expectExact(StoreProgress.make({ episodeId: id, progress: finishedElsewhere }), ReadStoredProgress),
+          Command.resolve(StoreProgress, Component.noop),
           readStorage,
           model((next) =>
             expect(next.playback).toEqual(
@@ -1277,11 +1165,11 @@ describe("player", () => {
             ),
           ),
           Command.expectExact(firstChapter),
-          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+          Command.resolve(LoadChapter, Component.noop),
           // The second chapter came with the answer: the end of the first goes on to it.
           message(Message.EndedChapter()),
           Command.expectExact(secondChapter(0, true)),
-          Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+          Command.resolve(LoadChapter, Component.noop),
         )
       })
 
@@ -1307,7 +1195,7 @@ describe("player", () => {
             expect(next.playback).toEqual(Playback.Stopped())
           }),
           Command.expectExact(StopAudio),
-          Command.resolve(StopAudio, Message.CompletedStopAudio()),
+          Command.resolve(StopAudio, Component.noop),
         )
       })
     })
@@ -1329,16 +1217,16 @@ describe("player", () => {
       Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 10_000, isPlaying: false, isWaiting: false }),
     )
     const chapter = (index: number, offsetMs: number, isAutoplay: boolean) =>
-      LoadChapter({ src: harbourDays.chapters[index]!.url, offsetMs, rate: 1, isAutoplay })
+      LoadChapter.make({ src: harbourDays.chapters[index]!.url, offsetMs, rate: 1, isAutoplay })
     const atEndOfChapterOne = (isWaiting: boolean) =>
       Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 26_825, isPlaying: false, isWaiting })
     const inChapterTwo = Playback.Loaded({ episodeId: id, chapter: 1, url: harbourDays.chapters[1]!.url, offsetMs: 0, isPlaying: true, isWaiting: false })
     /** Five seconds of chapter 2 play: the save that goes out is after the phone's 26,825, in chapter 2. */
     const fiveSecondsOn = steps(
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.StartedAudio()),
       message(Message.UpdatedAudioTime({ offsetMs: 5_000, atMs: 6_000 })),
-      Command.expectExact(SaveProgress({ episodeId: id, positionMs: 31_825 })),
+      Command.expectExact(SaveProgress.make({ episodeId: id, positionMs: 31_825 })),
       saved(31_825),
     )
 
@@ -1356,9 +1244,9 @@ describe("player", () => {
           expect(next.maybePendingPlay).toEqual(Option.some({ episodeId: id, awaiting: [3] }))
           expect(next.playback).toEqual(atEndOfChapterOne(false))
         }),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: phone }), SeekAudio({ offsetMs: 26_825 })),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: phone }), SeekAudio.make({ offsetMs: 26_825 })),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(SeekAudio, Component.noop),
         // The second answer lists two chapters and the same position: that position is now the start of chapter 2.
         message(list(grown, 3)),
         model((next) => {
@@ -1375,8 +1263,8 @@ describe("player", () => {
         update,
         given(paused),
         message(list(growing)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(SeekAudio, Message.CompletedSeekAudio()),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(SeekAudio, Component.noop),
         message(Message.ClickedPlayPause()),
         // No audio starts at 0:00, so no save can replace the phone's 26,825.
         Command.expectNone(),
@@ -1402,7 +1290,7 @@ describe("player", () => {
         readStorage,
         model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
         Command.expectExact(chapter(0, 26_825, false)),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(LoadChapter, Component.noop),
         message(list(grown)),
         model((next) => expect(next.playback).toEqual(inChapterTwo)),
         Command.expectExact(chapter(1, 0, true)),
@@ -1454,12 +1342,12 @@ describe("player", () => {
           )
         }),
         // One audio Command. Nothing is stamped: the player took the phone's entry.
-        Command.expectExact(StoreProgress({ episodeId: id, progress: ahead }), chapter(1, 40_000 - 26_825, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: ahead }), chapter(1, 40_000 - 26_825, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         message(Message.StartedAudio()),
         message(Message.UpdatedAudioTime({ offsetMs: 45_000 - 26_825, atMs: 6_000 })),
-        Command.expectExact(SaveProgress({ episodeId: id, positionMs: 45_000 })),
+        Command.expectExact(SaveProgress.make({ episodeId: id, positionMs: 45_000 })),
         saved(45_000),
       )
     })
@@ -1473,16 +1361,16 @@ describe("player", () => {
         given(withEpisodes(baseModel(), [{ ...growing, progress: ahead }, other])),
         message(Message.ClickedPlayEpisode({ episodeId: id })),
         Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: id, intent: 1, stored: { _tag: "NotSaved" } })),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: ahead }), chapter(0, 26_825, false)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: ahead }), chapter(0, 26_825, false)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
         model((next) => expect(next.playback).toEqual(atEndOfChapterOne(true))),
         message(Message.HidPage()),
         Command.expectNone(),
         message(Message.ClickedPlayEpisode({ episodeId: other.id })),
         Command.resolve(ReadStoredProgress, Message.GotStoredProgress({ episodeId: other.id, intent: 2, stored: { _tag: "NotSaved" } })),
-        Command.expectExact(LoadChapter({ src: otherChapter.url, offsetMs: 0, rate: 1, isAutoplay: true })),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(LoadChapter.make({ src: otherChapter.url, offsetMs: 0, rate: 1, isAutoplay: true })),
+        Command.resolve(LoadChapter, Component.noop),
         model((next) => expect(next.localProgress[id]).toEqual(ahead)),
       )
     })
@@ -1497,9 +1385,9 @@ describe("player", () => {
         update,
         given(waiting),
         message(list({ ...harbourDays, progress: finished })),
-        Command.expectExact(StoreProgress({ episodeId: id, progress: finished }), chapter(0, 0, true)),
-        Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(StoreProgress.make({ episodeId: id, progress: finished }), chapter(0, 0, true)),
+        Command.resolve(StoreProgress, Component.noop),
+        Command.resolve(LoadChapter, Component.noop),
       )
     })
 
@@ -1517,8 +1405,8 @@ describe("player", () => {
             Playback.Loaded({ episodeId: id, chapter: 0, url: harbourDays.chapters[0]!.url, offsetMs: 11_825, isPlaying: true, isWaiting: false }),
           ),
         ),
-        Command.expectExact(chapter(0, 11_825, true), SaveProgress({ episodeId: id, positionMs: 11_825 })),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.expectExact(chapter(0, 11_825, true), SaveProgress.make({ episodeId: id, positionMs: 11_825 })),
+        Command.resolve(LoadChapter, Component.noop),
         saved(11_825),
       )
     })
@@ -1555,7 +1443,7 @@ describe("player", () => {
         update,
         given({ ...paused, maybeEpisodes: Option.some([encoding]) }),
         message(Message.CommittedScrub({ value: "47000" })),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(LoadChapter, Component.noop),
         saved(46_525),
         message(Message.ClickedPlayPause()),
         // The job may still make audio: the Play does not start at 0:00.
@@ -1568,7 +1456,7 @@ describe("player", () => {
         // Now the position is finished: the next Play starts at 0:00.
         message(Message.ClickedPlayPause()),
         Command.expectExact(chapter(0, 0, true)),
-        Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+        Command.resolve(LoadChapter, Component.noop),
       )
     })
 
@@ -1583,12 +1471,12 @@ describe("player", () => {
     test("are absolute: a repeated Play or Pause changes nothing", async () => {
       const audio = fakeAudio()
       const play = update(paused, Message.ClickedPlayPause())
-      expect(play.commands?.map((command) => command.name)).toEqual([PlayAudio.name])
+      expect(play.commands?.map((command) => command.name)).toEqual([PlayAudio.key])
       await runAudio(play.commands, audio)
       await runAudio(play.commands, audio)
       expect(audio.paused).toBe(false)
       const pause = update(play.model, Message.ClickedPlayPause())
-      expect(pause.commands?.map((command) => command.name)).toEqual([PauseAudio.name])
+      expect(pause.commands?.map((command) => command.name)).toEqual([PauseAudio.key])
       await runAudio(pause.commands, audio)
       await runAudio(pause.commands, audio)
       expect(audio.paused).toBe(true)
@@ -1611,7 +1499,7 @@ describe("player", () => {
       )
       // A new load or a pause stops the old `play()` with an AbortError: the later Command says what the audio does.
       const stopped = fakeAudio(new DOMException("Interrupted by a new load", "AbortError"))
-      expect(await runAudio(play.commands, stopped)).toEqual([Message.CompletedPlayAudio()])
+      expect(await runAudio(play.commands, stopped)).toEqual([Component.noop])
     })
 
     test("a save that is being stamped is where the device is: a list that lands before the stamp moves nothing", () => {
@@ -1619,7 +1507,7 @@ describe("player", () => {
       const mine = progressAt(15_000, T)
       // A Story sends no Message while a Command is out. This one must: the list lands before the stamp does.
       const sought = update(paused, Message.ClickedSkip({ deltaMs: 5_000 }))
-      expect(sought.commands?.map((command) => command.name)).toEqual([SaveProgress.name, SeekAudio.name])
+      expect(sought.commands?.map((command) => command.name)).toEqual([SaveProgress.name, SeekAudio.key])
       expect(sought.model.stamping).toEqual({ [harbourDays.id]: 15_000 })
       const listed = update(
         sought.model,
@@ -1639,7 +1527,7 @@ describe("player", () => {
           expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(15_000)
         }),
         // The stamp is the newest entry, and it goes to the server.
-        Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: mine })),
+        Command.expectExact(PushProgress.make({ connection, episodeId: harbourDays.id, progress: mine })),
         Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: mine, stored: mine })),
       )
     })
@@ -1651,12 +1539,12 @@ describe("player", () => {
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.ClickedPlayEpisode({ episodeId: harbourDays.id })),
       readStorage,
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.resolve(LoadChapter, Component.noop),
       message(Message.ClickedConfirmDelete({ episodeId: harbourDays.id })),
       Command.resolve(DeleteEpisode, Message.SucceededDeleteEpisode({ episodeId: harbourDays.id })),
       model((next) => expect(next.playback).toEqual(Playback.Stopped())),
       Command.expectExact(StopAudio),
-      Command.resolve(StopAudio, Message.CompletedStopAudio()),
+      Command.resolve(StopAudio, Component.noop),
     )
   })
 
@@ -1664,17 +1552,13 @@ describe("player", () => {
     story(
       update,
       given(baseModel()),
-      message(Message.ClickedPickerTrigger({ pickerId: "PlaybackSpeed" })),
-      Command.resolve(FocusPicker, Message.CompletedFocusPicker()),
-      message(Message.ClickedPickerItem({ pickerId: "PlaybackSpeed", index: 3 })),
+      message(Message.PickedPlaybackSpeed({ value: "1.5" })),
       model((next) => {
         expect(next.rate).toBe(1.5)
-        expect(next.picker._tag).toBe("Closed")
       }),
-      Command.expectExact(FocusPickerTrigger, StoreSetting, SetAudioRate),
-      Command.resolve(FocusPickerTrigger, Message.CompletedFocusPickerTrigger()),
-      Command.resolve(StoreSetting, Message.CompletedStoreSetting()),
-      Command.resolve(SetAudioRate, Message.CompletedSetAudioRate()),
+      Command.expectExact(StoreSetting, SetAudioRate),
+      Command.resolve(StoreSetting, Component.noop),
+      Command.resolve(SetAudioRate, Component.noop),
     )
   })
 })
@@ -1692,8 +1576,8 @@ describe("progress sync", () => {
       given(withEpisodes(baseModel({ [harbourDays.id]: newer, [tideTables.id]: older }), [])),
       message(loaded([{ ...harbourDays, progress: older }, { ...tideTables, progress: newer }])),
       Command.expectExact(
-        PushProgress({ connection, episodeId: harbourDays.id, progress: newer }),
-        StoreProgress({ episodeId: tideTables.id, progress: newer }),
+        PushProgress.make({ connection, episodeId: harbourDays.id, progress: newer }),
+        StoreProgress.make({ episodeId: tideTables.id, progress: newer }),
       ),
       model((next) => {
         expect(next.localProgress[harbourDays.id]).toEqual(newer)
@@ -1703,7 +1587,7 @@ describe("progress sync", () => {
         PushProgress,
         Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: newer, stored: newer }),
       ),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(StoreProgress, Component.noop),
       Command.expectNone(),
     )
   })
@@ -1714,11 +1598,11 @@ describe("progress sync", () => {
       update,
       given(withEpisodes(baseModel({ [harbourDays.id]: newer }), [])),
       message(loaded([harbourDays])),
-      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: newer })),
+      Command.expectExact(PushProgress.make({ connection, episodeId: harbourDays.id, progress: newer })),
       Command.resolve(PushProgress, Message.FailedPushProgress({ episodeId: harbourDays.id })),
       // Still newer than the server's, so the next load sends it again.
       message(loaded([harbourDays])),
-      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: newer })),
+      Command.expectExact(PushProgress.make({ connection, episodeId: harbourDays.id, progress: newer })),
       Command.resolve(
         PushProgress,
         Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: newer, stored: newer }),
@@ -1741,9 +1625,9 @@ describe("progress sync", () => {
       update,
       given(baseModel()),
       message(loaded([{ ...harbourDays, progress: older }])),
-      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: older })),
+      Command.expectExact(StoreProgress.make({ episodeId: harbourDays.id, progress: older })),
       model((next) => expect(next.localProgress[harbourDays.id]).toEqual(older)),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.resolve(StoreProgress, Component.noop),
     )
   })
 
@@ -1754,10 +1638,10 @@ describe("progress sync", () => {
       update,
       given(withEpisodes(baseModel(), [harbourDays])),
       message(Message.SavedProgress({ episodeId: harbourDays.id, progress: sent })),
-      Command.expectExact(PushProgress({ connection, episodeId: harbourDays.id, progress: sent })),
+      Command.expectExact(PushProgress.make({ connection, episodeId: harbourDays.id, progress: sent })),
       Command.resolve(PushProgress, Message.SucceededPushProgress({ episodeId: harbourDays.id, sent, stored: clamped })),
-      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: clamped })),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.expectExact(StoreProgress.make({ episodeId: harbourDays.id, progress: clamped })),
+      Command.resolve(StoreProgress, Component.noop),
       model((next) => expect(next.localProgress[harbourDays.id]).toEqual(clamped)),
       message(loaded([{ ...harbourDays, progress: clamped }])),
       Command.expectNone(),
@@ -1793,9 +1677,9 @@ describe("progress sync", () => {
         expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(40_000 - 26_825)
         expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
       }),
-      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: newer }), LoadChapter),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
-      Command.resolve(LoadChapter, Message.CompletedLoadChapter()),
+      Command.expectExact(StoreProgress.make({ episodeId: harbourDays.id, progress: newer }), LoadChapter),
+      Command.resolve(StoreProgress, Component.noop),
+      Command.resolve(LoadChapter, Component.noop),
       // The tab hides: the device already holds that position, so nothing goes out.
       message(Message.HidPage()),
       Command.expectNone(),
@@ -1812,13 +1696,13 @@ describe("progress sync", () => {
       given(playing),
       message(loaded([{ ...harbourDays, progress: newer }])),
       model((next) => expect(next.playback._tag === "Loaded" && next.playback.offsetMs).toBe(12_000)),
-      Command.expectExact(StoreProgress({ episodeId: harbourDays.id, progress: newer })),
-      Command.resolve(StoreProgress, Message.CompletedStoreProgress()),
+      Command.expectExact(StoreProgress.make({ episodeId: harbourDays.id, progress: newer })),
+      Command.resolve(StoreProgress, Component.noop),
     )
   })
 
   test("a save stamps the device clock and stores whole milliseconds under fama.progress.<id>", () => {
-    const result = Effect.runSync(SaveProgress({ episodeId: harbourDays.id, positionMs: 1234.6 }).effect)
+    const result = Effect.runSync(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 1234.6 }).effect)
     expect(result._tag).toBe("SavedProgress")
     if (result._tag !== "SavedProgress") return
     expect(result.progress.positionMs).toBe(1235)

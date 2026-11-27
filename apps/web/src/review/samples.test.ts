@@ -1,32 +1,29 @@
-import type { Document, Episode, EpisodeId, Sample, Voice, VoiceRef } from "@fama/contracts"
-import { Option } from "effect"
-import * as Scene from "foldkit/scene"
-import { Command, given, message, model, story } from "foldkit/story"
-import { describe, expect, test } from "vitest"
+import type { Episode, EpisodeId, Voice, VoiceRef } from "@fama/contracts"
+import { Component } from "@effect/ui"
+import { HtmlLocator, HtmlPlay } from "@effect/ui/html/testing"
+import { Locator, Story, TestHost } from "@effect/ui/testing"
+import { describe, expect, it } from "@effect/vitest"
+import { Effect, Layer, Option, Redacted } from "effect"
+import { TestClock } from "effect/testing"
+import { AppComponent } from "~/App"
+import { apiToken } from "~/api"
 import { PauseAudio, PlayAudio } from "~/audio"
-import { FetchVoices, PushProgress, SaveProgress } from "~/command"
-import { baseModel, connection, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
-import { Message } from "~/message"
-import { Playback } from "~/model"
-import { StartReviewNarration } from "~/review/command"
-import { ReviewMessage as R } from "~/review/message"
+import { ChangeReviewVoice, FetchEpisodes, FetchVoices, PushProgress, SaveProgress, StoreConnection } from "~/command"
+import { baseModel, connection, defaultFlags, harbourDays, progressAt, withEpisodes, withPlayback } from "~/fixture"
+import { AppMessage } from "~/message"
+import { Playback, Screen } from "~/model"
+import { type RedactedSample, SamplesQuery } from "~/queries"
 import {
-  ChangeReviewVoice,
-  FetchSamples,
   PlaySampleAudio,
   RequestSamples,
-  SamplesMessage as S,
+  SampleAudioPlayer,
   StopSampleAudio,
-  hasRequestedSamples,
+  VoiceSamplesEvents,
+  VoiceSamplesMessage,
+  VoiceSamplesNoDeps,
   languageOf,
   reviewVoices,
-} from "~/review/samples"
-import { subscriptions } from "~/subscription"
-import { update } from "~/update"
-import { view } from "~/view"
-
-const wrap = (message: R) => Message.GotReviewMessage({ message })
-const wrapSample = (message: S) => wrap(R.GotSamplesMessage({ message }))
+} from "~/review/VoiceSamples"
 
 const steinn = "piper:is_IS-steinn-medium" as VoiceRef
 const salka = "piper:is_IS-salka-medium" as VoiceRef
@@ -55,39 +52,63 @@ const greinEpisode: Episode = {
   job: { _tag: "Review" },
 }
 
-const greinDocument: Document = {
-  title: "Höfnin hljóða",
-  author: "Fama Fixtures",
-  language: "is",
-  chapters: [{ title: "Höfnin hljóða", text: "Höfnin vaknar á undan bænum." }],
-}
-
-const openedModel = (episode: Episode = greinEpisode, doc: Document = greinDocument) => {
-  const start = { ...withEpisodes(baseModel(), [episode, harbourDays]), voices }
-  const loading = update(start, wrap(R.ClickedEpisode({ episodeId: episode.id }))).model
-  return update(
-    loading,
-    wrap(R.SucceededFetchDocument({ episodeId: episode.id, request: 1, document: doc })),
-  ).model
-}
-
-const readySample = (voice: VoiceRef): Sample => ({
+const readySample = (voice: VoiceRef): RedactedSample => ({
   voice,
-  state: { _tag: "Ready", url: `/media/t/episodes/grein-1/samples/${encodeURIComponent(voice)}.m4a` },
+  state: {
+    _tag: "Ready",
+    url: Redacted.make(`/media/secret-feed-token/episodes/grein-1/samples/${encodeURIComponent(voice)}.m4a`),
+  },
 })
 
-const requestedSample = (voice: VoiceRef): Sample => ({
+const requestedSample = (voice: VoiceRef): RedactedSample => ({
   voice,
   state: { _tag: "Requested" },
 })
 
-const failedSample = (voice: VoiceRef, reason: string): Sample => ({
+const failedSample = (voice: VoiceRef, reason: string): RedactedSample => ({
   voice,
   state: { _tag: "Failed", reason },
 })
 
+const sampleProps = (
+  overrides?: Partial<{
+    readonly isMainPlaying: boolean
+    readonly initialVoice: VoiceRef | null
+    readonly isSavingVoice: boolean
+    readonly maybeVoiceError: Option.Option<string>
+  }>,
+) => ({
+  episodeId: greinEpisode.id,
+  origin: "",
+  connectionGeneration: 0,
+  language: "is",
+  speed: 1,
+  initialVoice: overrides && "initialVoice" in overrides ? overrides.initialVoice! : steinn,
+  voices,
+  isBusy: false,
+  isSavingVoice: overrides?.isSavingVoice ?? false,
+  maybeVoiceError: overrides?.maybeVoiceError ?? Option.none(),
+  isMainPlaying: overrides?.isMainPlaying ?? false,
+})
+
+const makeFakeSampleAudio = () => ({
+  element: {
+    src: "",
+    currentTime: 0,
+    defaultPlaybackRate: 1,
+    playbackRate: 1,
+    ended: false,
+    play: () => Promise.resolve(),
+    pause: () => {},
+    removeAttribute: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  } as unknown as HTMLAudioElement,
+  activeVoice: null as VoiceRef | null,
+})
+
 describe("voice filtering and language matching", () => {
-  test("matches voices by base language tag, sorts by name, and includes extra API sample voices", () => {
+  it("matches voices by base language tag, sorts by name, and includes extra API sample voices", () => {
     expect(languageOf("is_IS")).toBe("is")
     expect(languageOf("en-US")).toBe("en")
 
@@ -100,435 +121,448 @@ describe("voice filtering and language matching", () => {
   })
 })
 
-describe("voice samples lifecycle in Review", () => {
-  test("requests samples, polls while Requested, stops polling when Ready, plays/switches/pauses, and retries Failed", () => {
-    const start = openedModel()
+describe("voice samples lifecycle", () => {
+  it.effect("requests samples, plays/switches/pauses, retries failed voice, and queues rapid voice changes", () =>
+    Effect.gen(function* () {
+      const s = yield* Story.make(VoiceSamplesNoDeps, sampleProps())
+      s.loaded("samples", { samples: [] })
 
-    story(
-      update,
-      given(start),
-      // Initial subscription fetch loads any existing samples (none yet).
-      message(wrapSample(S.RequestedInitialFetch())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 1 })),
-      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 1, samples: [] })),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.hasLoaded).toBe(true)
-        expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: false })
-      }),
+      // Request all Icelandic samples.
+      s.send(VoiceSamplesMessage.ClickedHearVoices()).expectExact(RequestSamples)
+      expect(s.pending[0]!.command.args).toEqual({
+        episodeId: greinEpisode.id,
+        origin: "",
+        generation: 0,
+        voice: null,
+      })
+      s.resolve(RequestSamples, {
+          samples: [readySample(bui), readySample(salka), readySample(steinn), failedSample(ugla, "Model missing")],
+        })
+        .loaded("samples", {
+          samples: [readySample(bui), readySample(salka), readySample(steinn), failedSample(ugla, "Model missing")],
+        })
 
-      // Request samples for all Icelandic voices.
-      message(wrapSample(S.ClickedHearVoices())),
-      Command.expectExact(
-        RequestSamples({ connection, episodeId: greinEpisode.id, request: 2, maybeVoice: Option.none() }),
-      ),
-      Command.resolve(
-        RequestSamples,
-        S.SucceededRequestSamples({
-          episodeId: greinEpisode.id,
-          request: 2,
-          maybeVoice: Option.none(),
-          samples: [requestedSample(bui), requestedSample(salka), requestedSample(steinn), requestedSample(ugla)],
-        }),
-      ),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && hasRequestedSamples(next.review.view.samples)).toBe(true)
-        expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: true })
-      }),
-
-      // Poll while Requested: Salka is Ready, Ugla Failed, others still Requested.
-      message(wrapSample(S.TickedPoll())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 3 })),
-      Command.resolve(
-        FetchSamples,
-        S.SucceededFetchSamples({
-          episodeId: greinEpisode.id,
-          request: 3,
-          samples: [
-            requestedSample(bui),
-            readySample(salka),
-            readySample(steinn),
-            failedSample(ugla, "Model missing"),
-          ],
-        }),
-      ),
-      model((next) => expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: true })),
-
-      // Next poll: all samples settled (Ready or Failed), polling stops.
-      message(wrapSample(S.TickedPoll())),
-      Command.expectExact(FetchSamples({ connection, episodeId: greinEpisode.id, request: 4 })),
-      Command.resolve(
-        FetchSamples,
-        S.SucceededFetchSamples({
-          episodeId: greinEpisode.id,
-          request: 4,
-          samples: [
-            readySample(bui),
-            readySample(salka),
-            readySample(steinn),
-            failedSample(ugla, "Model missing"),
-          ],
-        }),
-      ),
-      model((next) => expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: false })),
-
-      // Play Salka sample, then switch directly to Búi, then pause.
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.expectExact(
-        PlaySampleAudio({
-          voice: salka,
-          src: `/media/t/episodes/grein-1/samples/${encodeURIComponent(salka)}.m4a`,
-        }),
-      ),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(
-          Option.some(salka),
+      // Play Salka, then switch directly to Búi (`mode: "switch"` interrupts Salka), then pause.
+      expect(JSON.stringify(readySample(salka))).not.toContain("secret-feed-token")
+      s.send(VoiceSamplesMessage.ClickedPlaySample({ voice: salka }))
+        .emitted(VoiceSamplesEvents.RequestedPauseMainPlayback())
+        .expectExact(
+          PlaySampleAudio.make({
+            voice: salka,
+            src: Redacted.make(`/media/secret-feed-token/episodes/grein-1/samples/${encodeURIComponent(salka)}.m4a`),
+          }),
         )
-        expect(subscriptions.sampleAudioEvents.modelToDependencies(next)).toEqual({ isPlaying: true })
-      }),
+      expect(s.model.maybePlayingVoice).toEqual(Option.some(salka))
+      expect(s.subscriptions).toContain("sample-audio-events")
 
-      message(wrapSample(S.ClickedPlaySample({ voice: bui }))),
-      Command.expectExact(
-        PlaySampleAudio({
-          voice: bui,
-          src: `/media/t/episodes/grein-1/samples/${encodeURIComponent(bui)}.m4a`,
-        }),
-      ),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      model((next) =>
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(
-          Option.some(bui),
-        ),
-      ),
+      s.send(VoiceSamplesMessage.ClickedPlaySample({ voice: bui }))
+        .emitted(VoiceSamplesEvents.RequestedPauseMainPlayback())
+      expect(s.interrupted.map((command) => command.name)).toContain("review/PlaySampleAudio")
+      expect(s.model.maybePlayingVoice).toEqual(Option.some(bui))
+      s.resolve(PlaySampleAudio, Component.noop)
 
-      message(wrapSample(S.ClickedPauseSample())),
-      Command.expectExact(StopSampleAudio()),
-      Command.resolve(StopSampleAudio, S.CompletedStopSample()),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(Option.none())
-        expect(subscriptions.sampleAudioEvents.modelToDependencies(next)).toEqual({ isPlaying: false })
-      }),
+      s.send(VoiceSamplesMessage.ClickedPauseSample())
+        .expectExact(StopSampleAudio.make({}))
+        .resolve(StopSampleAudio, Component.noop)
+      expect(s.model.maybePlayingVoice).toEqual(Option.none())
+      expect(s.subscriptions).not.toContain("sample-audio-events")
 
-      // Retry the failed Ugla sample individually.
-      message(wrapSample(S.ClickedRetrySample({ voice: ugla }))),
-      Command.expectExact(
-        RequestSamples({ connection, episodeId: greinEpisode.id, request: 5, maybeVoice: Option.some(ugla) }),
-      ),
-      Command.resolve(
-        RequestSamples,
-        S.SucceededRequestSamples({
-          episodeId: greinEpisode.id,
-          request: 5,
-          maybeVoice: Option.some(ugla),
+      // Retry failed Ugla individually.
+      s.send(VoiceSamplesMessage.ClickedRetrySample({ voice: ugla })).expectExact(RequestSamples)
+      expect(s.pending[0]!.command.args).toEqual({
+        episodeId: greinEpisode.id,
+        origin: "",
+        generation: 0,
+        voice: ugla,
+      })
+      s.resolve(RequestSamples, {
           samples: [readySample(bui), readySample(salka), readySample(steinn), requestedSample(ugla)],
-        }),
-      ),
-      model((next) => expect(subscriptions.pollSamples.modelToDependencies(next)).toEqual({ isPolling: true })),
-    )
-  })
+        })
 
-  test("playing a sample pauses main episode playback, and resuming main playback or leaving Review stops the sample", () => {
-    const withMainPlaying = withPlayback(
-      openedModel(),
-      Playback.Loaded({
-        episodeId: harbourDays.id,
-        chapter: 0,
-        offsetMs: 1000,
-        url: harbourDays.chapters[0]!.url,
-        isPlaying: true,
-        isWaiting: false,
-      }),
-    )
-    const loaded = update(
-      withMainPlaying,
-      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 0, samples: [readySample(salka)] })),
-    ).model
-    const saved = progressAt(1000)
-
-    story(
-      update,
-      given(loaded),
-      // Playing a sample pauses main playback cleanly and saves progress.
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
-      Command.resolve(SaveProgress, Message.SavedProgress({ episodeId: harbourDays.id, progress: saved })),
-      Command.resolve(
-        PushProgress,
-        Message.SucceededPushProgress({ episodeId: harbourDays.id, sent: saved, stored: saved }),
-      ),
-      model((next) => {
-        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(false)
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(
-          Option.some(salka),
+      // Rapid voice clicks emit RequestedChangeVoice to App, which keeps one write in flight per episode and survives Back.
+      s.send(VoiceSamplesMessage.PickedVoice({ voice: salka }))
+        .emitted(
+          VoiceSamplesEvents.SelectedVoice({ voice: salka }),
+          VoiceSamplesEvents.RequestedChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }),
         )
-      }),
-
-      // Starting main playback stops the playing sample.
-      message(Message.ClickedPlayPause()),
-      Command.resolve(PlayAudio, Message.CompletedPlayAudio()),
-      Command.resolve(StopSampleAudio, S.CompletedStopSample()),
-      model((next) => {
-        expect(next.playback._tag === "Loaded" && next.playback.isPlaying).toBe(true)
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(Option.none())
-      }),
-
-      // Play sample again, then click Back: stops sample playback on leave.
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      Command.resolve(PauseAudio, Message.CompletedPauseAudio()),
-      message(wrap(R.ClickedBack())),
-      Command.expectExact(StopSampleAudio()),
-      Command.resolve(StopSampleAudio, S.CompletedStopSample()),
-      model((next) => expect(next.review.view._tag).toBe("Closed")),
-    )
-  })
-
-  test("sample end, play error, and leaving Review via reconcile all clean up playing state", () => {
-    const loaded = update(
-      openedModel(),
-      wrapSample(S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 0, samples: [readySample(salka)] })),
-    ).model
-    const startedElsewhere: Episode = { ...greinEpisode, job: { _tag: "Queued" } }
-
-    story(
-      update,
-      given(loaded),
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      message(wrapSample(S.EndedSampleAudio({ voice: salka }))),
-      model((next) =>
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(Option.none()),
-      ),
-
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.resolve(PlaySampleAudio, S.FailedPlaySample({ voice: salka, message: "Could not play sample" })),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybePlayingVoice).toEqual(Option.none())
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybeError).toEqual(
-          Option.some({ source: "audio", message: "Could not play sample" }),
+        .send(VoiceSamplesMessage.PickedVoice({ voice: bui }))
+        .emitted(
+          VoiceSamplesEvents.SelectedVoice({ voice: bui }),
+          VoiceSamplesEvents.RequestedChangeVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 }),
         )
-      }),
 
-      message(wrapSample(S.ClickedPlaySample({ voice: salka }))),
-      Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      message(Message.SucceededFetchEpisodes({ generation: 0, request: 2, episodes: [startedElsewhere, harbourDays] })),
-      Command.expectExact(StopSampleAudio()),
-      Command.resolve(StopSampleAudio, S.CompletedStopSample()),
-      model((next) => expect(next.review.view._tag).toBe("Closed")),
-    )
-  })
+      // Rapid A -> B -> A clicks coalesce the pending follow-up write, survive Back, and preserve failures for retry.
+      const app = yield* Story.make(AppComponent, defaultFlags())
+      app
+        .given({
+          ...withEpisodes(baseModel(), [greinEpisode]),
+          screen: Screen.Review({ episodeId: greinEpisode.id, openId: 1 }),
+        })
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }))
+        .expectExact(
+          ChangeReviewVoice.make({ connection, episodeId: greinEpisode.id, request: 1, voice: salka, speed: 1 }),
+        )
+        .keepPending(ChangeReviewVoice)
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 }))
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }))
+      expect(app.pending).toHaveLength(1)
 
-  test("selecting a voice persists via PUT /voice, updates the library episode, and sends voice on Start", () => {
-    const queuedWithSalka: Episode = { ...greinEpisode, voice: salka, job: { _tag: "Queued" } }
-    story(
-      update,
-      given(openedModel()),
-      message(wrapSample(S.ClickedSelectVoice({ voice: salka }))),
-      Command.expectExact(
-        ChangeReviewVoice({ connection, episodeId: greinEpisode.id, voice: salka, speed: 1 }),
-      ),
-      Command.resolve(
+      // Clicking Back does not cancel the in-flight or queued voice writes at App scope.
+      app.send(AppMessage.ClosedSubScreen())
+      expect(app.model.screen).toEqual(Screen.Library())
+
+      // First Salka (req 1) succeeds and dispatches the coalesced follow-up Salka (req 2) with the current token.
+      app
+        .resolve(
+          ChangeReviewVoice,
+          AppMessage.SucceededChangeReviewVoice({
+            episodeId: greinEpisode.id,
+            origin: connection.origin,
+            request: 1,
+            voice: salka,
+            speed: 1,
+          }),
+        )
+        .expectExact(
+          ChangeReviewVoice.make({ connection, episodeId: greinEpisode.id, request: 2, voice: salka, speed: 1 }),
+        )
+      expect(app.model.reviewVoices[greinEpisode.id]?.request).toBe(2)
+
+      // Follow-up Salka (req 2) fails after Back: failure stays tracked for retry when Review reopens.
+      app.resolve(
         ChangeReviewVoice,
-        S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }),
-      ),
-      model((next) => {
-        expect(next.review.view._tag === "Editing" && next.review.view.samples.maybeSelectedVoice).toEqual(
-          Option.some(salka),
-        )
-        const episode = Option.getOrThrow(next.maybeEpisodes).find((item) => item.id === greinEpisode.id)
-        expect(episode?.voice).toBe(salka)
-      }),
-      message(wrap(R.ClickedStart())),
-      Command.expectExact(
-        StartReviewNarration({
-          connection,
-          episodeId: greinEpisode.id,
-          document: greinDocument,
-          voice: salka,
-        }),
-      ),
-      Command.resolve(StartReviewNarration, wrap(R.SucceededStartReview({ episode: queuedWithSalka }))),
-      model((next) => {
-        expect(next.review.view._tag).toBe("Closed")
-        const episode = Option.getOrThrow(next.maybeEpisodes).find((item) => item.id === greinEpisode.id)
-        expect(episode?.voice).toBe(salka)
-        expect(episode?.job._tag).toBe("Queued")
-      }),
-    )
-  })
-
-  test("defaults cleanly when episode voice is null and fetches voices if none are loaded", () => {
-    const noVoiceEpisode: Episode = { ...greinEpisode, voice: null }
-    const modelWithoutVoice = { ...openedModel(noVoiceEpisode), voices: [] }
-    expect(
-      modelWithoutVoice.review.view._tag === "Editing" && modelWithoutVoice.review.view.samples.maybeSelectedVoice,
-    ).toEqual(Option.none())
-
-    story(
-      update,
-      given(modelWithoutVoice),
-      message(wrapSample(S.RequestedInitialFetch())),
-      Command.expectExact(
-        FetchSamples({ connection, episodeId: greinEpisode.id, request: 1 }),
-        FetchVoices({ connection }),
-      ),
-      Command.resolve(FetchSamples, S.SucceededFetchSamples({ episodeId: greinEpisode.id, request: 1, samples: [] })),
-      Command.resolve(FetchVoices, Message.SucceededFetchVoices({ voices })),
-      model((next) => expect(next.voices).toEqual(voices)),
-    )
-  })
-
-  test("poll preserves voice and audio errors, drops stale responses, and skips overlapping polls", () => {
-    let state = update(
-      openedModel(),
-      wrapSample(
-        S.SucceededFetchSamples({
-          episodeId: greinEpisode.id,
-          request: 0,
-          samples: [requestedSample(bui), failedSample(ugla, "Model missing")],
-        }),
-      ),
-    ).model
-
-    // Trigger a voice save error while polling is active.
-    state = update(state, wrapSample(S.ClickedSelectVoice({ voice: salka }))).model
-    state = update(
-      state,
-      wrapSample(
-        S.FailedChangeVoice({
-          episodeId: greinEpisode.id,
-          voice: salka,
-          failure: { status: 500, message: "Save failed" },
-        }),
-      ),
-    ).model
-
-    // Poll starts (request 1); a second tick while in-flight sends no overlapping request.
-    const poll1 = update(state, wrapSample(S.TickedPoll()))
-    expect(poll1.commands).toHaveLength(1)
-    const poll2 = update(poll1.model, wrapSample(S.TickedPoll()))
-    expect(poll2.commands ?? []).toHaveLength(0)
-
-    // Retry Ugla bumps sequence to 2; the earlier poll response (request 1) arrives late and is dropped.
-    const retry = update(poll2.model, wrapSample(S.ClickedRetrySample({ voice: ugla })))
-    expect(retry.commands).toHaveLength(1)
-    const afterStalePoll = update(
-      retry.model,
-      wrapSample(
-        S.SucceededFetchSamples({
-          episodeId: greinEpisode.id,
-          request: 1,
-          samples: [readySample(bui), failedSample(ugla, "Model missing")],
-        }),
-      ),
-    ).model
-    const afterRetry = update(
-      afterStalePoll,
-      wrapSample(
-        S.SucceededRequestSamples({
+        AppMessage.FailedChangeReviewVoice({
           episodeId: greinEpisode.id,
           request: 2,
-          maybeVoice: Option.some(ugla),
-          samples: [readySample(bui), requestedSample(ugla)],
+          voice: salka,
+          failure: { status: 500, message: "Voice write failed" },
         }),
-      ),
-    ).model
+      )
+      expect(app.model.reviewVoices[greinEpisode.id]).toEqual({
+        request: 2,
+        voice: salka,
+        isSaving: false,
+        maybeQueued: Option.none(),
+        maybeError: Option.some("Voice write failed"),
+      })
 
-    expect(afterRetry.review.view._tag === "Editing" && afterRetry.review.view.samples.items).toEqual([
-      readySample(bui),
-      requestedSample(ugla),
-    ])
-    expect(afterRetry.review.view._tag === "Editing" && afterRetry.review.view.samples.maybeError).toEqual(
-      Option.some({ source: "voice", message: "Save failed" }),
-    )
-  })
+      // Rotating the Client token while a first voice save is running dispatches the queued save with the new token.
+      const rotatedConnection = { origin: connection.origin, token: apiToken("rotated-token") }
+      const tokenApp = yield* Story.make(AppComponent, defaultFlags())
+      tokenApp
+        .given({
+          ...withEpisodes(baseModel(), [greinEpisode]),
+          screen: Screen.Review({ episodeId: greinEpisode.id, openId: 1 }),
+        })
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }))
+        .expectExact(
+          ChangeReviewVoice.make({ connection, episodeId: greinEpisode.id, request: 1, voice: salka, speed: 1 }),
+        )
+        .keepPending(ChangeReviewVoice)
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 }))
+      expect(tokenApp.pending).toHaveLength(1)
+      tokenApp
+        .send(AppMessage.SavedSettings({ connection: rotatedConnection }))
+        .resolve(StoreConnection, Component.noop)
+        .resolve(FetchVoices, AppMessage.SucceededFetchVoices({ generation: 1, voices: [] }))
+        .resolve(
+          FetchEpisodes,
+          AppMessage.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [greinEpisode] }),
+        )
+        .resolve(
+          ChangeReviewVoice,
+          AppMessage.FailedChangeReviewVoice({
+            episodeId: greinEpisode.id,
+            request: 1,
+            voice: salka,
+            failure: { status: 401, message: "Unauthorized" },
+          }),
+        )
+        .expectExact(
+          ChangeReviewVoice.make({
+            connection: rotatedConnection,
+            episodeId: greinEpisode.id,
+            request: 2,
+            voice: bui,
+            speed: 1,
+          }),
+        )
+        .resolve(
+          ChangeReviewVoice,
+          AppMessage.SucceededChangeReviewVoice({
+            episodeId: greinEpisode.id,
+            origin: rotatedConnection.origin,
+            request: 2,
+            voice: bui,
+            speed: 1,
+          }),
+        )
+      expect(tokenApp.model.reviewVoices[greinEpisode.id]).toBeUndefined()
+      expect(Option.getOrThrow(tokenApp.model.maybeEpisodes)[0]!.voice).toBe(bui)
 
-  test("serializes rapid voice clicks and applies a late SucceededChangeVoice even after Back", () => {
-    // Click Salka then immediately Búi: only Salka PUT runs first; Búi waits as pending.
-    const first = update(openedModel(), wrapSample(S.ClickedSelectVoice({ voice: salka })))
-    expect(first.commands).toHaveLength(1)
-    const second = update(first.model, wrapSample(S.ClickedSelectVoice({ voice: bui })))
-    expect(second.commands ?? []).toHaveLength(0)
+      // Switching to a different server drops queued writes tied to the old server.
+      const otherServer = { origin: "https://other.example", token: apiToken("other-server-token") }
+      const serverApp = yield* Story.make(AppComponent, defaultFlags())
+      serverApp
+        .given({
+          ...withEpisodes(baseModel(), [greinEpisode]),
+          screen: Screen.Review({ episodeId: greinEpisode.id, openId: 1 }),
+        })
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }))
+        .keepPending(ChangeReviewVoice)
+        .send(AppMessage.RequestedChangeReviewVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 }))
+        .send(AppMessage.SavedSettings({ connection: otherServer }))
+        .resolve(StoreConnection, Component.noop)
+        .resolve(FetchVoices, AppMessage.SucceededFetchVoices({ generation: 1, voices: [] }))
+        .resolve(FetchEpisodes, AppMessage.SucceededFetchEpisodes({ generation: 1, request: 2, episodes: [] }))
+        .resolve(
+          ChangeReviewVoice,
+          AppMessage.SucceededChangeReviewVoice({
+            episodeId: greinEpisode.id,
+            origin: connection.origin,
+            request: 1,
+            voice: salka,
+            speed: 1,
+          }),
+        )
+        .expectNone()
+      expect(serverApp.model.reviewVoices).toEqual({})
+    }),
+  )
 
-    // When Salka finishes, Búi PUT is dispatched next.
-    const afterFirst = update(
-      second.model,
-      wrapSample(S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 })),
-    )
-    expect(afterFirst.commands).toHaveLength(1)
+  it.effect("polls SamplesQuery every 2 s while Requested and stops polling once all samples settle", () =>
+    Effect.gen(function* () {
+      let fetchCount = 0
+      const responses: Array<ReadonlyArray<RedactedSample>> = [
+        [],
+        [requestedSample(bui), readySample(salka), readySample(steinn), failedSample(ugla, "Model missing")],
+        [readySample(bui), readySample(salka), readySample(steinn), failedSample(ugla, "Model missing")],
+      ]
+      const TestVoiceSamples = VoiceSamplesNoDeps.pipe(
+        Component.provide(
+          Layer.mergeAll(
+            SamplesQuery.toLayer(() =>
+              Effect.sync(() => {
+                const samples = responses[Math.min(fetchCount, responses.length - 1)]!
+                fetchCount += 1
+                return { samples }
+              }),
+            ),
+            RequestSamples.toLayer(() =>
+              Effect.succeed({
+                samples: [requestedSample(bui), requestedSample(salka), requestedSample(steinn), requestedSample(ugla)],
+              }),
+            ),
+            PlaySampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            StopSampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            Layer.succeed(SampleAudioPlayer, makeFakeSampleAudio()),
+          ),
+        ),
+      )
 
-    // User clicks Back before Búi finishes; late SucceededChangeVoice still updates the library Episode.
-    const afterBack = update(afterFirst.model, wrap(R.ClickedBack())).model
-    expect(afterBack.review.view._tag).toBe("Closed")
-    const afterLateSave = update(
-      afterBack,
-      wrapSample(S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: bui, speed: 1 })),
-    ).model
-    const episode = Option.getOrThrow(afterLateSave.maybeEpisodes).find((item) => item.id === greinEpisode.id)
-    expect(episode?.voice).toBe(bui)
-  })
-})
+      const play = yield* HtmlPlay.make(TestVoiceSamples, sampleProps()).pipe(Effect.provide(TestHost.layer()))
+      expect(fetchCount).toBe(1)
 
-describe("voice samples view in Review", () => {
-  test("shows matching voices, selected highlight, sample states, play/pause toggle, failure retry, and selection", () => {
-    Scene.scene(
-      { update, view },
-      Scene.given(openedModel()),
-      Scene.expect(Scene.role("radiogroup", { name: "Voice" })).toExist(),
-      Scene.expect(Scene.role("radio", { name: "Steinn" })).toHaveAttr("aria-checked", "true"),
-      Scene.expect(Scene.role("radio", { name: "Salka" })).toHaveAttr("aria-checked", "false"),
-      Scene.expect(Scene.role("radio", { name: "Heart (US)" })).toBeAbsent(),
-      Scene.expect(Scene.role("button", { name: "Hear voices" })).toBeEnabled(),
+      // No Requested samples yet: advancing the clock does not poll.
+      yield* TestClock.adjust("5 seconds")
+      yield* play.expect(HtmlLocator.role("button", { name: "Hear voices" })).toBeDisabled(false)
+      expect(fetchCount).toBe(1)
 
-      // Click Hear voices -> Requested indicators appear.
-      Scene.click(Scene.role("button", { name: "Hear voices" })),
-      Scene.Command.resolve(
-        RequestSamples,
-        S.SucceededRequestSamples({
-          episodeId: greinEpisode.id,
-          request: 1,
-          maybeVoice: Option.none(),
-          samples: [
-            requestedSample(bui),
-            readySample(salka),
-            readySample(steinn),
-            failedSample(ugla, "Synthesis failed"),
-          ],
+      // Click Hear voices -> writes Requested samples into cache -> starts 2s poll.
+      yield* play.click(HtmlLocator.role("button", { name: "Hear voices" }))
+      yield* play.expect(HtmlLocator.role("status", { name: "Generating Búi sample" })).toExist()
+
+      // After 2s: first poll returns Búi still Requested, Salka Ready, Ugla Failed.
+      yield* TestClock.adjust("2 seconds")
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Salka sample" })).toBeDisabled(false)
+      expect(fetchCount).toBe(2)
+
+      // After another 2s: all samples settle -> polling stops.
+      yield* TestClock.adjust("2 seconds")
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Búi sample" })).toBeDisabled(false)
+      expect(fetchCount).toBe(3)
+
+      // Further time passes with no more fetches.
+      yield* TestClock.adjust("10 seconds")
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Búi sample" })).toBeDisabled(false)
+      expect(fetchCount).toBe(3)
+    }),
+  )
+
+  it.effect("a transient Sample poll failure keeps the last Sample list visible (including Pause) and keeps polling", () =>
+    Effect.gen(function* () {
+      let fetchCount = 0
+      const TestVoiceSamples = VoiceSamplesNoDeps.pipe(
+        Component.provide(
+          Layer.mergeAll(
+            SamplesQuery.toLayer(() => {
+              fetchCount += 1
+              if (fetchCount === 1) {
+                return Effect.succeed({ samples: [requestedSample(bui), readySample(salka)] })
+              }
+              if (fetchCount === 2) {
+                return Effect.fail({ status: 503, message: "Temporary sample error" })
+              }
+              return Effect.succeed({ samples: [readySample(bui), readySample(salka)] })
+            }),
+            RequestSamples.toLayer(() => Effect.succeed({ samples: [] })),
+            PlaySampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            StopSampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            Layer.succeed(SampleAudioPlayer, makeFakeSampleAudio()),
+          ),
+        ),
+      )
+
+      const play = yield* HtmlPlay.make(TestVoiceSamples, sampleProps()).pipe(Effect.provide(TestHost.layer()))
+      expect(fetchCount).toBe(1)
+      yield* play.click(HtmlLocator.role("button", { name: "Play Salka sample" }))
+      yield* play.expect(HtmlLocator.role("button", { name: "Pause Salka sample" })).toExist()
+
+      // First 2s poll fails transiently: Pause stays visible and polling continues.
+      yield* TestClock.adjust("2 seconds")
+      expect(fetchCount).toBe(2)
+      yield* play.expect(HtmlLocator.role("button", { name: "Pause Salka sample" })).toExist()
+      yield* play.expect(HtmlLocator.role("alert")).toHaveText("Temporary sample error")
+
+      // Next 2s poll succeeds: Búi becomes Ready and error clears.
+      yield* TestClock.adjust("2 seconds")
+      expect(fetchCount).toBe(3)
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Búi sample" })).toBeDisabled(false)
+      yield* play.expect(HtmlLocator.role("button", { name: "Pause Salka sample" })).toExist()
+      yield* play.expect(HtmlLocator.role("alert")).toBeAbsent()
+    }),
+  )
+
+  it.effect("playing a sample pauses main playback, and resuming main playback stops the sample", () =>
+    Effect.gen(function* () {
+      const saved = progressAt(1000)
+      const withMainPlaying = withPlayback(
+        withEpisodes(baseModel(), [greinEpisode, harbourDays]),
+        Playback.Loaded({
+          episodeId: harbourDays.id,
+          chapter: 0,
+          offsetMs: 1000,
+          url: harbourDays.chapters[0]!.url,
+          isPlaying: true,
+          isWaiting: false,
         }),
-      ),
-      Scene.expect(Scene.role("status", { name: "Generating Búi sample" })).toExist(),
-      Scene.expect(Scene.role("button", { name: "Play Salka sample" })).toBeEnabled(),
-      Scene.expect(Scene.role("button", { name: "Play Steinn sample" })).toBeEnabled(),
-      Scene.expect(Scene.text("Synthesis failed")).toExist(),
-      Scene.expect(Scene.role("button", { name: "Retry Ugla sample" })).toBeEnabled(),
+      )
+      const app = yield* Story.make(AppComponent, defaultFlags())
+      app
+        .given({ ...withMainPlaying, screen: Screen.Review({ episodeId: greinEpisode.id, openId: 1 }) })
+        .send(AppMessage.RequestedPauseMainPlayback())
+        .resolve(PauseAudio, Component.noop)
+        .resolve(SaveProgress, AppMessage.SavedProgress({ episodeId: harbourDays.id, progress: saved }))
+        .resolve(PushProgress, AppMessage.SucceededPushProgress({ episodeId: harbourDays.id, sent: saved, stored: saved }))
+      expect(app.model.playback._tag === "Loaded" && app.model.playback.isPlaying).toBe(false)
+
+      // Resuming main playback flips `isMainPlaying` to true, so `VoiceSamples` triggers `stop-on-main-play`.
+      app.send(AppMessage.ClickedPlayPause()).resolve(PlayAudio, Component.noop)
+      expect(app.model.playback._tag === "Loaded" && app.model.playback.isPlaying).toBe(true)
+
+      const samples = yield* Story.make(VoiceSamplesNoDeps, sampleProps({ isMainPlaying: false }))
+      samples
+        .loaded("samples", { samples: [readySample(salka)] })
+        .send(VoiceSamplesMessage.ClickedPlaySample({ voice: salka }))
+        .emitted(VoiceSamplesEvents.RequestedPauseMainPlayback())
+        .resolve(PlaySampleAudio, Component.noop)
+      samples.props((prev) => ({ ...prev, isMainPlaying: true }))
+      expect(samples.subscriptions).toContain("stop-on-main-play")
+      samples
+        .subscription("stop-on-main-play", VoiceSamplesMessage.MainPlaybackStarted())
+        .expectExact(StopSampleAudio.make({}))
+        .resolve(StopSampleAudio, Component.noop)
+      expect(samples.model.maybePlayingVoice).toEqual(Option.none())
+    }),
+  )
+
+  it.effect("a failed Voice save shows a Retry action that re-sends the selected Voice", () =>
+    Effect.gen(function* () {
+      const TestVoiceSamples = VoiceSamplesNoDeps.pipe(
+        Component.provide(
+          Layer.mergeAll(
+            SamplesQuery.toLayer(() => Effect.succeed({ samples: [] })),
+            RequestSamples.toLayer(() => Effect.succeed({ samples: [] })),
+            PlaySampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            StopSampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            Layer.succeed(SampleAudioPlayer, makeFakeSampleAudio()),
+          ),
+        ),
+      )
+
+      const play = yield* HtmlPlay.make(
+        TestVoiceSamples,
+        sampleProps({
+          initialVoice: salka,
+          maybeVoiceError: Option.some("Voice write failed"),
+        }),
+      ).pipe(Effect.provide(TestHost.layer()))
+
+      yield* play.expect(HtmlLocator.role("alert")).toHaveText("Voice write failed")
+      yield* play.expect(HtmlLocator.role("button", { name: "Retry saving voice" })).toBeDisabled(false)
+
+      yield* play.click(HtmlLocator.role("button", { name: "Retry saving voice" }))
+      expect(play.root.emitted).toEqual([
+        VoiceSamplesEvents.RequestedChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }),
+      ])
+    }),
+  )
+
+  it.effect("shows matching voices, sample states, play/pause toggle, failure retry, and selection", () =>
+    Effect.gen(function* () {
+      let currentSamples: ReadonlyArray<RedactedSample> = []
+      const TestVoiceSamples = VoiceSamplesNoDeps.pipe(
+        Component.provide(
+          Layer.mergeAll(
+            SamplesQuery.toLayer(() => Effect.sync(() => ({ samples: currentSamples }))),
+            RequestSamples.toLayer(({ voice }) =>
+              Effect.sync(() => {
+                currentSamples =
+                  voice === null
+                    ? [
+                        requestedSample(bui),
+                        readySample(salka),
+                        readySample(steinn),
+                        failedSample(ugla, "Synthesis failed"),
+                      ]
+                    : [readySample(bui), readySample(salka), readySample(steinn), requestedSample(ugla)]
+                return { samples: currentSamples }
+              }),
+            ),
+            PlaySampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            StopSampleAudio.toLayer(() => Effect.succeed(Component.noop)),
+            Layer.succeed(SampleAudioPlayer, makeFakeSampleAudio()),
+          ),
+        ),
+      )
+
+      const play = yield* HtmlPlay.make(TestVoiceSamples, sampleProps()).pipe(Effect.provide(TestHost.layer()))
+      yield* play.expect(HtmlLocator.role("radiogroup", { name: "Voice" })).toExist()
+      yield* play.expect(HtmlLocator.role("radio", { name: "Steinn" })).toHaveAttribute("aria-checked", "true")
+      yield* play.expect(HtmlLocator.role("radio", { name: "Salka" })).toHaveAttribute("aria-checked", "false")
+      yield* play.expect(HtmlLocator.role("radio", { name: "Heart (US)" })).toBeAbsent()
+      yield* play.expect(HtmlLocator.role("button", { name: "Hear voices" })).toBeDisabled(false)
+
+      // Click Hear voices -> Requested / Ready / Failed states appear.
+      yield* play.click(HtmlLocator.role("button", { name: "Hear voices" }))
+      yield* play.expect(HtmlLocator.role("status", { name: "Generating Búi sample" })).toExist()
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Salka sample" })).toBeDisabled(false)
+      yield* play.expect(HtmlLocator.role("button", { name: "Play Steinn sample" })).toBeDisabled(false)
+      yield* play.expect(Locator.text("Synthesis failed")).toExist()
+      yield* play.expect(HtmlLocator.role("button", { name: "Retry Ugla sample" })).toBeDisabled(false)
 
       // Play Salka sample -> toggles to Pause Salka sample.
-      Scene.click(Scene.role("button", { name: "Play Salka sample" })),
-      Scene.Command.resolve(PlaySampleAudio, S.CompletedPlaySample()),
-      Scene.expect(Scene.role("button", { name: "Pause Salka sample" })).toExist(),
+      yield* play.click(HtmlLocator.role("button", { name: "Play Salka sample" }))
+      yield* play.expect(HtmlLocator.role("button", { name: "Pause Salka sample" })).toExist()
 
       // Select Salka -> radio checked updates.
-      Scene.click(Scene.role("radio", { name: "Salka" })),
-      Scene.Command.resolve(
-        ChangeReviewVoice,
-        S.SucceededChangeVoice({ episodeId: greinEpisode.id, voice: salka, speed: 1 }),
-      ),
-      Scene.expect(Scene.role("radio", { name: "Salka" })).toHaveAttr("aria-checked", "true"),
-      Scene.expect(Scene.role("radio", { name: "Steinn" })).toHaveAttr("aria-checked", "false"),
+      yield* play.click(HtmlLocator.role("radio", { name: "Salka" }))
+      yield* play.expect(HtmlLocator.role("radio", { name: "Salka" })).toHaveAttribute("aria-checked", "true")
+      yield* play.expect(HtmlLocator.role("radio", { name: "Steinn" })).toHaveAttribute("aria-checked", "false")
 
-      // Retry Ugla -> requests Ugla sample.
-      Scene.click(Scene.role("button", { name: "Retry Ugla sample" })),
-      Scene.Command.resolve(
-        RequestSamples,
-        S.SucceededRequestSamples({
-          episodeId: greinEpisode.id,
-          request: 2,
-          maybeVoice: Option.some(ugla),
-          samples: [readySample(bui), readySample(salka), readySample(steinn), requestedSample(ugla)],
-        }),
-      ),
-      Scene.expect(Scene.role("status", { name: "Generating Ugla sample" })).toExist(),
-    )
-  })
+      // Retry Ugla -> Generating Ugla sample appears.
+      yield* play.click(HtmlLocator.role("button", { name: "Retry Ugla sample" }))
+      yield* play.expect(HtmlLocator.role("status", { name: "Generating Ugla sample" })).toExist()
+    }),
+  )
 })
