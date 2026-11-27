@@ -17,11 +17,12 @@
             "allow": [
                 "api/<root> <-> api/routes",
                 "mobile/lib <-> mobile/player",
+                "web/<root> <-> web/components",
                 "web/<root> <-> web/reader",
                 "web/<root> <-> web/review",
                 "web/<root> <-> web/view",
-                "web/reader <-> web/view",
-                "web/review <-> web/view"
+                "web/components <-> web/view",
+                "web/reader <-> web/view"
             ]
         },
         { "name": "contracts-is-leaf", "kind": "no-depend", "from": ["packages/contracts/**"], "to": ["apps/**", "worker/**"] },
@@ -29,12 +30,32 @@
         { "name": "web-is-leaf", "kind": "no-depend", "from": ["apps/web/**"], "to": ["apps/api/**", "apps/mobile/**"] },
         { "name": "mobile-is-leaf", "kind": "no-depend", "from": ["apps/mobile/**"], "to": ["apps/web/**", "apps/api/**"] },
         {
+            "name": "web-ui-is-leaf",
+            "kind": "no-depend",
+            "from": ["apps/web/src/ui/**"],
+            "to": [
+                "apps/web/src/view/**",
+                "apps/web/src/review/**",
+                "apps/web/src/narrate-again/**",
+                "apps/web/src/reader/**",
+                "apps/web/src/playback/**",
+                "apps/web/src/components/**",
+                "apps/web/src/App.ts",
+                "apps/web/src/update.ts",
+                "apps/web/src/model.ts",
+                "apps/web/src/message.ts"
+            ]
+        },
+        {
             "name": "max-lines",
             "kind": "max-lines",
             "threshold": 400,
             "allow": [
                 "apps/web/src/update.ts",
-                "apps/web/src/review/samples.ts",
+                "apps/web/src/reader/ReaderScreen.ts",
+                "apps/web/src/review/NarrateAgainScreen.ts",
+                "apps/web/src/review/ReviewScreen.ts",
+                "apps/web/src/review/VoiceSamples.ts",
                 "apps/api/src/episode-repo.ts",
                 "worker/src/fama_worker/extract/pdf.py"
             ]
