@@ -9,6 +9,7 @@
     "test": "pnpm -r test",
     "dev:api": "pnpm --filter @fama/api dev",
     "smoke:api": "pnpm --filter @fama/api smoke",
+    "check:arch": "node tools/arch-check/index.mjs",
     "fama": "pnpm --filter @fama/infra fama"
   },
   "devDependencies": {

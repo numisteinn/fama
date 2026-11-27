@@ -1,0 +1,5 @@
+# Only for building the engine. The repository root does not install these.
+[tools]
+rust = "1.99.1"
+zig = "0.15"
+"cargo:cargo-zigbuild" = "latest"

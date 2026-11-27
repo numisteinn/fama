@@ -1,0 +1,11 @@
+{
+    "name": "@fama/arch-check",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Fast standalone Rust architecture checker for the Fama repo",
+    "license": "MIT",
+    "type": "module",
+    "scripts": {
+        "test": "./source-hash.sh --check && node --test index.test.mjs"
+    }
+}
