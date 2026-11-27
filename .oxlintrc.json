@@ -10,8 +10,7 @@
     "**/worker-configuration.d.ts",
     ".claude/**",
     "worker/**",
-    "tools/**",
-    "scripts/**"
+    "tools/**"
   ],
   "categories": {
     "correctness": "error"
