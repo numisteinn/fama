@@ -1,0 +1,76 @@
+{
+    "projects": [
+        { "name": "web", "kind": "ts", "source": "apps/web/src", "tsconfig": "apps/web/tsconfig.json" },
+        { "name": "api", "kind": "ts", "source": "apps/api/src", "tsconfig": "apps/api/tsconfig.json" },
+        { "name": "mobile", "kind": "ts", "source": "apps/mobile/src", "tsconfig": "apps/mobile/tsconfig.json" },
+        { "name": "contracts", "kind": "ts", "source": "packages/contracts/src", "tsconfig": "packages/contracts/tsconfig.json" },
+        { "name": "worker", "kind": "python", "source": "worker/src/fama_worker" }
+    ],
+    "workspace": {
+        "@fama/contracts": "packages/contracts/src/index.ts"
+    },
+    "rules": [
+        { "name": "no-file-cycles", "kind": "no-file-cycles" },
+        {
+            "name": "no-folder-tangles",
+            "kind": "no-folder-tangles",
+            "allow": [
+                "api/<root> <-> api/routes",
+                "mobile/lib <-> mobile/player",
+                "web/<root> <-> web/components",
+                "web/<root> <-> web/reader",
+                "web/<root> <-> web/review",
+                "web/<root> <-> web/view",
+                "web/components <-> web/view",
+                "web/reader <-> web/view",
+                "worker/<root> <-> worker/engines",
+                "worker/<root> <-> worker/extract"
+            ]
+        },
+        { "name": "contracts-is-leaf", "kind": "no-depend", "from": ["packages/contracts/**"], "to": ["apps/**", "worker/**"] },
+        { "name": "api-is-leaf", "kind": "no-depend", "from": ["apps/api/**"], "to": ["apps/web/**", "apps/mobile/**"] },
+        { "name": "web-is-leaf", "kind": "no-depend", "from": ["apps/web/**"], "to": ["apps/api/**", "apps/mobile/**"] },
+        { "name": "mobile-is-leaf", "kind": "no-depend", "from": ["apps/mobile/**"], "to": ["apps/web/**", "apps/api/**"] },
+        {
+            "name": "web-ui-is-leaf",
+            "kind": "no-depend",
+            "from": ["apps/web/src/ui/**"],
+            "to": [
+                "apps/web/src/view/**",
+                "apps/web/src/review/**",
+                "apps/web/src/narrate-again/**",
+                "apps/web/src/reader/**",
+                "apps/web/src/playback/**",
+                "apps/web/src/components/**",
+                "apps/web/src/App.ts",
+                "apps/web/src/update.ts",
+                "apps/web/src/model.ts",
+                "apps/web/src/message.ts"
+            ]
+        },
+        {
+            "name": "max-lines",
+            "kind": "max-lines",
+            "threshold": 400,
+            "allow": [
+                "apps/web/src/update.ts",
+                "apps/web/src/reader/ReaderScreen.ts",
+                "apps/web/src/review/NarrateAgainScreen.ts",
+                "apps/web/src/review/ReviewScreen.ts",
+                "apps/web/src/review/VoiceSamples.ts",
+                "apps/api/src/episode-repo.ts",
+                "worker/src/fama_worker/extract/pdf.py"
+            ]
+        },
+        {
+            "name": "max-exports",
+            "kind": "max-exports",
+            "threshold": 25,
+            "allow": [
+                "apps/web/src/command.ts",
+                "apps/web/src/model.ts",
+                "packages/contracts/src/index.ts"
+            ]
+        }
+    ]
+}
