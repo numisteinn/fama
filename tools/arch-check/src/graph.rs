@@ -524,62 +524,52 @@ fn python_imports(cleaned: &str) -> Vec<PyImport> {
 
 /// Strips one-line compound statement headers (e.g. `if True: import a` or
 /// `try: from .b import x`) so inline suite imports are still recognized.
-fn strip_py_suite_prefix(mut stmt: &str) -> &str {
+/// Because `import` and `from` are statements (never valid inside `lambda` or
+/// expressions), scanning top-level `:` tokens for one followed directly by
+/// `import`/`from` handles walrus (`:=`), `lambda`, and arbitrary Unicode
+/// identifiers without needing to re-parse the header expression.
+fn strip_py_suite_prefix(stmt: &str) -> &str {
     const HEADERS: &[&str] = &[
         "if", "elif", "else", "try", "except", "finally", "with", "for", "while", "def",
         "async", "class", "match", "case",
     ];
-    loop {
-        let trimmed = stmt.trim_start();
-        let first_word = trimmed
-            .split(|c: char| !c.is_alphanumeric() && c != '_')
-            .next()
-            .unwrap_or_default();
-        if !HEADERS.contains(&first_word) {
-            return trimmed;
-        }
-        let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
-        let mut depth = 0usize;
-        let mut pending_lambda = 0usize;
-        let mut colon_idx = None;
-        let mut i = 0usize;
-        while i < chars.len() {
-            let (byte_idx, ch) = chars[i];
-            match ch {
-                '(' | '[' | '{' => depth += 1,
-                ')' | ']' | '}' => depth = depth.saturating_sub(1),
-                ':' if depth == 0 => {
-                    if chars.get(i + 1).map(|&(_, next)| next) == Some('=') {
-                        i += 2;
-                        continue;
-                    }
-                    if pending_lambda > 0 {
-                        pending_lambda -= 1;
-                    } else {
-                        colon_idx = Some(byte_idx);
-                        break;
-                    }
-                }
-                c if depth == 0 && (c.is_alphabetic() || c == '_') => {
-                    let start_byte = byte_idx;
-                    while i < chars.len() && (chars[i].1.is_alphanumeric() || chars[i].1 == '_') {
-                        i += 1;
-                    }
-                    let end_byte = chars.get(i).map(|&(b, _)| b).unwrap_or(trimmed.len());
-                    if &trimmed[start_byte..end_byte] == "lambda" {
-                        pending_lambda += 1;
-                    }
+    let trimmed = stmt.trim_start();
+    let first_word = trimmed
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, ':' | '(' | '[' | '{' | '~' | '+' | '-' | '!'))
+        .next()
+        .unwrap_or_default();
+    if !HEADERS.contains(&first_word) {
+        return trimmed;
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => {
+                if bytes.get(i + 1) == Some(&b'=') {
+                    i += 2;
                     continue;
                 }
-                _ => {}
+                let after = trimmed[i + 1..].trim_start();
+                if starts_with_py_import(after) {
+                    return after;
+                }
             }
-            i += 1;
+            _ => {}
         }
-        match colon_idx {
-            Some(idx) => stmt = &trimmed[idx + 1..],
-            None => return trimmed,
-        }
+        i += 1;
     }
+    trimmed
+}
+
+fn starts_with_py_import(s: &str) -> bool {
+    s.strip_prefix("import")
+        .or_else(|| s.strip_prefix("from"))
+        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
 }
 
 fn split_from_import(rest: &str) -> Option<(&str, &str)> {
@@ -1391,6 +1381,7 @@ async def _private():
 if True: import fama_worker.logging
 if enabled := True: import fama_worker.a
 if λlambda := True: import fama_worker.b
+if a\u{0301}lambda := True: import fama_worker.d
 if lambda x: x: import fama_worker.c
 try: from .b import helper
 ";
@@ -1401,6 +1392,7 @@ try: from .b import helper
                 PyImport::Module("fama_worker.logging".to_owned()),
                 PyImport::Module("fama_worker.a".to_owned()),
                 PyImport::Module("fama_worker.b".to_owned()),
+                PyImport::Module("fama_worker.d".to_owned()),
                 PyImport::Module("fama_worker.c".to_owned()),
                 PyImport::From {
                     module: ".b".to_owned(),

@@ -170,15 +170,20 @@ test('does not confuse stdlib imports with sibling Python modules and catches on
             'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
         ])
 
-        // One-line suite with Unicode identifier containing `lambda` MUST also form a cycle.
-        writeFileSync(path.join(pkg, 'a.py'), 'if λlambda := True: import fama_worker.logging\n')
-        const unicode = run(['--json'], { cwd: dir, capture: true })
-        assert.equal(unicode.status, 1, unicode.stderr)
-        const unicodeReport = JSON.parse(unicode.stdout)
-        const unicodeCycles = unicodeReport.rules.find(rule => rule.kind === 'no-file-cycles')
-        assert.deepEqual(unicodeCycles.violations, [
-            'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
-        ])
+        // One-line suite with Unicode identifier (including combining marks) containing `lambda`.
+        for (const stmt of [
+            'if λlambda := True: import fama_worker.logging\n',
+            'if a\u0301lambda := True: import fama_worker.logging\n'
+        ]) {
+            writeFileSync(path.join(pkg, 'a.py'), stmt)
+            const unicode = run(['--json'], { cwd: dir, capture: true })
+            assert.equal(unicode.status, 1, unicode.stderr)
+            const unicodeReport = JSON.parse(unicode.stdout)
+            const unicodeCycles = unicodeReport.rules.find(rule => rule.kind === 'no-file-cycles')
+            assert.deepEqual(unicodeCycles.violations, [
+                'worker/src/fama_worker/a.py -> worker/src/fama_worker/logging.py -> worker/src/fama_worker/a.py'
+            ])
+        }
     })
 })
 
