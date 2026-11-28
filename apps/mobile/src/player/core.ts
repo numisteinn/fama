@@ -117,6 +117,8 @@ export type PlayerEvent =
   | { readonly _tag: "Restore"; readonly episodeId: string }
   /** The Play or Pause button. */
   | { readonly _tag: "Toggle" }
+  /** An explicit pause, for example when a sleep timer expires. */
+  | { readonly _tag: "Pause" }
   | { readonly _tag: "Seek"; readonly positionMs: number; readonly play?: boolean }
   | { readonly _tag: "Skip"; readonly deltaMs: number }
   /** The listener deleted an episode. */
@@ -313,6 +315,8 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
         ? { core: { ...core, held: null, ask: "Pause" }, effects: [] }
         : { core: askPlay(core, loaded), effects: [] }
     }
+    case "Pause":
+      return { core: { ...core, held: null, ask: "Pause" }, effects: [] }
     // A move takes a held Play back. The listener chose the place, so it is their own.
     case "Seek":
       return { core: { ...core, ask: event.play === true ? "Play" : core.ask, held: null, shortOfMs: null, move: { _tag: "Seek", positionMs: event.positionMs } }, effects: [] }

@@ -156,6 +156,10 @@ export const player = {
   toggle() {
     dispatch({ _tag: "Toggle" })
   },
+  /** Pauses without toggling a paused player back to Play. */
+  pause() {
+    dispatch({ _tag: "Pause" })
+  },
   /** Seconds. */
   skip(delta: number) {
     dispatch({ _tag: "Skip", deltaMs: delta * 1000 })
