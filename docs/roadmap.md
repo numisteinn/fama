@@ -13,13 +13,22 @@ The worker stores the Document with the API after extraction (unit `F`, done). T
 | Voice sample | yes | yes (the worker must be free) |
 | Narrate again | yes | no |
 
-The foundation, Read-along, Review, Voice sample, Narrate again, links that the phone fetches, and OCR for scanned PDFs are built. What is left is the optional Icelandic LLM text pass.
+The foundation, Read-along, Review, Voice sample, Narrate again, links that the phone fetches, and OCR for scanned PDFs are built. What is left from v1 is the optional Icelandic LLM text pass (`X3`).
+
+Wave 1 adds daily-listening UX, UI polish, and quality-of-life improvements (`P`, `O`, `T`, `Q`). Tags/folders, Up Next queue (`U`), and Bookmarks (`B`) wait for a later wave.
 
 ```
-now ── X3 LLM text fix (Icelandic)
+Round 1 (now) ──┬── P1 Voice previews (API + worker) ──┬── P2 Web voice preview
+                │                                       └── P3 iPhone voice preview
+                ├── O1 Organize API (archive + rename) ─┬── O2 Web library UX
+                │                                       └── O3 iPhone library UX
+                ├── T1 Web sleep timer ──────────────────── Q1 Web shortcuts + scrubber marks
+                ├── T2 iPhone sleep timer
+                ├── Q2 iPhone offline hot-swap + reader resume
+                └── X3 LLM text fix (Icelandic)
 ```
 
-One unit can start now: `X3`.
+Six units can start now: `P1`, `O1`, `T1`, `T2`, `Q2`, and `X3`. Once Round 1 lands on `main`, Round 2 (`P2`, `P3`, `O2`, `O3`, `Q1`) runs in parallel with disjoint files.
 
 ## Rules for parallel work
 
@@ -103,12 +112,50 @@ All work inside `worker/src/fama_worker/extract/` and `normalize.py`. One unit a
 - **X2** (built). **OCR for scanned PDFs.** Scanned and hybrid PDF pages with no text layer are read offline with `tesseract` (`isl+eng` when installed, keeping Icelandic letters intact) or Apple Vision on macOS as a fallback, then cleaned by `pdf.py`.
 - **X3. LLM pass to fix text, for Icelandic only.** This fixes Icelandic numbers ("3 bækur" must be read as "þrjár bækur"), which the rules in `normalize.py` do not handle. Optional, with a local model or an API model. Seen in: abogen.
 
+### P. Instant Voice Audio Previews
+
+Every catalog Voice gets one short (~3 s) pre-generated `.m4a` clip in its native language, stored in R2 (`voices/<voiceId>.m4a`) and served publicly (`GET /voice-previews/:id`) with immutable caching. Picking a voice in the Add bar or Narrate Again plays immediately even when the worker is asleep. (Distinct from Review's per-Document `Sample` clips.)
+
+- **P1.** Contract (`Voice.previewUrl`, `MissingVoicePreviews`), migration `0009_voice_previews.sql`, worker routes (`GET /api/worker/voices/missing-previews`, `PUT /api/worker/voices/:id/preview`), public media route (`GET`/`HEAD` `/voice-previews/:id`), and `fama previews` generator in `worker/`.
+- **P2.** Inline ▶ / ⏹ preview button inside Web voice pickers (Add bar and Narrate Again).
+- **P3.** Inline ▶ / ⏹ preview button on every voice row in iPhone Add and Narrate Again pickers.
+
+### O. Library Organization, Progress & Search
+
+Turns the flat chronological library into an organized daily listening inbox. Tags and folders wait for a later wave.
+
+- **O1.** Contract (`Episode.archivedAt`, `UpdateEpisode`), migration `0008_organize.sql`, `PATCH /api/episodes/:id` to archive/unarchive and rename title/author; private RSS feed omits archived episodes. Mark Played/Unplayed reuses `PUT /api/episodes/:id/progress`.
+- **O2.** Web library: row progress bars + remaining time/Played indicator + author subtitle, instant search, status filters (`Inbox` / `Listening` / `Finished` / `Archived`), sort (`Recently played`, `Newest`, `Shortest`), and row actions (Archive, Mark Played/Unplayed, Edit Title/Author).
+- **O3.** iPhone library: matching row progress indicator + author subtitle, native search, status filters, sort menu, and swipe/context actions.
+
+### T. Sleep Timer
+
+100% client-side sleep timer with presets (`15m`, `30m`, `45m`, `60m`, `End of chapter`, `+5m`, `Off`) and a live countdown badge in the player.
+
+- **T1.** Web sleep timer in `apps/web/src/playback/sleepTimer.ts` with 3 s volume fade-out before pausing.
+- **T2.** iPhone sleep timer in `apps/mobile/src/player/sleepTimer.ts` and native `ActionSheetIOS` picker in `apps/mobile/src/app/player.tsx`.
+
+### Q. Player & Read-Along Polish
+
+- **Q1.** Web keyboard shortcuts (`[`/`]` speed, `R` Read-along, `/` search, `?` help) + chapter boundary tick marks and hover timestamp/chapter tooltip on the web scrubber.
+- **Q2.** iPhone seamless offline hot-swap (rebuilding `EpisodePlayer`'s active `AVQueuePlayer` onto local `file://` URLs at the exact current position when a download completes) + Read-along "Back to now" button when scrolled away from the active sentence.
+
 ## Files
 
 A unit may edit the files in its row. Other files get connecting lines only (rule 3).
 
 | Unit | Its own files | Migration |
 |---|---|---|
+| O1 | `packages/contracts/src/organize.ts`, `apps/api/src/episode-organize.ts`, `apps/api/src/routes/organize.ts`, `apps/api/src/routes/organize.test.ts` | `0008_organize.sql` |
+| O2 | `apps/web/src/core/libraryFilter.ts`, `apps/web/src/view/library.ts` | |
+| O3 | `apps/mobile/src/lib/libraryFilter.ts`, `apps/mobile/src/app/(tabs)/library/index.tsx` | |
+| P1 | `packages/contracts/src/voice-preview.ts`, `apps/api/src/voice-preview-repo.ts`, `apps/api/src/routes/voice-preview.ts`, `apps/api/src/routes/voice-preview.test.ts`, `worker/src/fama_worker/previews.py`, `worker/tests/test_previews.py` | `0009_voice_previews.sql` |
+| P2 | `apps/web/src/ui/Picker.ts`, `apps/web/src/playback/voicePreview.ts` | |
+| P3 | `apps/mobile/src/player/voicePreview.ts`, `apps/mobile/src/components/VoicePicker.tsx` | |
+| Q1 | `apps/web/src/view/playerBar.ts`, `apps/web/src/subscription.ts` | |
+| Q2 | `apps/mobile/modules/fama-player/ios/EpisodePlayer.swift`, `apps/mobile/src/player/core.ts`, `apps/mobile/src/reader/Reader.tsx` | |
+| T1 | `apps/web/src/playback/sleepTimer.ts`, `apps/web/src/playback/sleepTimer.test.ts` | |
+| T2 | `apps/mobile/src/player/sleepTimer.ts`, `apps/mobile/src/player/sleepTimer.test.ts`, `apps/mobile/src/app/player.tsx` | |
 | X3 | `worker/.../extract/`, `worker/.../normalize.py` | |
 
 
