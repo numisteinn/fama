@@ -68,7 +68,8 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 
 `archivedAt` is `null` while the episode is in the inbox, and the ISO time of the move after the owner archived it. `GET /api/episodes` lists all the user's episodes, archived ones too, so a client filters the inbox and the archive locally.
 
-- `PATCH /api/episodes/:id` writes what the owner gives. `title` and `author` arrive trimmed, never blank, at most 300 characters; `author: null` clears the author. `archived: true` stamps `archivedAt`, and a later archive keeps the first stamp; `archived: false` clears it.
+- `PATCH /api/episodes/:id` writes what the owner gives. `title` and `author` arrive trimmed, never blank, at most 300 UTF-16 code units; `author: null` clears the author. Owner-edited `title` and `author` values are locked so later worker heartbeats and `storeDocument` writes do not overwrite them. Renaming updates episode metadata and the RSS feed only (existing audio tags, spoken intros, and `inputHash` do not change).
+- `archived: true` stamps `archivedAt`; repeating `archived: true` while already archived keeps that stamp. `archived: false` clears `archivedAt` to `null`, so a later archive receives a new stamp.
 - At least one field must be present. An empty body or `{}` gets `400`.
 - Another user's episode gets `404`. The write needs no lease and wakes no worker, because only the row and the feed change.
 - The feed leaves archived episodes out. Their audio and media URLs stay, so unarchiving puts an episode back in the feed with nothing re-made.

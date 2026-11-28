@@ -5,8 +5,9 @@ const EditableText = Schema.Trim.pipe(Schema.check(Schema.isMinLength(1), Schema
 
 /**
  * Body of `PATCH /api/episodes/:id`: what the owner changes on one episode. `title` and `author` arrive trimmed,
- * so a blank one is refused. `author: null` clears the author. `archived: true` stamps `archivedAt` (a later
- * archive keeps the first stamp), `archived: false` clears it. At least one field must be present.
+ * so a blank one is refused. `author: null` clears the author. `archived: true` stamps `archivedAt` (a repeated
+ * archive while already archived keeps that stamp); `archived: false` clears it, so archiving again later gets a
+ * new stamp. At least one field must be present.
  */
 export const UpdateEpisode = Schema.Struct({
   title: Schema.optionalKey(EditableText),

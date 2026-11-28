@@ -376,7 +376,7 @@ export const layer = Layer.effect(
         const sets = Object.keys(columns).map((column) => `${column} = ?`)
         const binds = Object.values(columns)
         for (const [column, value] of Object.entries(update)) {
-          sets.push(`${column} = COALESCE(?, ${column})`)
+          sets.push(column === "title" || column === "author" ? `${column} = CASE WHEN ${column}_locked = 1 THEN ${column} ELSE COALESCE(?, ${column}) END` : `${column} = COALESCE(?, ${column})`)
           binds.push(value)
         }
         const changed = yield* query("episode.transition", () =>

@@ -1,5 +1,5 @@
--- Library organization: when the owner archived the episode. NULL while it is in the inbox.
--- Archived episodes keep their audio and stay in the library, but the feed leaves them out.
+-- Library organization: archive timestamp plus owner-edit locks so worker heartbeats and
+-- document uploads never overwrite a title or author the owner explicitly set.
 ALTER TABLE episodes ADD COLUMN archived_at TEXT;
-
-CREATE INDEX episodes_user_archived ON episodes (user_id, archived_at, created_at DESC);
+ALTER TABLE episodes ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE episodes ADD COLUMN author_locked INTEGER NOT NULL DEFAULT 0;

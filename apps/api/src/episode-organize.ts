@@ -26,15 +26,15 @@ export const layer = Layer.effect(
       const sets: Array<string> = []
       const binds: Array<unknown> = []
       if (patch.title !== undefined) {
-        sets.push("title = ?")
+        sets.push("title = ?", "title_locked = 1")
         binds.push(patch.title)
       }
       if (patch.author !== undefined) {
-        sets.push("author = ?")
+        sets.push("author = ?", "author_locked = 1")
         binds.push(patch.author)
       }
       if (patch.archived === true) {
-        // Archiving stamps the first move only, so a later archive keeps the original stamp.
+        // Repeated archiving while already archived keeps the existing stamp.
         sets.push("archived_at = COALESCE(archived_at, ?)")
         binds.push(new Date(yield* now).toISOString())
       } else if (patch.archived === false) {

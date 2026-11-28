@@ -5,7 +5,7 @@ The owner puts an episode away and takes it back, and renames its title or autho
 ## Sub-features
 
 - `organize-rename` sets `title` and `author`. Both arrive trimmed, never blank, at most 300 characters. `author: null` clears the author and leaves the title alone.
-- `organize-archive` stamps `archivedAt` on `archived: true` and clears it on `archived: false`. A later archive keeps the first stamp.
+- `organize-archive` stamps `archivedAt` on `archived: true` and clears it on `archived: false`. Repeating `archived: true` while already archived keeps that stamp; unarchiving clears it so a later archive gets a new stamp.
 - `organize-list` keeps `GET /api/episodes` complete: archived episodes stay in the list with their `archivedAt`, so a client filters the inbox and the archive locally, with no extra round-trip.
 - `organize-feed` leaves archived episodes out of `rss.xml` and takes them back after an unarchive. Media URLs keep working either way.
 - `organize-private` gives another user's episode `404` and refuses an empty body, a blank field or a wrong type with `400`.
@@ -25,7 +25,7 @@ Preconditions:
 - **Archive.** Run `fama-verify api PATCH /api/episodes/<id> -H 'content-type: application/json' -d '{"archived":true}'`. The answer has an `archivedAt` stamp. `fama-verify api GET /api/episodes` still lists the episode, with the same stamp.
 - **Feed omits it.** Save the feed before and after: `curl -s "$(fama-verify feed)" > feed.xml`. The episode's `<guid>` is gone after the archive. Its media stays: `curl -s -o /dev/null -w '%{http_code}' http://localhost:8788<bookUrl>` answers `200`.
 - **Unarchive.** Run the PATCH with `{"archived":false}`. `archivedAt` is `null`, the feed has the item again, and the book URL did not change.
-- **First stamp kept.** Archive, unarchive, archive again. The third answer has the `archivedAt` of the first archive, not a new one.
+- **Repeated archive keeps its stamp.** Archive once, then send `{"archived":true}` again without unarchiving. Both answers have the same `archivedAt`. Unarchive (`{"archived":false}`), then archive again: the new archive gets a fresh stamp.
 - **Refused.** Run `curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer dev-api-token' -H 'content-type: application/json' -X PATCH http://localhost:8788/api/episodes/<id> -d '{}'`: `400`. The same for `{"title":"   "}`, `{"title":"<301 chars>"}` and `{"archived":"yes"}`.
 - **Proof.** Save the PATCH answers, the two `feed.xml` files and the status lines to `$EVIDENCE/organize/`.
 

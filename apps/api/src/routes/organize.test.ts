@@ -125,3 +125,48 @@ it("the feed leaves an archived episode out and takes it back, keeping its audio
   expect((await patch(episode.id, { archived: false })).status).toBe(200)
   expect(await inFeed(episode.id)).toBe(true)
 })
+
+it("worker heartbeats and storeDocument do not overwrite owner-edited title or cleared author", async () => {
+  const episode = await addEpisode()
+  const job = await readNarrateJob(await app.asWorker("POST", "/api/worker/claim", { json: { workerId: "w1", voices: [] } }))
+  expect(job.episodeId).toBe(episode.id)
+
+  expect((await patch(episode.id, { title: "Owner Title", author: null })).status).toBe(200)
+
+  const heartbeat = await app.asWorker("POST", `/api/worker/jobs/${episode.id}/progress`, {
+    json: {
+      workerId: "w1",
+      leaseToken: job.leaseToken,
+      stage: "synthesizing",
+      done: 0,
+      total: 1,
+      title: "Extracted Title",
+      author: "Extracted Author",
+      language: "en",
+      voice: null,
+      remainingMs: null,
+    },
+  })
+  expect(heartbeat.status).toBe(204)
+  const afterHeartbeat = await view(episode.id)
+  expect(afterHeartbeat.title).toBe("Owner Title")
+  expect(afterHeartbeat.author).toBeNull()
+  expect(afterHeartbeat.language).toBe("en")
+
+  const storeDoc = await app.asWorker(
+    "PUT",
+    `/api/worker/jobs/${episode.id}/document?workerId=w1&leaseToken=${job.leaseToken}`,
+    {
+      json: {
+        title: "Document Title",
+        author: "Document Author",
+        language: "en",
+        chapters: [{ title: "One", text: "The harbour is quiet." }],
+      },
+    },
+  )
+  expect(storeDoc.status).toBe(200)
+  const afterDoc = await view(episode.id)
+  expect(afterDoc.title).toBe("Owner Title")
+  expect(afterDoc.author).toBeNull()
+})
