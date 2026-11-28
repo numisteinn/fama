@@ -132,6 +132,7 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
         renderItem={render}
         keyExtractor={rowKey}
         windowSize={5}
+        contentContainerStyle={styles.listContent}
         onScrollBeginDrag={() => setFollow(followNext({ _tag: "DragStart" }))}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
           list.current?.scrollToOffset({ offset: averageItemLength * index, animated: false })
@@ -161,6 +162,7 @@ const rowKey = (item: Row) => item.key
 
 const styles = StyleSheet.create({
   reader: { flex: 1, alignSelf: "stretch" },
+  listContent: { paddingBottom: 64 },
   paragraph: { fontFamily: fonts.regular, color: colors.text, fontSize: 18, lineHeight: 26, marginBottom: space.md },
   heading: { fontFamily: fonts.bold, color: colors.text, fontSize: 22, marginVertical: space.md },
   mark: { backgroundColor: colors.accent, color: colors.onAccent },
@@ -168,6 +170,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: space.md,
     alignSelf: "center",
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: space.xs,

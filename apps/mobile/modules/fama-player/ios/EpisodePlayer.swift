@@ -36,6 +36,8 @@ final class EpisodePlayer: NSObject {
   private var lastError: String?
   /// Where a running seek will land. Repeated skips build on it, not on the old time.
   private var seekTarget: Double?
+  /// Monotonic counter so a cancelled in-flight seek never clears a newer seek's target.
+  private var seekGeneration = 0
   private var artwork: MPMediaItemArtwork?
   private var timeObserver: Any?
   private var observations: [NSKeyValueObservation] = []
@@ -66,8 +68,8 @@ final class EpisodePlayer: NSObject {
     loadArtwork(for: info)
     let target = locate(position)
     let landing = (starts[safe: target.index] ?? 0) + target.offset
-    seekTarget = landing
-    rebuildQueue(from: target.index, offset: target.offset, landing: landing)
+    let gen = beginSeek(to: landing)
+    rebuildQueue(from: target.index, offset: target.offset, seekGeneration: gen)
     if autoplay { play() } else { wantsPlay = false; playAsked = false; player.pause() }
     publish()
   }
@@ -84,32 +86,42 @@ final class EpisodePlayer: NSObject {
     let jobEnded = expectsMore && !more
     expectsMore = more
     guard newTracks.count >= tracks.count else { return }
-    let oldCount = tracks.count
+    let oldTracks = tracks
+    let oldCount = oldTracks.count
+    let currentPos = position
+    let curIdx = currentIndex
     // A Play is pending: the listener wants audio, and the queue has none.
     let playPending = wantsPlay && player.currentItem == nil
-    // A download completed or was deleted: an existing chapter's URL moved between the server and the device.
-    let urlChanged = (0..<min(oldCount, newTracks.count)).contains { tracks[$0].url != newTracks[$0].url }
     setTracks(newTracks)
-    if urlChanged {
-      // Keep the exact place and play intent, and rebuild the queue on the new URLs. A download that completes
-      // mid-episode keeps playing, and one deleted mid-episode swaps back to the stream, with no relaunch.
-      let landing = position
-      let target = locate(landing)
-      seekTarget = landing
-      rebuildQueue(from: target.index, offset: target.offset, landing: landing)
-      if wantsPlay { player.play() } else { player.pause() }
+    if player.currentItem == nil {
+      if newTracks.count > oldCount {
+        rebuildQueue(from: oldCount, offset: 0)
+        if playPending { play() } else { player.pause() }
+      } else if playPending && jobEnded {
+        if playAsked { play() } else { wantsPlay = false }
+      }
       publish()
       return
     }
-    if newTracks.count > oldCount {
-      if player.currentItem == nil {
-        rebuildQueue(from: oldCount, offset: 0)
-        if playPending { play() } else { player.pause() }
-      } else {
-        for index in oldCount..<tracks.count { enqueue(index) }
+
+    let currentUrlChanged = curIdx < oldCount && oldTracks[curIdx].url != tracks[curIdx].url
+    let laterUrlChanged = ((curIdx + 1)..<min(oldCount, tracks.count)).contains { oldTracks[$0].url != tracks[$0].url }
+
+    if currentUrlChanged {
+      // Only rebuild when the currently playing chapter's URL moved between remote and local.
+      let target = locate(currentPos)
+      let gen = beginSeek(to: currentPos)
+      rebuildQueue(from: target.index, offset: target.offset, seekGeneration: gen)
+      if wantsPlay { player.play() } else { player.pause() }
+    } else if laterUrlChanged {
+      // Swap upcoming queued items in place without interrupting the currently playing chapter.
+      for item in player.items().dropFirst() {
+        itemIndex.removeValue(forKey: ObjectIdentifier(item))
+        player.remove(item)
       }
-    } else if playPending && jobEnded {
-      if playAsked { play() } else { wantsPlay = false }
+      for index in (curIdx + 1)..<tracks.count { enqueue(index) }
+    } else if newTracks.count > oldCount {
+      for index in oldCount..<tracks.count { enqueue(index) }
     }
     publish()
   }
@@ -145,20 +157,27 @@ final class EpisodePlayer: NSObject {
     guard !tracks.isEmpty else { return }
     let target = locate(position)
     let landing = starts[target.index] + target.offset
-    seekTarget = landing
+    let gen = beginSeek(to: landing)
     if target.index == currentIndex, let item = player.currentItem {
       item.seek(to: cmTime(target.offset), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-        self?.seekLanded(landing)
+        self?.seekLanded(generation: gen)
       }
     } else {
-      rebuildQueue(from: target.index, offset: target.offset, landing: landing)
+      rebuildQueue(from: target.index, offset: target.offset, seekGeneration: gen)
       if wantsPlay { player.play() }
     }
     publish()
   }
 
-  private func seekLanded(_ landing: Double) {
-    if seekTarget == landing { seekTarget = nil }
+  private func beginSeek(to landing: Double) -> Int {
+    seekGeneration += 1
+    seekTarget = landing
+    return seekGeneration
+  }
+
+  private func seekLanded(generation: Int) {
+    guard seekGeneration == generation else { return }
+    seekTarget = nil
     publish()
   }
 
@@ -175,6 +194,7 @@ final class EpisodePlayer: NSObject {
 
   func unload() {
     wantsPlay = false
+    seekGeneration += 1
     seekTarget = nil
     player.pause()
     player.removeAllItems()
@@ -226,17 +246,20 @@ final class EpisodePlayer: NSObject {
     return (0, 0)
   }
 
-  private func rebuildQueue(from index: Int, offset: Double, landing: Double? = nil) {
+  private func rebuildQueue(from index: Int, offset: Double, seekGeneration gen: Int? = nil) {
     player.removeAllItems()
     itemIndex = [:]
-    guard index < tracks.count else { seekTarget = nil; return }
+    guard index < tracks.count else {
+      if let gen { seekLanded(generation: gen) } else { seekTarget = nil }
+      return
+    }
     for i in index..<tracks.count { enqueue(i) }
     if offset > 0, let item = player.currentItem {
       item.seek(to: cmTime(offset), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-        if let landing { self?.seekLanded(landing) } else { self?.publish() }
+        if let gen { self?.seekLanded(generation: gen) } else { self?.publish() }
       }
-    } else if let landing {
-      seekLanded(landing)
+    } else if let gen {
+      seekLanded(generation: gen)
     }
   }
 
