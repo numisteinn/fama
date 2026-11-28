@@ -28,6 +28,7 @@ export class AudioPlayer extends Context.Service<AudioPlayer, HTMLAudioElement>(
 
 const stop = (audio: HTMLAudioElement) => {
   audio.pause()
+  audio.volume = 1
   audio.removeAttribute("src")
   audio.load()
 }
@@ -53,6 +54,7 @@ export class LoadChapter extends Command.Service<LoadChapter>()("audio/LoadChapt
       const audio = yield* AudioPlayer
       return ({ src, offsetMs, rate, isAutoplay }) =>
         Effect.gen(function* () {
+          audio.volume = 1
           audio.src = src
           audio.currentTime = offsetMs / 1000
           audio.defaultPlaybackRate = rate
@@ -71,7 +73,11 @@ export class PlayAudio extends Command.Service<PlayAudio>()("audio/PlayAudio", {
   static readonly layer = this.toLayer(
     Effect.gen(function* () {
       const audio = yield* AudioPlayer
-      return () => play(audio)
+      return () =>
+        Effect.gen(function* () {
+          audio.volume = 1
+          return yield* play(audio)
+        })
     }),
   )
 }
@@ -87,6 +93,7 @@ export class PauseAudio extends Command.Service<PauseAudio>()("audio/PauseAudio"
       return () =>
         Effect.sync(() => {
           audio.pause()
+          audio.volume = 1
           return Component.noop
         })
     }),
@@ -127,6 +134,23 @@ export class SetAudioRate extends Command.Service<SetAudioRate>()("audio/SetAudi
   )
 }
 
+/** The element's volume, clamped to `0..1`: the sleep timer's fade, and its hand-back on pause. */
+export class SetAudioVolume extends Command.Service<SetAudioVolume>()("audio/SetAudioVolume", {
+  args: { volume: Schema.Number },
+  success: Component.Noop,
+}) {
+  static readonly layer = this.toLayer(
+    Effect.gen(function* () {
+      const audio = yield* AudioPlayer
+      return ({ volume }) =>
+        Effect.sync(() => {
+          audio.volume = Math.min(1, Math.max(0, volume))
+          return Component.noop
+        })
+    }),
+  )
+}
+
 export class StopAudio extends Command.Service<StopAudio>()("audio/StopAudio", {
   args: {},
   success: Component.Noop,
@@ -149,6 +173,7 @@ export type AudioCommandServices =
   | PauseAudio
   | SeekAudio
   | SetAudioRate
+  | SetAudioVolume
   | StopAudio
 
 export const audioCommandsLayer = Layer.mergeAll(
@@ -157,5 +182,6 @@ export const audioCommandsLayer = Layer.mergeAll(
   PauseAudio.layer,
   SeekAudio.layer,
   SetAudioRate.layer,
+  SetAudioVolume.layer,
   StopAudio.layer,
 )

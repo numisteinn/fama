@@ -7,6 +7,7 @@ import { type AppModel, current, episodes, isWorking } from "~/model"
 import { FamaConnection } from "~/core/services"
 import { chapterStartMs, totalMs } from "~/core/timeline"
 import { SKIP_BACK_MS, SKIP_FORWARD_MS } from "~/playback/model"
+import { FADE_MS, SLEEP_FADE_TICK_MS, SLEEP_TICK_MS } from "~/playback/sleepTimer"
 
 const POLL_MS = 2000
 
@@ -119,6 +120,12 @@ const mediaActionMessage = (action: MediaSessionAction, details: MediaSessionAct
 
 const isLoaded = (model: AppModel) => Option.isSome(current(model))
 
+/** The countdown ticks while it plays: every half second, faster through the fade. */
+const sleepTickMs = (model: AppModel): number => {
+  if (model.sleep._tag !== "Countdown" || model.playback._tag !== "Loaded" || !model.playback.isPlaying) return 0
+  return model.sleep.endsAtMs - model.sleepAtMs <= FADE_MS ? SLEEP_FADE_TICK_MS : SLEEP_TICK_MS
+}
+
 /** The Message for a `storage` event with `key`. A `null` key is a clear. Other keys, such as positions, are ignored. */
 export const storageEventMessage = (key: string | null): Option.Option<AppMessage> =>
   key === null || SETTING_KEYS.includes(key) ? Option.some(AppMessage.ChangedStoredSettings(storedSettings())) : Option.none()
@@ -128,6 +135,7 @@ export const appSubscriptions = ({
 }: {
   readonly model: AppModel
 }): ReadonlyArray<Subscription.Subscription<AppMessage, AudioPlayer | FamaConnection> | false> => {
+  const sleepIntervalMs = sleepTickMs(model)
   const isPolling = episodes(model).some((episode) => isWorking(episode.job))
   const isAudioLoaded = model.playback._tag === "Loaded"
   const loaded = current(model)
@@ -250,6 +258,17 @@ export const appSubscriptions = ({
             return Stream.mergeAll(events, { concurrency: "unbounded" })
           }),
         ),
+      ),
+
+    /** The sleep countdown, while it plays. The key holds the interval, so the fade restarts it faster. */
+    sleepIntervalMs > 0 &&
+      Subscription.make(
+        "app/sleepTick",
+        sleepIntervalMs,
+        (interval) =>
+          Stream.tick(Duration.millis(interval)).pipe(
+            Stream.map(() => AppMessage.TickedSleep({ nowMs: Date.now() })),
+          ),
       ),
 
     /** Space toggles, arrows skip. Focused controls keep their own keys. */

@@ -15,7 +15,7 @@ export type PickerOption = typeof PickerOption.Type
 export const PickerProps = Schema.Struct({
   label: Schema.String,
   triggerText: Schema.String,
-  triggerKind: Schema.Literals(["voice", "voiceSpeed", "playbackSpeed", "chapters"]),
+  triggerKind: Schema.Literals(["voice", "voiceSpeed", "playbackSpeed", "chapters", "sleep"]),
   triggerClass: Schema.String,
   selectedValue: Schema.NullOr(Schema.String),
   items: Schema.Array(PickerOption),
@@ -99,6 +99,11 @@ export const Picker = Html.component({
           return [h.props.triggerText]
         case "chapters":
           return [Icon.listMusic(h)]
+        case "sleep":
+          return [
+            Icon.moon(h),
+            ...(h.props.triggerText ? [h.span.class("text-xs font-semibold tabular-nums").children(h.props.triggerText)] : []),
+          ]
       }
     }
 

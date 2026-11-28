@@ -47,6 +47,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Review before narration](./review.md) lets the owner edit the Document and choose the chapters to narrate.
 - [Web review](./review-web.md) adds the Review switch and chapter editor in the web app.
 - [Review on iPhone](./review-ios.md) covers chapter selection, text edits and Start from the Library.
+- [Sleep timer on the web](./sleep-timer-web.md) checks countdown presets, the fade, and the pause at a Chapter boundary.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
 - [Voice Samples](./voice-samples.md): request, play, and compare Voice Sample clips from the first paragraph of a stored Document in web Review or via the API.
 - [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.

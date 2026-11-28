@@ -40,6 +40,8 @@ import { StoredProgress } from "~/core/flags"
 import { FamaApi } from "~/core/services"
 import { FILE_INPUT_ID } from "~/ui/refs"
 import { OpenFilePickerOnKey } from "~/view/addBar"
+import { sleepOptions } from "~/view/playerBar"
+import { SleepTimer, sleepBadge, sleepLabel } from "~/playback/sleepTimer"
 import { required } from "../../../test/required.ts"
 
 const linkOrText = HtmlLocator.role("textbox", { name: "Link or text" })
@@ -299,14 +301,14 @@ describe("play and pause", () => {
         .expect(HtmlLocator.role("button", { name: "Pause Harbour Days" })).toExist()
         .expect(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("group", { name: "Position" }))).toExist()
         .expect(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("link", { name: "Download" }))).toExist()
-        .click(Locator.inside(Locator.attr("class", "sm:hidden"), HtmlLocator.role("button", { name: /^Pause$/ })))
+        .click(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("button", { name: "Pause" })))
         .expectExact(SaveProgress.make({ episodeId: harbourDays.id, positionMs: 0 }), PauseAudio)
         .resolve(PauseAudio, Component.noop)
         .resolve(SaveProgress, AppMessage.SavedProgress({ episodeId: harbourDays.id, progress: progressAt(0) }))
         .resolve(PushProgress, AppMessage.FailedPushProgress({ episodeId: harbourDays.id }))
         .subscription("app/audioEvents", AppMessage.PausedAudio())
         .expect(HtmlLocator.role("button", { name: "Play Harbour Days" })).toExist()
-        .click(Locator.inside(Locator.attr("class", "sm:hidden"), HtmlLocator.role("button", { name: /^Play$/ })))
+        .click(Locator.inside(HtmlLocator.role("contentinfo"), HtmlLocator.role("button", { name: "Play" })))
         .resolve(PlayAudio, Component.noop)
     }),
   )
@@ -333,6 +335,42 @@ describe("time left", () => {
       s.given(withEpisodes(baseModel(), [running(null)]))
         .expectMount(OpenFilePickerOnKey())
         .expect(HtmlLocator.role("listitem")).toHaveText(/Narrating 3\/6/)
+    }),
+  )
+})
+
+describe("sleep timer picker", () => {
+  const picker = (sleep: SleepTimer, nowMs: number) =>
+    HtmlPlay.make(Picker, {
+      label: sleepLabel(sleep, nowMs),
+      triggerText: sleepBadge(sleep, nowMs) ?? "",
+      triggerKind: "sleep",
+      triggerClass: "",
+      selectedValue: null,
+      items: sleepOptions(sleep),
+      side: "top",
+      align: "end",
+    }).pipe(Effect.provide(TestHost.layer()))
+
+  it.effect("the moon menu opens with presets, then offers +5 min and Off once armed", () =>
+    Effect.gen(function* () {
+      const off = yield* picker(SleepTimer.Off(), 0)
+      yield* off.click(HtmlLocator.role("button", { name: "Sleep timer, off" }))
+      for (const name of ["15 min", "30 min", "45 min", "60 min", "End of chapter"]) {
+        yield* off.expect(HtmlLocator.role("menuitemradio", { name })).toExist()
+      }
+      yield* off.expect(HtmlLocator.role("menuitemradio", { name: "Off" })).toBeAbsent()
+      yield* off.expect(HtmlLocator.role("menuitemradio", { name: "+5 min" })).toBeAbsent()
+      yield* off.click(HtmlLocator.role("menuitemradio", { name: "15 min" }))
+      expect(off.root.emitted).toEqual([PickerEvents.Picked({ value: "15" })])
+
+      const active = yield* picker(SleepTimer.Countdown({ endsAtMs: 900_000 }), 28_500)
+      const trigger = HtmlLocator.role("button", { name: "Sleep timer, 14 minutes 32 seconds left" })
+      yield* active.expect(trigger).toHaveText(/14:32/)
+      yield* active.click(trigger)
+      yield* active.expect(HtmlLocator.role("menuitemradio", { name: "Off" })).toExist()
+      yield* active.click(HtmlLocator.role("menuitemradio", { name: "+5 min" }))
+      expect(active.root.emitted).toEqual([PickerEvents.Picked({ value: "+5" })])
     }),
   )
 })

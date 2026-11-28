@@ -1,9 +1,10 @@
 import type { Episode } from "@fama/contracts"
-import { UiSchema, type View } from "@effect/ui"
+import { UiSchema } from "@effect/ui"
 import type { Html } from "@effect/ui/html"
 import { Option, Schema } from "effect"
 import { SCRUB_STEP_MS, chapterStartMs, scrubMaxMs, totalMs } from "~/core/timeline"
 import { formatClock, formatRate } from "~/lib/format"
+import { type SleepTimer, SLEEP_PRESET_MINUTES, sleepBadge, sleepChoiceValue, sleepLabel } from "~/playback/sleepTimer"
 import { Picker, type PickerOption } from "~/ui/Picker"
 import { buttonClass, cx } from "~/ui/button"
 import * as Icon from "~/ui/icon"
@@ -28,12 +29,15 @@ export interface PlayerBarProps {
   readonly isPending: boolean
   readonly hasText: boolean
   readonly maybeScrubMs: Option.Option<number>
+  readonly sleep: SleepTimer
+  readonly sleepAtMs: number
   readonly origin: string
 }
 
 export const PlayerBarEvents = UiSchema.TaggedEnum({
   PickedPlaybackSpeed: { value: Schema.String },
   PickedChapter: { value: Schema.String },
+  PickedSleep: { value: Schema.String, nowMs: Schema.Number },
   ToggledReader: {},
   ClickedPlayPause: {},
   ClickedSkip: { deltaMs: Schema.Number },
@@ -62,7 +66,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
       h.div.attr("aria-hidden", "true").class("absolute inset-0 -z-10 bg-background/90 backdrop-blur-xl"),
       h.div
         .class(
-          "mx-auto grid max-w-5xl grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,28rem)_minmax(0,1fr)] sm:gap-x-6",
+          "mx-auto grid max-w-5xl grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:gap-x-6",
         )
         .children(
           h.div.class("min-w-0").children(
@@ -76,9 +80,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
             scrubber(props, playback, episode, h, emit),
           ),
           h.div
-            .class(
-              "col-span-2 grid grid-cols-[1fr_auto_1fr] items-center gap-1 sm:col-span-1 sm:flex sm:justify-end",
-            )
+            .class("col-span-2 flex items-center justify-between gap-1 sm:col-span-1 sm:justify-end")
             .children(
               Picker(h, {
                 key: "playback-speed",
@@ -86,7 +88,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
                   label: `Playback speed: ${formatRate(props.rate)}`,
                   triggerText: formatRate(props.rate),
                   triggerKind: "playbackSpeed",
-                  triggerClass: buttonClass({ size: "sm" }, "w-14 justify-self-start tabular-nums"),
+                  triggerClass: buttonClass({ size: "sm" }, "w-14 tabular-nums"),
                   selectedValue: String(props.rate),
                   items: rateOptions,
                   side: "top",
@@ -95,9 +97,6 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
                   Picked: ({ value }) => emit(PlayerBarEvents.PickedPlaybackSpeed({ value })),
                 },
               }),
-              h.div.class("flex items-center gap-1 sm:hidden").children(
-                ...skipButtons(h, [], props.skipBackMs, props.skipForwardMs, emit),
-              ),
               h.div.class("flex items-center justify-end gap-1").children(
                 props.hasText &&
                   h.button
@@ -109,6 +108,7 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
                     .on("click", emit(PlayerBarEvents.ToggledReader()))
                     .class(buttonClass({ size: "icon-sm" }, cx(props.isReaderOpen && "bg-accent text-foreground")))
                     .children(Icon.bookOpenText(h)),
+                sleepPicker(props, h, emit),
                 episode.chapters.length > 1 &&
                   Picker(h, {
                     key: "chapters",
@@ -141,6 +141,38 @@ export const PlayerBar = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: Play
     )
 }
 
+/** The menu of the sleep timer: `Off` and `+5 min` while they apply, the presets, and the chapter end. */
+export const sleepOptions = (sleep: SleepTimer): ReadonlyArray<PickerOption> => [
+  ...(sleep._tag !== "Off" ? [{ value: "off", name: "Off" }] : []),
+  ...(sleep._tag === "Countdown" ? [{ value: "+5", name: "+5 min" }] : []),
+  ...SLEEP_PRESET_MINUTES.map((minutes) => ({ value: String(minutes), name: `${minutes} min` })),
+  { value: "end", name: "End of chapter" },
+]
+
+/** The moon button with the countdown badge, and the menu behind it. */
+const sleepPicker = <M>(props: PlayerBarProps, h: Html.H<M>, emit: (e: PlayerBarEvents) => M) => {
+  const badge = sleepBadge(props.sleep, props.sleepAtMs)
+  return Picker(h, {
+    key: "sleep-timer",
+    props: {
+      label: sleepLabel(props.sleep, props.sleepAtMs),
+      triggerText: badge ?? "",
+      triggerKind: "sleep",
+      triggerClass: buttonClass(
+        { size: badge === null ? "icon-sm" : "sm" },
+        cx(badge !== null && "gap-1 bg-accent px-2 text-foreground tabular-nums"),
+      ),
+      selectedValue: sleepChoiceValue(props.sleep),
+      items: sleepOptions(props.sleep),
+      side: "top",
+      align: "end",
+    },
+    onEmit: {
+      Picked: ({ value }) => emit(PlayerBarEvents.PickedSleep({ value, nowMs: Date.now() })),
+    },
+  })
+}
+
 const transport = <M>(
   playback: PlayerBarPlayback,
   { isPending, skipBackMs, skipForwardMs }: Pick<PlayerBarProps, "isPending" | "skipBackMs" | "skipForwardMs">,
@@ -148,10 +180,9 @@ const transport = <M>(
   emit: (e: PlayerBarEvents) => M,
 ) =>
   h.div.class("col-start-2 row-start-1 flex items-center gap-1 sm:col-auto sm:row-auto").children(
-    h.div
-      .class("hidden items-center gap-1 sm:flex")
-      .children(...skipButtons(h, [playButton(playback, isPending, h, emit)], skipBackMs, skipForwardMs, emit)),
-    h.div.class("sm:hidden").children(playButton(playback, isPending, h, emit)),
+    skipButton(h, -skipBackMs, emit),
+    playButton(playback, isPending, h, emit),
+    skipButton(h, skipForwardMs, emit),
     h.span.attr("aria-live", "polite").class("sr-only").children(playback.isWaiting ? "Waiting for the next chapter" : ""),
   )
 
@@ -169,25 +200,15 @@ const playButton = <M>(playback: PlayerBarPlayback, isPending: boolean, h: Html.
           : Icon.play(h, "translate-x-px fill-current"),
     )
 
-const skipButtons = <M>(
-  h: Html.H<M>,
-  middle: ReadonlyArray<View.Input<M>>,
-  skipBackMs: number,
-  skipForwardMs: number,
-  emit: (e: PlayerBarEvents) => M,
-) => [
-  h.button
-    .attrs({ type: "button", "aria-label": `Back ${skipBackMs / 1000} seconds` })
-    .on("click", emit(PlayerBarEvents.ClickedSkip({ deltaMs: -skipBackMs })))
+const skipButton = <M>(h: Html.H<M>, deltaMs: number, emit: (e: PlayerBarEvents) => M) => {
+  const direction = deltaMs < 0 ? "Back" : "Forward"
+  const seconds = Math.abs(deltaMs) / 1000
+  return h.button
+    .attrs({ type: "button", "aria-label": `${direction} ${seconds} seconds` })
+    .on("click", emit(PlayerBarEvents.ClickedSkip({ deltaMs })))
     .class(buttonClass({ size: "icon" }))
-    .children(skipIcon("Back", skipBackMs / 1000, h)),
-  ...middle,
-  h.button
-    .attrs({ type: "button", "aria-label": `Forward ${skipForwardMs / 1000} seconds` })
-    .on("click", emit(PlayerBarEvents.ClickedSkip({ deltaMs: skipForwardMs })))
-    .class(buttonClass({ size: "icon" }))
-    .children(skipIcon("Forward", skipForwardMs / 1000, h)),
-]
+    .children(skipIcon(direction, seconds, h))
+}
 
 const skipIcon = <M>(direction: "Back" | "Forward", seconds: number, h: Html.H<M>) =>
   h.span.class("relative grid size-6 place-items-center").children(

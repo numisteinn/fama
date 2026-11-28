@@ -42,6 +42,7 @@ export const AppMessage = UiSchema.TaggedEnum({
   PickedVoiceSpeed: { value: Schema.String },
   PickedPlaybackSpeed: { value: Schema.String },
   PickedChapter: { value: Schema.String },
+  PickedSleep: { value: Schema.String, nowMs: Schema.Number },
 
   // Library rows
   ClickedPlayEpisode: { episodeId: EpisodeId },
@@ -101,6 +102,7 @@ export const AppMessage = UiSchema.TaggedEnum({
   // Player controls
   ClickedPlayPause: {},
   ClickedSkip: { deltaMs: Schema.Number },
+  TickedSleep: { nowMs: Schema.Number },
   UpdatedScrub: { value: Schema.String },
   CommittedScrub: { value: Schema.String },
   PressedPlayerShortcut: { shortcut: PlayerShortcut },

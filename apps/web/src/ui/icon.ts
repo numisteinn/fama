@@ -143,6 +143,7 @@ export const bookOpenText = icon("book-open-text", [
   ["path", "M6 8h2"],
 ])
 export const check = icon("check", [["path", "M20 6 9 17l-5-5"]])
+export const moon = icon("moon", [["path", "M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9"]])
 export const copy = icon("copy", [
   rect(8, 8, 14, 14, 2),
   ["path", "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"],

@@ -10,12 +10,8 @@ import {
   CreateEpisodeFromSource,
   DeleteEpisode,
   FetchVoices,
-  PushProgress,
-  ReadStoredProgress,
   RetryEpisode,
-  SaveProgress,
   StoreConnection,
-  StoreProgress,
   StoreSetting,
   UploadEpisode,
   WaitBeforeDisarmDelete,
@@ -25,67 +21,13 @@ import {
 import { fetchEpisodes, fetchLibrary, withEpisodes } from "~/libraryState"
 import { AppMessage } from "~/message"
 import { type AppModel, Screen, current, episodes, toDraft } from "~/model"
-import { Player, type Player as PlayerState, type PlayerResult, type ProgressEffect } from "~/playback/player"
+import { playerOf, runPlayer } from "~/playerGlue"
+import { Player } from "~/playback/player"
 import { Playback, RATES } from "~/playback/model"
+import { SleepTimer } from "~/playback/sleepTimer"
 import { reconcileScreen, screenHandlers } from "~/screenUpdate"
-import { type AppCommand, type Step, type StepReturn, type UpdateResult, combine } from "~/transition"
-
-// PLAYER GLUE
-//
-// The player owns a flat slice of the App Model plus the read-only facts it reads. These helpers extract it,
-// run the player's steps, and merge the owned fields back. Progress writes come back as `ProgressEffect`s, which
-// the App translates to its own Commands.
-
-const playerOf = (model: AppModel): PlayerState => ({
-  playback: model.playback,
-  loadedChapterDurationMs: model.loadedChapterDurationMs,
-  maybeListening: model.maybeListening,
-  playIntents: model.playIntents,
-  maybePendingPlay: model.maybePendingPlay,
-  localProgress: model.localProgress,
-  stamping: model.stamping,
-  isSaveDue: model.isSaveDue,
-  lastSavedAtMs: model.lastSavedAtMs,
-  episodes: episodes(model),
-  connection: model.connection,
-  rate: model.rate,
-  libraryRequestsInFlight: model.libraryRequestsInFlight,
-})
-
-const withPlayer = (model: AppModel, player: PlayerState): AppModel => ({
-  ...model,
-  playback: player.playback,
-  loadedChapterDurationMs: player.loadedChapterDurationMs,
-  maybeListening: player.maybeListening,
-  playIntents: player.playIntents,
-  maybePendingPlay: player.maybePendingPlay,
-  localProgress: player.localProgress,
-  stamping: player.stamping,
-  isSaveDue: player.isSaveDue,
-  lastSavedAtMs: player.lastSavedAtMs,
-})
-
-const progressCommand = (effect: ProgressEffect, connection: Connection): AppCommand => {
-  switch (effect._tag) {
-    case "SaveProgress":
-      return SaveProgress.make({ episodeId: effect.episodeId, positionMs: effect.positionMs })
-    case "StoreProgress":
-      return StoreProgress.make({ episodeId: effect.episodeId, progress: effect.progress })
-    case "PushProgress":
-      return PushProgress.make({ connection, episodeId: effect.episodeId, progress: effect.progress })
-    case "ReadStoredProgress":
-      return ReadStoredProgress.make({ episodeId: effect.episodeId, intent: effect.intent })
-  }
-}
-
-const runPlayer = (model: AppModel, fn: (player: PlayerState) => PlayerResult): StepReturn => {
-  const player = playerOf(model)
-  const result = fn(player)
-  return {
-    model: result.player === player ? model : withPlayer(model, result.player),
-    commands: [...result.progress.map((effect) => progressCommand(effect, model.connection)), ...result.commands],
-  }
-}
+import { endedChapterWithSleep, pickedSleep, reconcileWithSleep, tickedSleep } from "~/sleepUpdate"
+import { type Step, type StepReturn, type UpdateResult, combine } from "~/transition"
 
 // INIT
 
@@ -131,6 +73,9 @@ export const initApp = (flags: Flags): UpdateResult => {
     isSaveDue: false,
     lastSavedAtMs: 0,
     maybeScrubMs: Option.none(),
+    sleep: SleepTimer.Off(),
+    sleepAtMs: 0,
+    sleepResumePending: false,
   }
   const library = fetchLibrary(model)
   return {
@@ -415,6 +360,7 @@ const handle = (model: AppModel, message: AppMessage): StepReturn =>
     PickedVoiceSpeed: ({ value }) => pickVoiceSpeed(value)(model),
     PickedPlaybackSpeed: ({ value }) => pickPlaybackSpeed(value)(model),
     PickedChapter: ({ value }) => pickChapter(value)(model),
+    PickedSleep: ({ value, nowMs }) => pickedSleep(model, value, nowMs),
 
     ClickedPlayEpisode: ({ episodeId }) =>
       Option.match(Option.fromNullishOr(episodes(model).find((item) => item.id === episodeId)), {
@@ -459,6 +405,7 @@ const handle = (model: AppModel, message: AppMessage): StepReturn =>
 
     ClickedPlayPause: () => runPlayer(model, Player.toggle),
     ClickedSkip: ({ deltaMs }) => runPlayer(model, Player.skip(deltaMs)),
+    TickedSleep: ({ nowMs }) => tickedSleep(model, nowMs),
     UpdatedScrub: ({ value }) => ({ model: { ...model, maybeScrubMs: Option.some(Number(value)) } }),
     CommittedScrub: ({ value }) => {
       const base = { ...model, maybeScrubMs: Option.none() }
@@ -486,7 +433,7 @@ const handle = (model: AppModel, message: AppMessage): StepReturn =>
     UpdatedAudioTime: ({ offsetMs, atMs }) => runPlayer(model, Player.updateAudioTime(offsetMs, atMs)),
     StartedAudio: () => runPlayer(model, Player.started),
     PausedAudio: () => runPlayer(model, Player.takeOwnPause),
-    EndedChapter: () => runPlayer(model, Player.endChapter),
+    EndedChapter: () => endedChapterWithSleep(model),
     FailedPlayAudio: () => runPlayer(model, Player.failedPlay),
     GotStoredProgress: ({ episodeId, intent, stored }) => runPlayer(model, Player.startFromStored(episodeId, intent, stored)),
 
@@ -499,18 +446,13 @@ const handle = (model: AppModel, message: AppMessage): StepReturn =>
   })
 
 /**
- * Every Message goes three steps: `handle` changes intent and facts, `reconcile` decides what the audio does, and
- * `reconcileScreen` closes any sub-screen whose backing episode or playback state went away.
+ * Every Message goes three steps: `handle` changes intent and facts, `reconcileWithSleep` decides what
+ * the audio does and what its change means for the sleep timer, and `reconcileScreen` closes any
+ * sub-screen whose backing episode or playback state went away.
  */
 export const updateApp = (model: AppModel, message: AppMessage): UpdateResult =>
   combine(model, [
     (state) => handle(state, message),
-    (state) => {
-      const reconciled = runPlayer(state, Player.reconcile)
-      const stopped =
-        reconciled.model.playback._tag === "Stopped" &&
-        (state.playback._tag === "Loaded" || Option.isSome(state.maybeListening))
-      return stopped ? { ...reconciled, model: { ...reconciled.model, maybeScrubMs: Option.none() } } : reconciled
-    },
+    reconcileWithSleep(model),
     reconcileScreen,
   ])

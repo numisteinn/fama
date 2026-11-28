@@ -5,6 +5,7 @@ import { ApiFailure, Connection } from "~/core/api"
 import { BatchFile, hasAttached } from "~/core/batch"
 import { NarrateAgainSubmitTarget } from "~/narrate-again/model"
 import { PlaybackState, currentPlayback } from "~/playback/model"
+import { SleepTimer } from "~/playback/sleepTimer"
 
 export const isWorking = (job: JobState) => job._tag === "Queued" || job._tag === "Running"
 
@@ -86,6 +87,11 @@ export const AppModel = Schema.Struct({
   ...PlaybackState.fields,
   rate: Schema.Number,
   maybeScrubMs: Schema.Option(Schema.Number),
+  sleep: SleepTimer,
+  /** The clock of the last sleep pick or tick; the badge counts from it. */
+  sleepAtMs: Schema.Number,
+  /** A Play resumed playback with a countdown on; its first tick clears an ended countdown instead of pausing again. */
+  sleepResumePending: Schema.Boolean,
 })
 export type AppModel = typeof AppModel.Type
 

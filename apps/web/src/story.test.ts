@@ -13,6 +13,7 @@ import {
   PlayAudio,
   SeekAudio,
   SetAudioRate,
+  SetAudioVolume,
   StopAudio,
   audioCommandsLayer,
 } from "~/core/audio"
@@ -43,6 +44,7 @@ import {
 import { AppMessage as Message } from "~/message"
 import { type AppModel as Model } from "~/model"
 import { Playback } from "~/playback/model"
+import { SleepTimer, sleepBadge } from "~/playback/sleepTimer"
 import { storageEventMessage } from "~/subscription"
 import { updateApp as update } from "~/update"
 import { required } from "../../../test/required.ts"
@@ -480,6 +482,7 @@ describe("player", () => {
     defaultPlaybackRate: 1,
     playbackRate: 1,
     paused: true,
+    volume: 1,
     playCalls: 0,
     pauseCalls: 0,
     async play() {
@@ -494,7 +497,7 @@ describe("player", () => {
   })
   /** Runs the audio Commands of one `update` on `audio`, and gives the Messages/Noop they answer with. */
   const runAudio = async (commands: ReturnType<typeof update>["commands"], audio: ReturnType<typeof fakeAudio>) => {
-    const names = new Set<string>([LoadChapter.key, PlayAudio.key, PauseAudio.key, SeekAudio.key, StopAudio.key])
+    const names = new Set<string>([LoadChapter.key, PlayAudio.key, PauseAudio.key, SeekAudio.key, StopAudio.key, SetAudioVolume.key])
     const layer = audioCommandsLayer.pipe(
       Layer.provide(Layer.succeed(AudioPlayer, audio as unknown as HTMLAudioElement)),
     )
@@ -1563,6 +1566,130 @@ describe("player", () => {
       Command.resolve(SetAudioRate, Component.noop),
     )
   })
+  describe("sleep timer", () => {
+    const { id } = harbourDays
+    const morning = required(harbourDays.chapters[0])
+    const evening = required(harbourDays.chapters[1])
+    const nowMs = 1_000_000
+
+    const playing = (sleep: SleepTimer, chapter = 0) => ({
+      ...withPlayback(
+        withEpisodes(baseModel(), [harbourDays]),
+        Playback.Loaded({
+          episodeId: id, chapter, url: chapter === 0 ? morning.url : evening.url,
+          offsetMs: 1000, isPlaying: true, isWaiting: false,
+        }),
+      ),
+      sleep,
+      sleepAtMs: nowMs,
+    })
+
+    const pick = (value: string, atMs = nowMs) => Message.PickedSleep({ value, nowMs: atMs })
+    const tick = (atMs: number) => Message.TickedSleep({ nowMs: atMs })
+
+    test("a preset starts at 15:00, counts down, and extends from its deadline", () => {
+      story(
+        update,
+        given(playing(SleepTimer.Off())),
+        message(pick("15")),
+        model((next) => expect(sleepBadge(next.sleep, next.sleepAtMs)).toBe("15:00")),
+        Command.expectNone(),
+        message(tick(nowMs + 29_500)),
+        model((next) => expect(sleepBadge(next.sleep, next.sleepAtMs)).toBe("14:31")),
+        Command.expectNone(),
+        message(pick("+5", nowMs + 29_500)),
+        model((next) => expect(sleepBadge(next.sleep, next.sleepAtMs)).toBe("19:31")),
+        Command.expectNone(),
+      )
+    })
+
+    const deadline = nowMs + 15 * 60_000
+    const fadedAudio = async () => {
+      const audio = fakeAudio()
+      audio.paused = false
+      const fading = update(playing(SleepTimer.Countdown({ endsAtMs: deadline })), tick(deadline - 1500))
+      await runAudio(fading.commands, audio)
+      return { audio, fading }
+    }
+
+    test.each([
+      ["Off", pick("off", deadline - 1250), false, true],
+      ["+5 min", pick("+5", deadline - 1250), false, false],
+      ["pause", Message.ClickedPlayPause(), true, false],
+      ["expiry", tick(deadline), true, true],
+    ] as const)("the countdown fades, then %s restores full volume", async (_, action, pauses, clears) => {
+      const { audio, fading } = await fadedAudio()
+      expect(audio.volume).toBe(0.5)
+      const next = update(fading.model, action)
+      await runAudio(next.commands, audio)
+      expect(audio.paused).toBe(pauses)
+      expect(next.model.sleep._tag === "Off").toBe(clears)
+      expect(audio.volume).toBe(1)
+    })
+
+    test("a late tick while paused does nothing, and resuming clears the expired timer", async () => {
+      const { audio, fading } = await fadedAudio()
+      const paused = update(fading.model, Message.ClickedPlayPause())
+      await runAudio(paused.commands, audio)
+      expect(update(paused.model, tick(deadline + 1)).commands).toEqual([])
+      const resumed = update(paused.model, Message.ClickedPlayPause())
+      await runAudio(resumed.commands, audio)
+      expect(audio.paused).toBe(false)
+      expect(audio.volume).toBe(1)
+      const caughtUp = update(resumed.model, tick(deadline + 1))
+      expect(caughtUp.model.sleep).toEqual(SleepTimer.Off())
+      expect(caughtUp.commands).toEqual([])
+    })
+
+    test("end of chapter loads the next chapter paused and saves the boundary", () => {
+      const boundary = morning.durationMs
+      story(
+        update,
+        given(playing(SleepTimer.EndOfChapter())),
+        message(Message.EndedChapter()),
+        model((next) => {
+          expect(next.sleep).toEqual(SleepTimer.Off())
+          expect(next.playback).toEqual(
+            Playback.Loaded({ episodeId: id, chapter: 1, url: evening.url, offsetMs: 0, isPlaying: false, isWaiting: false }),
+          )
+        }),
+        Command.expectExact(
+          SaveProgress.make({ episodeId: id, positionMs: boundary }),
+          LoadChapter.make({ src: evening.url, offsetMs: 0, rate: 1, isAutoplay: false }),
+        ),
+        Command.resolve(LoadChapter, Component.noop),
+        saved(boundary),
+        message(Message.ClickedPlayPause()),
+        Command.expectExact(PlayAudio),
+        Command.resolve(PlayAudio, Component.noop),
+      )
+      const last = update(playing(SleepTimer.EndOfChapter(), 1), Message.EndedChapter())
+      expect(last.model.playback).toEqual(
+        Playback.Loaded({ episodeId: id, chapter: 1, url: evening.url, offsetMs: evening.durationMs, isPlaying: false, isWaiting: false }),
+      )
+      expect(last.model.sleep).toEqual(SleepTimer.Off())
+      expect(last.commands.map((command) => command.name)).toEqual([SaveProgress.name])
+    })
+
+    test("the timer clears when playback switches episodes or the episode disappears", async () => {
+      const tide = { ...harbourDays, id: "tide-tables" as EpisodeId }
+      const active = withEpisodes(playing(SleepTimer.Countdown({ endsAtMs: nowMs + 1500 })), [harbourDays, tide])
+      const asked = update(active, Message.ClickedPlayEpisode({ episodeId: tide.id }))
+      const switched = update(asked.model, Message.GotStoredProgress({
+        episodeId: tide.id, intent: asked.model.playIntents, stored: { _tag: "NotSaved" },
+      }))
+      expect(switched.model.sleep).toEqual(SleepTimer.Off())
+      const audio = fakeAudio()
+      audio.volume = 0.5
+      await runAudio(switched.commands, audio)
+      expect(audio.volume).toBe(1)
+
+      const cleared = update(active, Message.SucceededFetchEpisodes({ generation: 0, request: 1, episodes: [tide] }))
+      expect(cleared.model.playback).toEqual(Playback.Stopped())
+      expect(cleared.model.sleep).toEqual(SleepTimer.Off())
+    })
+  })
+
 })
 
 describe("progress sync", () => {

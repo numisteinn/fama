@@ -244,6 +244,8 @@ export const AppComponent = Html.component({
             isPending: isPlayPending(model.maybePendingPlay, episode.id),
             hasText: hasText(episode),
             maybeScrubMs: model.maybeScrubMs,
+            sleep: model.sleep,
+            sleepAtMs: model.sleepAtMs,
             origin: model.connection.origin,
           },
           h,
@@ -251,6 +253,7 @@ export const AppComponent = Html.component({
             PlayerBarEvents.match(event, {
               PickedPlaybackSpeed: ({ value }) => AppMessage.PickedPlaybackSpeed({ value }),
               PickedChapter: ({ value }) => AppMessage.PickedChapter({ value }),
+              PickedSleep: ({ value, nowMs }) => AppMessage.PickedSleep({ value, nowMs }),
               ToggledReader: () => AppMessage.ClickedToggleReader(),
               ClickedPlayPause: () => AppMessage.ClickedPlayPause(),
               ClickedSkip: ({ deltaMs }) => AppMessage.ClickedSkip({ deltaMs }),
