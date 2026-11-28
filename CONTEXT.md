@@ -7,6 +7,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Source** | What the user submits: a `Url`, a `Text`, or a `File` (PDF, EPUB). A `Url` can include bytes the iPhone fetched. The link is still the Source. |
 | **Document** | The clean text the worker extracts from a source: title, author, language, chapters. The worker uploads it after the first extraction, and the API stores it with the episode. |
 | **Episode** | One narrated source in the library. The unit the user sees, plays, downloads, and finds in the feed. |
+| **Archive** | Where the user puts an episode away. `archivedAt` on the Episode holds the time of the move; `null` means the episode is back in the inbox. Archived episodes keep their audio and stay in the library list, but the Feed leaves them out. |
 | **Chapter** | One audio file of an episode (AAC `.m4a`). Chapters upload one by one, so playback can start before the episode is done. A Document has chapters too: a title and its text. |
 | **`inputHash`** | The SHA-256 the Worker computes from the inputs that make a Chapter. It includes the stored text, Voice, speed, engine model version, and Document fields the Worker uses for narration and audio tags. A match lets the Worker reuse the Chapter. |
 | **Segment** | The text of one synthesis call, with the time its voice starts and the time its audio ends in the chapter audio. One sentence, or a few short ones. It keeps the text as the Document has it, not as the engine reads it. |

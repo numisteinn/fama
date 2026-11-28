@@ -6,6 +6,7 @@ import { HttpRouter, HttpServer } from "effect/http"
 import { getPlatformProxy } from "wrangler"
 import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
+import * as EpisodeOrganize from "./episode-organize.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
@@ -50,6 +51,7 @@ export const startApp = async () => {
   }
   const services = Layer.mergeAll(
     AccountRepo.layer,
+    EpisodeOrganize.layer,
     EpisodeRepo.layer,
     MediaStore.layer,
     SampleRepo.layer,

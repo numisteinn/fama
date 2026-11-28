@@ -5,6 +5,7 @@ import { InputHash, NarratedChapter } from "./stale.ts"
 
 export * from "./connect.ts"
 export * from "./ids.ts"
+export * from "./organize.ts"
 export * from "./review.ts"
 export * from "./sample.ts"
 export * from "./stale.ts"
@@ -165,6 +166,8 @@ export const Episode = Schema.Struct({
   chapters: Schema.Array(Chapter),
   bookUrl: Schema.NullOr(Schema.String),
   coverUrl: Schema.NullOr(Schema.String),
+  /** When the owner archived the episode, or `null` while it is in the inbox. Archived episodes leave the feed. */
+  archivedAt: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   job: JobState,
   /** The client token user's progress, as the server stores it. */
   progress: Schema.NullOr(EpisodeProgress),

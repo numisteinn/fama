@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest"
 import { getPlatformProxy } from "wrangler"
 import * as AccountRepo from "./account-repo.ts"
 import { Bindings } from "./bindings.ts"
+import * as EpisodeOrganize from "./episode-organize.ts"
 import * as EpisodeRepo from "./episode-repo.ts"
 import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
@@ -67,7 +68,14 @@ beforeAll(async () => {
     fetch: fakeWakeFetch,
     timeoutMs: WAKE_TIMEOUT_MS,
   })
-  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, SampleRepo.layer, wake).pipe(
+  const services = Layer.mergeAll(
+    AccountRepo.layer,
+    EpisodeOrganize.layer,
+    EpisodeRepo.layer,
+    MediaStore.layer,
+    SampleRepo.layer,
+    wake,
+  ).pipe(
     Layer.provideMerge(Layer.succeed(Bindings, env)),
   )
   const app = HttpRouter.toWebHandler(
