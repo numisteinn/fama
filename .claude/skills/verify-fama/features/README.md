@@ -39,6 +39,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Narrate again on the web](./narrate-again-web.md) edits Chapter text, Voice and speed, and checks replacement audio and Read-along timing.
 - [OCR for scanned PDFs](./ocr-pdf.md): scanned PDF pages with no text layer are read offline with tesseract (or Apple Vision on macOS), so they narrate like any PDF.
 - [Playback](./playback.md): play an episode on the web or the iPhone, skip, scrub, change speed, change chapters, download.
+- [iPhone sleep timer](./sleep-timer-ios.md): pause after a countdown or at the end of a chapter, with a live toolbar countdown.
 - [Read along on iPhone](./reader-ios.md) covers the mark, sentence taps, scrolling and offline text.
 - [Progress sync](./progress-sync.md): pause on the web or the iPhone, and the other resumes at the same position. A finished episode stores its total length and starts again from 0.
 - [Phone connect](./phone-connect.md): open the `fama://connect` link of the setup QR code, and the iPhone app checks the token, asks before it switches, and shows the new library. A bad link keeps the current connection.
