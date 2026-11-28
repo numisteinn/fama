@@ -36,6 +36,15 @@ function tracksOf(episode: Episode, from: TrackSource): Track[] {
   }))
 }
 
+/** Tells the core the resolved URLs of the loaded episode, so a download can hot-swap them in place. */
+function resolveLoaded(episodes: ReadonlyArray<Episode>, from: TrackSource) {
+  const id = core.told?.episodeId ?? core.episodeId
+  if (id === null) return
+  const episode = episodes.find((listed) => listed.id === id)
+  if (episode === undefined) return
+  dispatch({ _tag: "Resolved", episodeId: id, urls: tracksOf(episode, from).map((track) => track.url) })
+}
+
 function remember(episodeId: string | null) {
   if (prefs.lastEpisodeId === episodeId) return
   prefs = { ...prefs, lastEpisodeId: episodeId }
@@ -136,6 +145,7 @@ export const player = {
    */
   load(episode: Episode, from: TrackSource, autoplay: boolean) {
     source = from
+    dispatch({ _tag: "Resolved", episodeId: episode.id, urls: tracksOf(episode, from).map((track) => track.url) })
     dispatch(autoplay ? { _tag: "PlayEpisode", episode } : { _tag: "Restore", episodeId: episode.id })
   },
   /** A library request goes out. Give its number back to `refreshAnswered` with its answer. */
@@ -151,6 +161,7 @@ export const player = {
   listed(episodes: ReadonlyArray<Episode>, from: TrackSource | null = source) {
     source = from
     dispatch({ _tag: "Listed", episodes })
+    if (from) resolveLoaded(episodes, from)
   },
   /** Pauses, or plays. A Play pressed while the library loads waits for the answer; a pause takes it back. */
   toggle() {

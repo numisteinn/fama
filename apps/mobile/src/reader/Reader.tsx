@@ -1,10 +1,11 @@
 import type { Episode } from "@fama/contracts"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ActivityIndicator, FlatList, StyleSheet, Text, View } from "react-native"
-import { Tap } from "../components/ui"
+import { Icon, Tap } from "../components/ui"
 import { FamaPlayer, type NativeStatus } from "../player/native"
 import { player } from "../player/player"
-import { colors, fonts, space } from "../theme"
+import { colors, fonts, radius, space } from "../theme"
+import { type Follow, followNext, showsBackToNow } from "./follow"
 import { lineOf, markAt, openingRow, rowsOf, seekTargetMs, type Row } from "./text"
 import { useReaderText } from "./useReaderText"
 
@@ -19,7 +20,9 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
     [rows, chapter, segment, status.index],
   )
   const list = useRef<FlatList<Row>>(null)
-  const [follow, setFollow] = useState(true)
+  const [follow, setFollow] = useState<Follow>("following")
+  // A tap on "Back to now" asks for one smooth jump; the follow effect reads and clears it.
+  const smooth = useRef(false)
   const [retry, setRetry] = useState(0)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const lines = useRef(new Map<string, readonly { text: string; y: number }[]>())
@@ -34,7 +37,9 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
   }, [])
 
   useEffect(() => {
-    if (!follow || !rows[current]) return
+    const animated = smooth.current
+    smooth.current = false
+    if (follow !== "following" || !rows[current]) return
     const row = rows[current]
     const layout = lines.current.get(row.key)
     const state = text.chapters[row.chapter]
@@ -42,7 +47,7 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
       row._tag === "Paragraph" && layout && state?._tag === "Loaded" && segment !== undefined
         ? (layout[lineOf(state.segments, row.first, segment, layout)]?.y ?? 0)
         : 0
-    list.current?.scrollToIndex({ index: current, viewOffset: -y, animated: false })
+    list.current?.scrollToIndex({ index: current, viewOffset: -y, animated })
   }, [current, segment, rows, follow, retry, text, layoutVersion])
 
   const render = useCallback(
@@ -51,7 +56,7 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
         const target = seekTargetMs(episode.chapters, text, { chapter: item.chapter, segment: index })
         if (target !== null) {
           player.seek(target / 1000, true)
-          setFollow(true)
+          setFollow(followNext({ _tag: "SentenceTap" }))
         }
       }
       if (item._tag === "Heading") {
@@ -127,16 +132,26 @@ export function Reader({ episode, status }: { episode: Episode; status: NativeSt
         renderItem={render}
         keyExtractor={rowKey}
         windowSize={5}
-        onScrollBeginDrag={() => setFollow(false)}
+        contentContainerStyle={styles.listContent}
+        onScrollBeginDrag={() => setFollow(followNext({ _tag: "DragStart" }))}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
           list.current?.scrollToOffset({ offset: averageItemLength * index, animated: false })
           clearTimeout(timer.current)
           timer.current = setTimeout(() => setRetry((v) => v + 1), 80)
         }}
       />
-      {!follow && (
-        <Tap accessibilityRole="button" onPress={() => setFollow(true)} style={styles.follow}>
-          <Text style={styles.action}>Current sentence</Text>
+      {showsBackToNow(follow) && (
+        <Tap
+          accessibilityRole="button"
+          accessibilityLabel="Back to now"
+          onPress={() => {
+            smooth.current = true
+            setFollow(followNext({ _tag: "BackToNow" }))
+          }}
+          style={styles.follow}
+        >
+          <Icon name="arrow.down" size={16} color={colors.accent} />
+          <Text style={styles.action}>Back to now</Text>
         </Tap>
       )}
     </View>
@@ -147,9 +162,22 @@ const rowKey = (item: Row) => item.key
 
 const styles = StyleSheet.create({
   reader: { flex: 1, alignSelf: "stretch" },
+  listContent: { paddingBottom: 64 },
   paragraph: { fontFamily: fonts.regular, color: colors.text, fontSize: 18, lineHeight: 26, marginBottom: space.md },
   heading: { fontFamily: fonts.bold, color: colors.text, fontSize: 22, marginVertical: space.md },
   mark: { backgroundColor: colors.accent, color: colors.onAccent },
-  follow: { alignSelf: "center", padding: space.sm },
-  action: { color: colors.accent, fontFamily: fonts.bold, fontSize: 16 },
+  follow: {
+    position: "absolute",
+    bottom: space.md,
+    alignSelf: "center",
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceRaised,
+  },
+  action: { color: colors.accent, fontFamily: fonts.bold, fontSize: 15 },
 })
