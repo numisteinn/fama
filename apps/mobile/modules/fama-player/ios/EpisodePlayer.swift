@@ -87,10 +87,20 @@ final class EpisodePlayer: NSObject {
     let oldCount = tracks.count
     // A Play is pending: the listener wants audio, and the queue has none.
     let playPending = wantsPlay && player.currentItem == nil
-    let kept = tracks
-    setTracks(newTracks.enumerated().map { index, track in
-      index < kept.count ? Track(url: kept[index].url, title: track.title, duration: track.duration) : track
-    })
+    // A download completed or was deleted: an existing chapter's URL moved between the server and the device.
+    let urlChanged = (0..<min(oldCount, newTracks.count)).contains { tracks[$0].url != newTracks[$0].url }
+    setTracks(newTracks)
+    if urlChanged {
+      // Keep the exact place and play intent, and rebuild the queue on the new URLs. A download that completes
+      // mid-episode keeps playing, and one deleted mid-episode swaps back to the stream, with no relaunch.
+      let landing = position
+      let target = locate(landing)
+      seekTarget = landing
+      rebuildQueue(from: target.index, offset: target.offset, landing: landing)
+      if wantsPlay { player.play() } else { player.pause() }
+      publish()
+      return
+    }
     if newTracks.count > oldCount {
       if player.currentItem == nil {
         rebuildQueue(from: oldCount, offset: 0)

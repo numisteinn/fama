@@ -78,6 +78,8 @@ const phone = (entries: Record<string, EpisodeProgress> = {}) => {
     /** The native player says where `e1` is. */
     status: (fields: Partial<NativeStatus>, now = NOW) =>
       send({ _tag: "Status", status: { ...IDLE_STATUS, episodeId: "e1", ...fields } }, now),
+    /** The resolved track URLs of `e1`, as `player.ts` reports them after the download state changed. */
+    resolved: (urls: ReadonlyArray<string>) => send({ _tag: "Resolved", episodeId: "e1", urls }),
     play: (episode: Episode) => send({ _tag: "PlayEpisode", episode }),
   }
 }
@@ -516,5 +518,57 @@ describe("re-narrated chapters with replaced URLs", () => {
     const staleList: Episode = { ...running, chapters: [required(chapters[0])] }
     device.library([staleList])
     expect(device.calls).toEqual(["UpdateTracks 1 chapters, Running"])
+  })
+})
+
+describe("a download that completes or is deleted", () => {
+  const remote = ["https://media/000.m4a", "https://media/001.m4a"]
+  const local = ["file:///000.m4a", "file:///001.m4a"]
+
+  test("remote → local hot-swaps the queue in place, without a reload or a stamp", () => {
+    const device = paused()
+    device.resolved(remote)
+    device.calls.length = 0
+    device.sent.length = 0
+    device.resolved(local)
+    expect(device.calls).toEqual(["UpdateTracks 2 chapters, Ready"])
+    expect(device.sent).toEqual([])
+    // The swap does not restart from 0: the core still holds the 10 s position.
+    expect(device.core.status.position).toBe(10)
+  })
+
+  test("identical resolved URLs do not reload again", () => {
+    const device = paused()
+    device.resolved(remote)
+    device.calls.length = 0
+    device.resolved(remote)
+    expect(device.calls).toEqual([])
+  })
+
+  test("local → remote swaps back when a download is deleted", () => {
+    const device = paused()
+    device.resolved(local)
+    device.calls.length = 0
+    device.resolved(remote)
+    expect(device.calls).toEqual(["UpdateTracks 2 chapters, Ready"])
+  })
+
+  test("a playing player stays playing across the swap", () => {
+    const device = paused()
+    device.resolved(remote)
+    device.send({ _tag: "Toggle" })
+    device.status({ position: 12, playing: true })
+    device.calls.length = 0
+    device.resolved(local)
+    expect(device.calls).toEqual(["UpdateTracks 2 chapters, Ready"])
+    expect(device.core.wantsPlay).toBe(true)
+  })
+
+  test("resolved URLs for another episode do not touch the loaded one", () => {
+    const device = paused()
+    device.resolved(remote)
+    device.calls.length = 0
+    device.send({ _tag: "Resolved", episodeId: "e2", urls: local })
+    expect(device.calls).toEqual([])
   })
 })

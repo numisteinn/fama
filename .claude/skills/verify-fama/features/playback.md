@@ -12,7 +12,7 @@ A user plays an episode. All chapters play as one timeline with one scrubber. Th
 - `play-ios-start` opens the player from a library row and starts playback.
 - `play-ios-mini` shows the mini player after `Close player`, with play and pause.
 - `play-ios-resume` resumes at the saved position after a relaunch (the newer of the phone's and the server's).
-- `play-ios-download` downloads the chapters (`Download`, then `Downloaded`).
+- `play-ios-download` downloads the chapters (`Download`, then `Downloaded`). The playing episode hot-swaps to the local files the moment the download completes, so going offline needs no relaunch.
 - `play-ios-airplay` opens the AirPlay route picker.
 - `play-while-running` plays chapter 0 while the job is still `Running`.
 
@@ -40,7 +40,7 @@ Preconditions:
 - **iPhone, start.** Run `$AD press 'label="Harbour Days"' --settle`, then `$AD snapshot -i`. The player shows `Close player`, the title, `Pause`, the elapsed text (for example `0:14`) and the remaining text (for example `-0:16`).
 - **iPhone, moving clock.** Run `$AD snapshot -i` twice, a few seconds apart. The elapsed text grows.
 - **iPhone, mini player.** Run `$AD press 'label="Close player"' --settle`. `Library` shows `Open player, Harbour Days`, `Pause` and `Forward 30 seconds`.
-- **iPhone, download.** In the player, run `$AD press 'label="Download"'`. The label becomes `Downloading`, then `Downloaded`. Take the phone offline (or stop the local API) and force a fresh native player load — relaunch (`$AD open dev.fama.app --relaunch --metro-port 8081`) or switch to another episode and back — then open `Harbour Days`, jump to `Evening`, and check that playback advances from disk.
+- **iPhone, download.** In the player, run `$AD press 'label="Download"'`. The label becomes `Downloading`, then `Downloaded`. Take the phone offline (or stop the local API) and, in the same session, jump to `Evening` and check that playback advances from disk — no relaunch needed: the queue hot-swaps to the local files the moment the download completes.
 - **iPhone, resume.** Pause at a known position, then `$AD open dev.fama.app --relaunch --metro-port 8081`. The mini player is there, paused, and `Open player` shows the same elapsed time.
 - **Proof.** Web: two `preview_snapshot {save: true}` images a few seconds apart, copied to `$EVIDENCE/playback-web/`. iPhone: `$AD screenshot $EVIDENCE/playback-ios/player-1.png`, wait, then `player-2.png`.
 

@@ -27,7 +27,10 @@ export const IDLE_STATUS: NativeStatus = {
 /** What the native player was told of an episode: its chapter URLs, durations, and whether the job makes more chapters. */
 export interface Told {
   readonly episodeId: string
+  /** The server chapter URLs: the identity of each chapter's audio, for re-narration remapping. */
   readonly urls: ReadonlyArray<string>
+  /** Where the native player pulls each chapter now: `file://` when downloaded, else the streaming URL. */
+  readonly resolvedUrls: ReadonlyArray<string>
   readonly durations: ReadonlyArray<number>
   readonly expectsMore: boolean
 }
@@ -66,6 +69,11 @@ export interface Core {
   /** What the native player was told. `null`: it has no episode. */
   readonly told: Told | null
   /**
+   * The resolved track URLs `player.ts` last reported for an episode. `plan` carries them into `told`, so a download
+   * that completes (remote → local `file://`) or is deleted (local → remote) hot-swaps the native queue in place.
+   */
+  readonly resolved: { readonly episodeId: string; readonly urls: ReadonlyArray<string> } | null
+  /**
    * The `updatedAt` of the device's entry that the native player's place already follows. An entry with another
    * stamp is news from another device: a player whose audio does not play moves there.
    */
@@ -98,6 +106,7 @@ export const initialCore = (entries: Readonly<Record<string, EpisodeProgress>>):
   entries,
   status: IDLE_STATUS,
   told: null,
+  resolved: null,
   followedAt: null,
   tracker: IDLE_TRACKER,
   landingMs: null,
@@ -122,6 +131,8 @@ export type PlayerEvent =
   /** The listener deleted an episode. */
   | { readonly _tag: "Forget"; readonly episodeId: string }
   | { readonly _tag: "Status"; readonly status: NativeStatus }
+  /** The resolved track URLs of the loaded episode, from `player.ts`, after the download state changed. */
+  | { readonly _tag: "Resolved"; readonly episodeId: string; readonly urls: ReadonlyArray<string> }
   /** The app goes to the background. */
   | { readonly _tag: "Background" }
   /** The server answered a `PUT` of `sent` with what it stores. */
@@ -332,6 +343,8 @@ const handle = (core: Core, event: PlayerEvent, now: string): Outcome => {
     }
     case "Status":
       return takeStatus(core, event.status, now)
+    case "Resolved":
+      return { core: { ...core, resolved: { episodeId: event.episodeId, urls: event.urls } }, effects: [] }
     case "Background":
       return saveNow(core, now)
     case "PushAnswered":
@@ -357,6 +370,7 @@ const loadEpisode = (core: Core, episode: Episode | undefined, now: string): Out
       told: {
         episodeId: episode.id,
         urls: episode.chapters.map((chapter) => chapter.url),
+        resolvedUrls: core.resolved?.episodeId === episode.id ? core.resolved.urls : [],
         durations: episode.chapters.map((chapter) => chapter.durationMs),
         expectsMore: isActive(episode.job),
       },
@@ -447,6 +461,34 @@ const shouldFollowEntry = (core: Core, hasNews: boolean, hasNewTracks: boolean):
   return hasNews && !(core.wantsPlay && !core.status.ended)
 }
 
+type Changes = {
+  readonly hasNewTracks: boolean
+  readonly urlsReplaced: boolean
+  readonly resolvedChanged: boolean
+}
+
+/** The resolved URLs of the loaded episode now, and whether they changed since the native player was told. */
+const resolveTracks = (told: Told, resolved: { readonly episodeId: string; readonly urls: ReadonlyArray<string> } | null) => {
+  const urls = resolved !== null && resolved.episodeId === told.episodeId ? resolved.urls : told.resolvedUrls
+  const changed = urls.length !== told.resolvedUrls.length || urls.some((url, index) => url !== told.resolvedUrls[index])
+  return { urls, changed }
+}
+
+/** What the native player does when it already has the episode: follow a newer entry, reload re-narrated URLs, or
+ *  hot-swap resolved URLs in place. */
+const sameEpisodeEffects = (core: Core, told: Told, episode: Episode | undefined, changes: Changes, wantsPlay: boolean) => {
+  const entry = core.entries[told.episodeId]
+  const hasNews = (entry?.updatedAt ?? core.followedAt) !== core.followedAt
+  if (episode !== undefined && entry !== undefined && shouldFollowEntry(core, hasNews, changes.hasNewTracks)) {
+    return followEntry(core, episode, entry, changes.hasNewTracks, wantsPlay)
+  }
+  if (changes.urlsReplaced && episode !== undefined) return replaceTracks(core, told, episode, wantsPlay)
+  if (changes.resolvedChanged && episode !== undefined) {
+    return { landingMs: core.landingMs, shortOfMs: core.shortOfMs, effects: [{ _tag: "UpdateTracks", episode }] satisfies Array<NativeCall> }
+  }
+  return applyIntent(core, episode, changes.hasNewTracks)
+}
+
 /**
  * The one step that decides what the native player does. It is a function of the `Core` alone: intent and facts in,
  * the native calls out, in order.
@@ -455,7 +497,9 @@ const shouldFollowEntry = (core: Core, hasNews: boolean, hasNewTracks: boolean):
  *   Play starts where `startMs` says, a paused load rests where `restMs` says. The place of the episode the
  *   listener left is stamped first, when they moved it.
  * - The same episode: `UpdateTracks` comes first when the list has new chapters or the job changed. So each call
- *   after it acts on the newest list.
+ *   after it acts on the newest list. A download that completed (or was deleted) moves the resolved URLs between
+ *   `file://` and the stream; `UpdateTracks` alone swaps them in place, at the current position, so playback is
+ *   not restarted or re-stamped.
  * - A device entry the player does not follow yet is news from another device. A player whose audio does not play
  *   (paused, held for the library, waiting at the end of its queue) moves there, and stamps nothing. With a new
  *   track list too, the move is one `Load`: the place and the list arrive together. Audio that plays is not moved.
@@ -470,7 +514,7 @@ export const plan = (core: Core, now: string): Outcome => {
     return told === null
       ? { core: { ...core, ...done }, effects: [] }
       : {
-          core: { ...core, ...done, told: null, wantsPlay: false, awaitingPause: false, followedAt: null, landingMs: null, shortOfMs: null },
+          core: { ...core, ...done, told: null, resolved: null, wantsPlay: false, awaitingPause: false, followedAt: null, landingMs: null, shortOfMs: null },
           effects: [{ _tag: "Unload" }],
         }
   }
@@ -478,21 +522,23 @@ export const plan = (core: Core, now: string): Outcome => {
   if (told === null || told.episodeId !== core.episodeId) return loadEpisode(core, episode, now)
 
   const { nextTold, urlsReplaced, hasNewTracks } = trackChanges(told, episode)
+  const resolved = resolveTracks(told, core.resolved)
   const entry = core.entries[told.episodeId]
   const nextStamp = entry?.updatedAt ?? core.followedAt
   const wantsPlay = core.ask === null ? core.wantsPlay : core.ask === "Play"
-  const { landingMs, shortOfMs, effects } =
-    episode !== undefined && entry !== undefined && shouldFollowEntry(core, nextStamp !== core.followedAt, hasNewTracks)
-      ? followEntry(core, episode, entry, hasNewTracks, wantsPlay)
-      : urlsReplaced && episode !== undefined
-        ? replaceTracks(core, told, episode, wantsPlay)
-        : applyIntent(core, episode, hasNewTracks)
+  const { landingMs, shortOfMs, effects } = sameEpisodeEffects(
+    core,
+    told,
+    episode,
+    { hasNewTracks, urlsReplaced, resolvedChanged: resolved.changed },
+    wantsPlay,
+  )
 
   return {
     core: {
       ...core,
       ...done,
-      told: nextTold,
+      told: { ...nextTold, resolvedUrls: resolved.urls },
       wantsPlay,
       awaitingPause: core.ask === null ? core.awaitingPause : core.ask === "Pause",
       followedAt: nextStamp,
