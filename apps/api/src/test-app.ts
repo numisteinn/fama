@@ -11,6 +11,7 @@ import { routes } from "./http.ts"
 import * as MediaStore from "./media-store.ts"
 import * as SampleRepo from "./sample-repo.ts"
 import { sha256Hex } from "./secrets.ts"
+import * as VoicePreviewRepo from "./voice-preview-repo.ts"
 import * as Wake from "./wake.ts"
 
 const files = import.meta.glob("../migrations/*.sql", { query: "?raw", import: "default", eager: true })
@@ -53,6 +54,7 @@ export const startApp = async () => {
     EpisodeRepo.layer,
     MediaStore.layer,
     SampleRepo.layer,
+    VoicePreviewRepo.layer,
     Wake.layer({ waitUntil: () => {} }),
   ).pipe(Layer.provideMerge(Layer.succeed(Bindings, env)))
   const app = HttpRouter.toWebHandler(

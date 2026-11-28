@@ -12,6 +12,7 @@ import * as MediaStore from "./media-store.ts"
 import * as SampleRepo from "./sample-repo.ts"
 import { sha256Hex } from "./secrets.ts"
 import { migrations, readJson, readNarrateJob } from "./test-app.ts"
+import * as VoicePreviewRepo from "./voice-preview-repo.ts"
 import * as Wake from "./wake.ts"
 import { Episode, EpisodeList, FeedInfo, EpisodeProgress } from "@fama/contracts"
 import { required } from "../../../test/required.ts"
@@ -67,7 +68,7 @@ beforeAll(async () => {
     fetch: fakeWakeFetch,
     timeoutMs: WAKE_TIMEOUT_MS,
   })
-  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, SampleRepo.layer, wake).pipe(
+  const services = Layer.mergeAll(AccountRepo.layer, EpisodeRepo.layer, MediaStore.layer, SampleRepo.layer, VoicePreviewRepo.layer, wake).pipe(
     Layer.provideMerge(Layer.succeed(Bindings, env)),
   )
   const app = HttpRouter.toWebHandler(

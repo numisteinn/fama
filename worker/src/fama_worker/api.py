@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -120,6 +121,18 @@ class Api:
     def claim(self, voices: list[dict]) -> Work | None:
         response = self._send("POST", "/api/worker/claim", json={"workerId": self.worker_id, "voices": voices})
         return None if response.status_code == 204 else parse_work(response.json()["work"])
+
+    def register_voices(self, voices: list[dict]) -> None:
+        self._send("POST", "/api/worker/voices", json={"voices": voices})
+
+    def missing_voice_previews(self) -> set[str]:
+        response = self._send("GET", "/api/worker/voices/missing-previews")
+        return set(response.json()["voiceIds"])
+
+    def put_voice_preview(self, voice: VoiceRef, file: Path) -> None:
+        voice_id = quote(str(voice), safe="")
+        self._send("PUT", f"/api/worker/voices/{voice_id}/preview", content=file.read_bytes(),
+                   headers={"Content-Type": "audio/mp4"})
 
     def source(self, job: ClaimedJob) -> httpx.Response:
         if not job.source_path:

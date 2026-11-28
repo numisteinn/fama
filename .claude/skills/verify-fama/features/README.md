@@ -48,6 +48,7 @@ Each feature file starts with an H1 title and one paragraph that describes the u
 - [Web review](./review-web.md) adds the Review switch and chapter editor in the web app.
 - [Review on iPhone](./review-ios.md) covers chapter selection, text edits and Start from the Library.
 - [Stored Document](./stored-document.md): the worker extracts a source one time, the API stores the Document, and a retry narrates from the stored Document.
+- [Voice previews](./voice-previews.md) checks catalog registration, the Worker preview command and public audio.
 - [Voice Samples](./voice-samples.md): request, play, and compare Voice Sample clips from the first paragraph of a stored Document in web Review or via the API.
 - [Web reader](./web-reader.md) follows the current Segment and seeks when the listener clicks the text.
 - [Worker makes an episode](./worker-episode.md): the job moves from Queued through Running to Ready, chapters appear while it runs, and failures show a plain reason with Retry.

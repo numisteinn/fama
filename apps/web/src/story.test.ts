@@ -189,7 +189,7 @@ describe("settings", () => {
         FetchVoices,
         Message.SucceededFetchVoices({
           generation: 1,
-          voices: [{ id: "piper:is_IS-salka-medium" as VoiceRef, engine: "piper", name: "Salka", language: "is", gender: "female" }],
+          voices: [{ id: "piper:is_IS-salka-medium" as VoiceRef, engine: "piper", name: "Salka", language: "is", gender: "female", previewUrl: null }],
         }),
       ),
       message(storedSettings({ connection })),
@@ -205,7 +205,7 @@ describe("settings", () => {
         FetchVoices,
         Message.SucceededFetchVoices({
           generation: 2,
-          voices: [{ id: "kokoro:af_heart" as VoiceRef, engine: "kokoro", name: "Heart", language: "en", gender: "female" }],
+          voices: [{ id: "kokoro:af_heart" as VoiceRef, engine: "kokoro", name: "Heart", language: "en", gender: "female", previewUrl: null }],
         }),
       ),
       // Late library and voice responses from generation 0 are dropped.
@@ -219,7 +219,7 @@ describe("settings", () => {
       message(
         Message.SucceededFetchVoices({
           generation: 0,
-          voices: [{ id: "piper:stale" as VoiceRef, engine: "piper", name: "Stale", language: "en", gender: null }],
+          voices: [{ id: "piper:stale" as VoiceRef, engine: "piper", name: "Stale", language: "en", gender: null, previewUrl: null }],
         }),
       ),
       model((next) => {
@@ -245,6 +245,7 @@ describe("settings", () => {
       name: "Old",
       language: "en",
       gender: null,
+      previewUrl: null,
     }
     story(
       update,

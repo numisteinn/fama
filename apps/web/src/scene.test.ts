@@ -218,6 +218,7 @@ describe("menus (Picker backed by @effect/ui-kit Menu)", () => {
     name,
     language,
     gender: null,
+    previewUrl: null,
   })
   const voices = [
     voice("kokoro:af_heart", "Heart", "en"),

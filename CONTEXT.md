@@ -19,8 +19,9 @@ Fama turns links, files and text into narrated audio for listening on the go.
 | **Worker** | A process that pulls jobs from the API and makes the audio. Runs on the Mac (local) or Modal (cloud). Same Python package. |
 | **Engine** | A TTS model family a worker can run: `kokoro`, `piper`, ... |
 | **Voice** | One speaker of an engine, with a language. Written `engine:voiceId`, for example `kokoro:af_heart` or `piper:is_IS-salka-medium`. |
+| **Voice preview** | One short clip of a catalog Voice introducing itself in its language at normal speed. The Worker makes it in advance. The API serves it publicly for instant playback. |
 | **Feed** | The private podcast RSS feed of one user's ready episodes. Its URL holds the user's feed token. |
-| **User** | The owner of episodes. A DIY server has exactly one; the managed service has many. Every episode, feed and stored file belongs to one user. |
+| **User** | The owner of episodes. A DIY server has exactly one; the managed service has many. Every Episode, Feed and their stored files belong to one User. |
 | **Client token** | A bearer secret for the web and phone apps. It acts as one user on `/api/*`. A user can have many. |
 | **Feed token** | The secret in the feed and media URLs of one user. It opens only `/feed/` and `/media/`. Rotating it closes the old URLs. |
 | **Worker token** | The bearer secret of workers. It opens only `/api/worker/*`, for the jobs of all users. |
@@ -28,7 +29,7 @@ Fama turns links, files and text into narrated audio for listening on the go.
 
 Rules:
 
-- Each credential opens one set of routes: the client token the client API, the feed token the feed and media, the worker token the worker API. The code has no branch for DIY or managed; they differ only in how users and tokens are made.
+- Each credential opens one set of routes: the client token the client API, the feed token the feed and media, the worker token the worker API. Voice previews have public media URLs. The code has no branch for DIY or managed; they differ only in how users and tokens are made.
 - The worker owns extraction, language detection and synthesis. The API owns state and storage. Clients only talk to the API.
 - When the user picks no voice, the worker picks the default voice for the detected language.
 - The worker extracts a source one time. Each later attempt narrates from the stored Document.

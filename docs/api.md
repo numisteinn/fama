@@ -2,7 +2,7 @@
 
 The source of truth for every shape is `packages/contracts/src/` (Effect Schema; `index.ts` exports all of it). This file is the same contract in words, for the Python worker and for humans. Terms follow `CONTEXT.md`.
 
-All JSON. Tagged unions use a `_tag` field. Times are ISO 8601 strings. Nullable fields are always present and set to `null`, never left out.
+Structured bodies use JSON. Media use the Content-Type shown for each route. Tagged unions use a `_tag` field. Times are ISO 8601 strings. Nullable fields are always present and set to `null`, never left out.
 
 ## Auth
 
@@ -17,7 +17,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 - A user has any number of client tokens. The server stores only their SHA-256, so it shows a client token once, when it is made.
 - A user has one feed token. It is a capability URL, so the server can print it again. `POST /api/feed/rotate` replaces it, and the old feed and media URLs stop working.
 - A wrong or missing credential gets `401`. Another user's episode gets `404`, as if it did not exist.
-- Every `url` the API returns (chapter, timing file, book, cover) is a path that starts with `/media/<feedToken>/episodes/`. Clients prefix the server origin. They never build media paths.
+- Every private media path (Chapter, timing file, Book file, cover, Sample) starts with `/media/<feedToken>/episodes/`. Clients prefix the server origin. They never build media paths.
 - `/media/<feedToken>/<path>` serves only `episodes/...` of the feed token's user. A path with a `.` or `..` segment, or under `uploads/`, gets `404`.
 - `/media/*` supports HTTP `Range` requests (`206`), because AVPlayer and podcast apps need it.
 
@@ -88,6 +88,17 @@ A new episode gets a provisional `title`: the URL host and path, the file name, 
 - Both changes queue the Job and end its previous lease. Published Chapters stay playable. When a replacement arrives, the new audio and its timing file have new URLs. The worker reuses matching Chapters and builds the Book file from the audio in order. The API lists a new Book file after its upload.
 - On requeue, the API removes the previous Ready transcript. Requests for a transcript use the timings of the current Ready.
 
+## Voice previews
+
+`Voice` is `{ id, engine, name, language, gender, previewUrl }`. The ID has the form `engine:voiceId`. The API returns `previewUrl: null` until the Voice has a preview. Clients and the API decode an omitted `previewUrl` as `null`, including in old Worker registrations.
+
+A Voice preview is a short AAC clip of the Voice introducing itself in its own language at speed 1. The Worker generates it in advance. It is public and independent of any Episode. Clients prefix the server origin to the returned `previewUrl`.
+
+- `GET /voice-previews/:id` and `HEAD /voice-previews/:id` serve the clip as `audio/mp4`. The route needs no token and accepts byte ranges. Missing clips and invalid Voice IDs get `404`. Each part of the decoded ID accepts only letters A–Z and a–z, digits, underscores and hyphens.
+- The catalog returns a path of the form `/voice-previews/<encoded Voice ID>?v=<revision>`. With a `v` query parameter the response uses `Cache-Control: public, max-age=31536000, immutable`. Without `v` it uses `public, max-age=300`.
+- Each upload replaces the stored clip and publishes a new revision. The query parameter is a cache key. A request that reaches the origin reads the current clip.
+- Run `fama previews --api <origin> --token <worker token>` from the Worker environment to register local Voices and fill in their missing previews. Add `--all` to regenerate all local previews or `--voice <engine:voiceId>` to regenerate one.
+
 ## Samples
 
 A Sample lets the User hear a Voice read the first body paragraph of the Episode’s Document at the Episode’s speed. The Worker takes up to about 300 characters. It cuts at a sentence end when possible. All Voices read the same passage.
@@ -153,11 +164,14 @@ Clients keep `{ positionMs, updatedAt }` per episode on the device and use `merg
 
 ## Worker endpoints
 
-A worker loops: claim, process, report. All calls are idempotent. A crash at any point is safe to retry. Every call needs the worker token.
+A Worker loops through claim, process and report. A crash at any point is safe to retry. Every call needs the worker token.
 
 | Method and path | Body | Response |
 |---|---|---|
 | `POST /api/worker/claim` | `{ workerId, voices: Voice[] }` | `200 { work: Work }` or `204` when no work |
+| `POST /api/worker/voices` | `VoiceList` `{ voices: Voice[] }` | `204`, registers Voices without a claim |
+| `GET /api/worker/voices/missing-previews` | | `200 MissingVoicePreviews` `{ voiceIds: VoiceRef[] }` for all registered Voices that lack a preview |
+| `PUT /api/worker/voices/:id/preview` | AAC `.m4a` bytes, `audio/mp4` or `audio/x-m4a` | `200 Voice` with the new `previewUrl`, `404` for an unknown Voice, or `400` for an empty upload or wrong type |
 | `GET /api/worker/samples/:id/document?voice=<urlenc>&leaseToken=<urlenc>` | | `200 Document` |
 | `PUT /api/worker/samples/:id/clip?voice=<urlenc>&leaseToken=<urlenc>` | AAC `.m4a` bytes | `204`, Sample `Ready` |
 | `POST /api/worker/samples/:id/fail` | `{ voice, leaseToken, reason }` | `204`, Sample `Failed` |
@@ -216,7 +230,7 @@ A cloud worker can sleep while the queue is empty. Two optional secrets let the 
 
 ## Storage keys (R2)
 
-Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves the prefix out, because the feed token names the user: `/media/<feedToken>/episodes/<episodeId>/book.m4b` reads `users/<userId>/episodes/<episodeId>/book.m4b`.
+Every private key starts with the owner's prefix, `users/<userId>/`. A media URL leaves the prefix out, because the feed token names the user: `/media/<feedToken>/episodes/<episodeId>/book.m4b` reads `users/<userId>/episodes/<episodeId>/book.m4b`.
 
 - `users/<userId>/uploads/<episodeId>/<fileName>`
 - `users/<userId>/episodes/<episodeId>/chapters/<index:000>.m4a`
@@ -227,5 +241,7 @@ Every key starts with the owner's prefix, `users/<userId>/`. A media URL leaves 
 - `users/<userId>/episodes/<episodeId>/cover.<ext>`
 - `users/<userId>/documents/<episodeId>/<digest>.json` (the API selects one revision; revisions are kept until episode deletion)
 - `users/<userId>/episodes/<episodeId>/document.json` (legacy Documents)
+
+Public Voice previews use `voices/<voiceId>.m4a` without a user prefix.
 
 `DELETE /api/episodes/:id` checks the owner in D1 before it removes the media and Sample rows.

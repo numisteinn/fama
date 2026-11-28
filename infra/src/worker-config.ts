@@ -12,7 +12,7 @@ export const D1_MIGRATIONS = "../apps/api/migrations"
 export const ASSETS = {
   directory: "../apps/web/dist",
   notFoundHandling: "single-page-application",
-  runWorkerFirst: ["/api/*", "/feed/*", "/media/*"],
+  runWorkerFirst: ["/api/*", "/feed/*", "/media/*", "/voice-previews/*"],
 } as const
 
 export const OBSERVABILITY = { enabled: true, traces: { enabled: true } } as const

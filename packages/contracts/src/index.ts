@@ -11,6 +11,7 @@ export * from "./stale.ts"
 export * from "./timing.ts"
 export * from "./document.ts"
 export * from "./upload.ts"
+export * from "./voice-preview.ts"
 
 export const Voice = Schema.Struct({
   id: VoiceRef,
@@ -18,6 +19,7 @@ export const Voice = Schema.Struct({
   name: Schema.String,
   language: Schema.String,
   gender: Schema.NullOr(Schema.Literals(["female", "male"])),
+  previewUrl: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 })
 export interface Voice extends Schema.Schema.Type<typeof Voice> {}
 

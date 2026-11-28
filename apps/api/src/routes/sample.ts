@@ -4,6 +4,7 @@ import { HttpRouter, HttpServerRequest } from "effect/http"
 import { EpisodeRepo } from "../episode-repo.ts"
 import { keys, MediaStore } from "../media-store.ts"
 import { SampleRepo } from "../sample-repo.ts"
+import { VoicePreviewRepo } from "../voice-preview-repo.ts"
 import { Wake } from "../wake.ts"
 import { stored } from "./document.ts"
 import { api, BadRequest, IdParams, json, noContent, NotStored, uploadRequest, webRequest, worker } from "./kit.ts"
@@ -34,7 +35,7 @@ export const sampleRoutes = HttpRouter.addAll([
     if (object === null) return yield* new NotStored({ message: "This episode has no Document." })
     const raw = yield* Effect.tryPromise(() => object.json())
     const document = yield* Schema.decodeUnknownEffect(Document)(raw)
-    const known = (yield* episodes.voices)
+    const known = (yield* (yield* VoicePreviewRepo).list)
       .filter((voice) => languageOf(voice.language) === languageOf(document.language))
       .map((voice) => voice.id)
       .filter((voice) => decodeVoice(voice)._tag === "Success")

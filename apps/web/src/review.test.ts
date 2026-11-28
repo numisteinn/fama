@@ -275,7 +275,7 @@ describe("review editing, repeated header removal, save, and start", () => {
       app
         .given({
           ...withEpisodes(baseModel(), [reviewEpisode, episodeB]),
-          voices: [{ id: "piper:is_IS-salka-medium" as VoiceRef, engine: "piper", name: "Salka", language: "is", gender: "female" }],
+          voices: [{ id: "piper:is_IS-salka-medium" as VoiceRef, engine: "piper", name: "Salka", language: "is", gender: "female", previewUrl: null }],
           screen: Screen.Review({ episodeId: reviewEpisode.id, openId: 1 }),
         })
         .send(AppMessage.SubmittedSaveReview({ episodeId: reviewEpisode.id, document: expectedDoc }))

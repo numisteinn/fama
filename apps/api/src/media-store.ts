@@ -13,6 +13,7 @@ const chaptersPrefix = (userId: string, episodeId: string, revision: string | nu
   `${userPrefix(userId)}episodes/${episodeId}/chapters/${revision === null ? "" : revision + "/"}`
 
 export const keys = {
+  voicePreview: (voiceId: string) => `voices/${voiceId}.m4a`,
   upload: (userId: string, episodeId: string, fileName: string) =>
     `${userPrefix(userId)}uploads/${episodeId}/${fileName}`,
   linkedUpload: (userId: string, episodeId: string) => keys.upload(userId, episodeId, "page"),

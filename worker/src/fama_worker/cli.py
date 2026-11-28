@@ -1,4 +1,4 @@
-"""`fama make`, `fama voices`, `fama work`."""
+"""`fama make`, `fama voices`, `fama previews`, `fama work`."""
 
 from __future__ import annotations
 
@@ -66,6 +66,21 @@ def voices(args: argparse.Namespace) -> None:
         print(f"{str(voice.ref):28} {voice.language:3} {voice.gender or '-':7} {voice.name}{mark}")
 
 
+def previews(args: argparse.Namespace) -> None:
+    from fama_worker.api import Api, ApiError
+    from fama_worker.engines import all_voices
+    from fama_worker.previews import generate_previews
+
+    api = Api(args.api, args.token, socket.gethostname())
+    try:
+        count = generate_previews(api, all_voices(), regenerate=args.all, only=args.voice)
+    except (ApiError, ValueError) as error:
+        raise SystemExit(str(error)) from error
+    finally:
+        api.client.close()
+    print(f"Uploaded {count} Voice previews.")
+
+
 def work(args: argparse.Namespace) -> None:
     from fama_worker.work import run
 
@@ -88,6 +103,14 @@ def main(argv: list[str] | None = None) -> None:
     p = commands.add_parser("voices", help="list voices of all engines")
     p.add_argument("--json", action="store_true")
     p.set_defaults(run=voices)
+
+    p = commands.add_parser("previews", help="generate missing Voice previews and upload them")
+    p.add_argument("--api", required=True, help="API origin, for example http://localhost:8787")
+    p.add_argument("--token", required=True)
+    selection = p.add_mutually_exclusive_group()
+    selection.add_argument("--all", action="store_true", help="regenerate previews for all local Voices")
+    selection.add_argument("--voice", help="regenerate one preview by Voice ID, for example kokoro:af_heart")
+    p.set_defaults(run=previews)
 
     p = commands.add_parser("work", help="pull jobs from the Fama API and process them")
     p.add_argument("--api", required=True, help="API origin, for example http://localhost:8787")

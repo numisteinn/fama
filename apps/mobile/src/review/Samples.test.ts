@@ -27,7 +27,7 @@ test("hasPending is true only while a clip is still requested", () => {
 
 test("voiceLabel names the voice, and falls back to the ID the server has not named", () => {
   const salka = voice("piper:is_IS-salka-medium")
-  const steinn: Voice = { id: "piper:is_IS-steinn-medium" as VoiceRef, engine: "piper", name: "Steinn", language: "is", gender: "male" }
+  const steinn: Voice = { id: "piper:is_IS-steinn-medium" as VoiceRef, engine: "piper", name: "Steinn", language: "is", gender: "male", previewUrl: null }
   expect(voiceLabel(salka, [steinn])).toBe("piper:is_IS-salka-medium")
   expect(voiceLabel(voice("piper:is_IS-steinn-medium"), [steinn])).toBe("Steinn")
 })

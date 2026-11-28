@@ -10,7 +10,7 @@ import {
   type ProgressRequest,
   Source,
   UserId,
-  Voice,
+  type Voice,
   type VoiceRef,
   type WorkerId,
   type Work,
@@ -25,6 +25,7 @@ import * as Job from "./job.ts"
 import { keys, mediaPath, MediaStore, type StorageError } from "./media-store.ts"
 import { randomToken, sha256Hex } from "./secrets.ts"
 import { hasTranscript } from "./transcript.ts"
+import { registerVoices } from "./voice-preview-repo.ts"
 
 export { DatabaseError } from "./db.ts"
 
@@ -255,7 +256,6 @@ export interface Interface {
     metadata: Pick<EpisodeUpdate, "title" | "author" | "language" | "voice">,
   ) => Effect.Effect<JobState, EpisodeNotFound | Job.LeaseLost | Failure>
   readonly feedItems: (userId: UserId, origin: string) => Effect.Effect<ReadonlyArray<FeedItem>, Failure>
-  readonly voices: Effect.Effect<ReadonlyArray<Voice>, Failure>
   /**
    * Stores `progress` when its `updatedAt` is newer than the stored one, in one statement. A future stamp counts as
    * now. Returns what is stored after the write. Another user's episode is not found.
@@ -269,7 +269,6 @@ export interface Interface {
 
 export class EpisodeRepo extends Context.Service<EpisodeRepo, Interface>()("@fama/api/EpisodeRepo") {}
 
-const VOICE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 const MAX_CAS_ATTEMPTS = 5
 
 export const layer = Layer.effect(
@@ -517,22 +516,7 @@ export const layer = Layer.effect(
       claimSample: Effect.Effect<ClaimedSample | null, Failure>,
     ) {
       const at = yield* now
-      const seenAt = new Date(at).toISOString()
-      if (voices.length > 0) {
-        yield* query("voices.register", () =>
-          db.batch(
-            voices.map((voice) =>
-              db
-                .prepare(
-                  `INSERT INTO voices (id, engine, name, language, gender, seen_at) VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT (id) DO UPDATE SET engine = excluded.engine, name = excluded.name,
-                     language = excluded.language, gender = excluded.gender, seen_at = excluded.seen_at`,
-                )
-                .bind(voice.id, voice.engine, voice.name, voice.language, voice.gender, seenAt),
-            ),
-          ),
-        )
-      }
+      yield* registerVoices(db, voices, at)
       const sample = yield* claimSample
       if (sample !== null) return { ...sample, _tag: "Sample" as const }
       const staleBefore = new Date(at - LEASE_MS).toISOString()
@@ -702,16 +686,6 @@ export const layer = Layer.effect(
       )
     })
 
-    const voices = Effect.gen(function* () {
-      const since = new Date((yield* now) - VOICE_TTL_MS).toISOString()
-      const rows = yield* all(
-        "voices.list",
-        "SELECT id, engine, name, language, gender FROM voices WHERE seen_at >= ? ORDER BY language, id",
-        since,
-      )
-      return yield* decodeRows(Voice)(rows)
-    }).pipe(Effect.withSpan("EpisodeRepo.voices"))
-
     const putProgress = Effect.fn("EpisodeRepo.putProgress")(function* (
       userId: UserId,
       id: string,
@@ -770,7 +744,6 @@ export const layer = Layer.effect(
       setCover,
       storeDocument,
       feedItems,
-      voices,
     })
   }),
 )

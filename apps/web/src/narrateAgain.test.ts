@@ -48,6 +48,7 @@ const heart: Voice = {
   name: "Heart",
   language: "en",
   gender: null,
+  previewUrl: null,
 }
 const sarah: Voice = { ...heart, id: "kokoro:af_sarah" as VoiceRef, name: "Sarah" }
 

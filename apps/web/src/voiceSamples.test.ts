@@ -34,11 +34,11 @@ const bui = "piper:is_IS-bui-medium" as VoiceRef
 const heart = "kokoro:af_heart" as VoiceRef
 
 const voices: ReadonlyArray<Voice> = [
-  { id: steinn, engine: "piper", name: "Steinn", language: "is", gender: "male" },
-  { id: salka, engine: "piper", name: "Salka", language: "is", gender: "female" },
-  { id: ugla, engine: "piper", name: "Ugla", language: "is", gender: "female" },
-  { id: bui, engine: "piper", name: "Búi", language: "is", gender: "male" },
-  { id: heart, engine: "kokoro", name: "Heart (US)", language: "en", gender: "female" },
+  { id: steinn, engine: "piper", name: "Steinn", language: "is", gender: "male", previewUrl: null },
+  { id: salka, engine: "piper", name: "Salka", language: "is", gender: "female", previewUrl: null },
+  { id: ugla, engine: "piper", name: "Ugla", language: "is", gender: "female", previewUrl: null },
+  { id: bui, engine: "piper", name: "Búi", language: "is", gender: "male", previewUrl: null },
+  { id: heart, engine: "kokoro", name: "Heart (US)", language: "en", gender: "female", previewUrl: null },
 ]
 
 const greinEpisode: Episode = {
