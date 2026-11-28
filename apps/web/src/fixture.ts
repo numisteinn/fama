@@ -68,6 +68,7 @@ export const harbourDays: Episode = {
   ],
   bookUrl: "/media/t/episodes/harbour-days/book.m4b",
   coverUrl: null,
+  archivedAt: null,
   job: { _tag: "Ready", finishedAt: at },
   progress: null,
 }
@@ -85,6 +86,7 @@ export const queuedArticle: Episode = {
   chapters: [],
   bookUrl: null,
   coverUrl: null,
+  archivedAt: null,
   job: { _tag: "Queued" },
   progress: null,
 }

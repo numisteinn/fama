@@ -64,6 +64,7 @@ const EpisodeRow = Schema.Struct({
   finished_at: Schema.NullOr(Schema.String),
   fail_reason: Schema.NullOr(Schema.String),
   failed_at: Schema.NullOr(Schema.String),
+  archived_at: Schema.NullOr(Schema.String),
   /** From the owner's row in `progress`. Both null when the owner has none. */
   progress_position_ms: Schema.NullOr(Schema.Number),
   progress_updated_at: Schema.NullOr(Schema.String),
@@ -312,6 +313,7 @@ export const layer = Layer.effect(
         })),
         bookUrl: row.book_size === null ? null : media(row, keys.book(row.user_id, row.id, row.book_revision)),
         coverUrl: row.cover_key === null ? null : media(row, row.cover_key),
+        archivedAt: row.archived_at,
         job: jobOf(row),
         progress:
           row.progress_position_ms === null || row.progress_updated_at === null
@@ -320,8 +322,7 @@ export const layer = Layer.effect(
       })
 
     const selectEpisodes = `SELECT e.*, u.feed_token, p.position_ms AS progress_position_ms, p.updated_at AS progress_updated_at
-      FROM episodes e JOIN users u ON u.id = e.user_id
-      LEFT JOIN progress p ON p.user_id = e.user_id AND p.episode_id = e.id`
+      FROM episodes e JOIN users u ON u.id = e.user_id LEFT JOIN progress p ON p.user_id = e.user_id AND p.episode_id = e.id`
 
     /** One episode. With `userId`, only when that user owns it, so another user's id reads as not found. */
     const findRow = Effect.fnUntraced(function* (id: string, userId: UserId | null = null) {
@@ -334,9 +335,8 @@ export const layer = Layer.effect(
       return row
     })
 
-    const selectChapters = `SELECT c.*,
-      CASE WHEN c.media_revision IS NULL THEN t.idx IS NOT NULL ELSE c.has_timing END AS timed FROM chapters c
-      LEFT JOIN timings t ON t.episode_id = c.episode_id AND t.idx = c.idx`
+    const selectChapters = `SELECT c.*, CASE WHEN c.media_revision IS NULL THEN t.idx IS NOT NULL ELSE c.has_timing END AS timed
+      FROM chapters c LEFT JOIN timings t ON t.episode_id = c.episode_id AND t.idx = c.idx`
 
     const chaptersOf = (id: string) =>
       all("chapters.list", `${selectChapters} WHERE c.episode_id = ? ORDER BY c.idx`, id).pipe(
@@ -376,7 +376,7 @@ export const layer = Layer.effect(
         const sets = Object.keys(columns).map((column) => `${column} = ?`)
         const binds = Object.values(columns)
         for (const [column, value] of Object.entries(update)) {
-          sets.push(`${column} = COALESCE(?, ${column})`)
+          sets.push(column === "title" || column === "author" ? `${column} = CASE WHEN ${column}_locked = 1 THEN ${column} ELSE COALESCE(?, ${column}) END` : `${column} = COALESCE(?, ${column})`)
           binds.push(value)
         }
         const changed = yield* query("episode.transition", () =>
@@ -666,12 +666,12 @@ export const layer = Layer.effect(
       const rows = yield* all(
         "episode.feed",
         `${selectEpisodes} WHERE e.user_id = ? AND e.job_state = 'Ready' AND e.book_size IS NOT NULL
-         ORDER BY e.finished_at DESC`,
+         AND e.archived_at IS NULL ORDER BY e.finished_at DESC`,
         userId,
       ).pipe(Effect.flatMap(decodeRows(EpisodeRow)))
       const chapters = yield* all(
         "chapters.ofFeed",
-        `${selectChapters} JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ? AND e.job_state = 'Ready'`,
+        `${selectChapters} JOIN episodes e ON e.id = c.episode_id WHERE e.user_id = ? AND e.job_state = 'Ready' AND e.archived_at IS NULL`,
         userId,
       ).pipe(Effect.flatMap(decodeRows(ChapterRow)))
       const timed = new Map<string, Array<{ hasTiming: boolean }>>()

@@ -31,6 +31,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 | `GET /api/episodes` | | `{ episodes: Episode[] }`, newest first |
 | `GET /api/episodes/:id` | | `Episode` or `404` |
 | `DELETE /api/episodes/:id` | | `204`, also deletes its media |
+| `PATCH /api/episodes/:id` | `UpdateEpisode` `{ title?, author?, archived? }` | `200 Episode`, the episode after the write |
 | `POST /api/episodes/:id/retry` | | `Episode`, job back to `Queued` |
 | `PUT /api/episodes/:id/progress` | `EpisodeProgress` `{ positionMs, updatedAt }` | `200 EpisodeProgress`, the stored value after the write |
 | `GET /api/episodes/:id/document` | | `Document`, or `404` (`NotStored`) until the worker has stored it |
@@ -47,7 +48,7 @@ Every episode has one owner, a user. There are three credentials, and each opens
 
 The client routes see only the token user's episodes.
 
-`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url, timingUrl}], bookUrl, coverUrl, job, progress`.
+`Episode` fields: `id, createdAt, source, title, author, language, voice, speed, durationMs, chapters[{index, title, durationMs, url, timingUrl}], bookUrl, coverUrl, archivedAt, job, progress`.
 
 `progress` is the token user's `EpisodeProgress` for the episode, or `null` when there is none.
 
@@ -62,6 +63,16 @@ The client routes see only the token user's episodes.
 A new episode gets a provisional `title`: the URL host and path, the file name, or the first words of the text. The worker replaces it with the real title.
 
 `chapters` grows while the job runs. A client can play chapter 0 while the job is still `Running`.
+
+## Organize
+
+`archivedAt` is `null` while the episode is in the inbox, and the ISO time of the move after the owner archived it. `GET /api/episodes` lists all the user's episodes, archived ones too, so a client filters the inbox and the archive locally.
+
+- `PATCH /api/episodes/:id` writes what the owner gives. `title` and `author` arrive trimmed, never blank, at most 300 UTF-16 code units; `author: null` clears the author. Owner-edited `title` and `author` values are locked so later worker heartbeats and `storeDocument` writes do not overwrite them. Renaming updates episode metadata and the RSS feed only (existing audio tags, spoken intros, and `inputHash` do not change).
+- `archived: true` stamps `archivedAt`; repeating `archived: true` while already archived keeps that stamp. `archived: false` clears `archivedAt` to `null`, so a later archive receives a new stamp.
+- At least one field must be present. An empty body or `{}` gets `400`.
+- Another user's episode gets `404`. The write needs no lease and wakes no worker, because only the row and the feed change.
+- The feed leaves archived episodes out. Their audio and media URLs stay, so unarchiving puts an episode back in the feed with nothing re-made.
 
 ## Document
 
@@ -117,7 +128,7 @@ Omit the body, use `{}`, or set `voices` to `null` to ask for all registered Voi
 
 ## Feed and transcript
 
-`GET /feed/<feedToken>/rss.xml` is RSS 2.0 with the iTunes and the Podcasting 2.0 (`xmlns:podcast="https://podcastindex.org/namespace/1.0"`) namespaces. It has one item for each `Ready` episode with a book file, newest first. The enclosure is the book file (`audio/x-m4a`).
+`GET /feed/<feedToken>/rss.xml` is RSS 2.0 with the iTunes and the Podcasting 2.0 (`xmlns:podcast="https://podcastindex.org/namespace/1.0"`) namespaces. It has one item for each `Ready` episode with a book file that is not archived, newest first. The enclosure is the book file (`audio/x-m4a`).
 
 An item has `<podcast:transcript url="<origin>/media/<feedToken>/episodes/<episodeId>/transcript.vtt" type="text/vtt" language="<language>"/>` when each chapter of the episode has a timing file. An episode with a chapter made before timing files has no tag. `language` is the episode's language, left out when it is unknown.
 
