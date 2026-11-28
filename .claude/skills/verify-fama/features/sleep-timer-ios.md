@@ -32,9 +32,10 @@ On the simulator:
 
 1. Add `.claude/skills/verify-fama/fixtures/harbour-days.epub` through the Add screen.
 2. Wait until the episode is Ready, open it, and capture the player before tapping the moon button.
-3. Tap the button labelled `Sleep timer Off`, choose `15 minutes`, and capture the active countdown.
-4. Open it again, choose `Turn off`, and capture the inactive moon button.
-5. Select `End of chapter` on the two-chapter episode. Capture the pause and the next chapter at its start after the boundary.
+3. Tap the button labelled `Sleep timer, off`, choose `15 minutes`, and capture the active countdown.
+4. Close the player modal (`Close player`) so only the mini player is visible, then confirm the timer stays active when reopening the player.
+5. Open it again, choose `Turn off`, and capture the inactive moon button.
+6. Select `End of chapter` on the two-chapter episode. Capture the pause and the next chapter at its start after the boundary.
 
 Save before and after screenshots under `$EVIDENCE/sleep-timer-ios/`. Clean up with `fama-verify down` and restore the simulator server URL.
 
@@ -43,3 +44,5 @@ Save before and after screenshots under `$EVIDENCE/sleep-timer-ios/`. Clean up w
 - Use a two-chapter episode for the boundary check. A final chapter has no next chapter to seek.
 - Do not use `simctl`, `idb`, or a deployed server for UI actions.
 - The feature uses wall-clock time. Pausing manually does not extend a countdown.
+- `End of chapter` reacts to native status updates (every 0.5 s), so up to ~0.5 s of the next chapter may play before pausing and seeking back to its start; a native item-end stop is a future follow-up.
+- Locked-screen / background JS timer execution cannot be proven on the simulator and needs a real iPhone check.

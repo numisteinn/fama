@@ -456,6 +456,18 @@ test("a Segment tap seeks before it starts a paused Episode", () => {
   expect(device.calls).toEqual(["Seek 30000", "Play"])
 })
 
+test("Pause pauses a playing player and does not start a paused player", () => {
+  const device = paused()
+  device.calls.length = 0
+  device.send({ _tag: "Pause" })
+  expect(device.calls).toEqual(["Pause"])
+  device.send({ _tag: "Toggle" })
+  device.status({ playing: true })
+  device.calls.length = 0
+  device.send({ _tag: "Pause" })
+  expect(device.calls).toEqual(["Pause"])
+})
+
 describe("re-narrated chapters with replaced URLs", () => {
   test("a paused player reloads the queue when a chapter URL changes without a progress restamp", () => {
     const device = paused()

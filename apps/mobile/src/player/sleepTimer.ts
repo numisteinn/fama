@@ -1,5 +1,4 @@
 import type { Episode } from "@fama/contracts"
-import { useEffect, useState, useSyncExternalStore } from "react"
 import type { NativeStatus } from "./native"
 
 const FIVE_MINUTES_MS = 5 * 60 * 1_000
@@ -28,10 +27,25 @@ export function formatRemaining(mode: SleepTimerMode, nowMs: number): string | n
     case "Off":
       return null
     case "EndOfChapter":
-      return "End of ch."
+      return "Ch. end"
     case "Countdown": {
-      const totalSeconds = Math.max(0, Math.floor((mode.endsAtMs - nowMs) / 1_000))
+      const totalSeconds = Math.max(0, Math.ceil((mode.endsAtMs - nowMs) / 1_000))
       return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`
+    }
+  }
+}
+
+export function accessibilityLabel(mode: SleepTimerMode, nowMs: number): string {
+  switch (mode._tag) {
+    case "Off":
+      return "Sleep timer, off"
+    case "EndOfChapter":
+      return "Sleep timer, end of chapter"
+    case "Countdown": {
+      const totalSeconds = Math.max(0, Math.ceil((mode.endsAtMs - nowMs) / 1_000))
+      if (totalSeconds < 60) return "Sleep timer, less than 1 minute left"
+      const minutes = Math.ceil(totalSeconds / 60)
+      return `Sleep timer, ${minutes} ${minutes === 1 ? "minute" : "minutes"} left`
     }
   }
 }
@@ -59,10 +73,28 @@ function chapterStart(episode: Episode | null, index: number): number | null {
   return episode.chapters.slice(0, index).reduce((seconds, chapter) => seconds + chapter.durationMs / 1_000, 0)
 }
 
+export function chapterIndexAt(episode: Episode | null, positionSec: number): number | null {
+  if (!episode || episode.chapters.length === 0) return null
+  let cursor = 0
+  for (let index = 0; index < episode.chapters.length; index += 1) {
+    const chapter = episode.chapters[index]
+    if (!chapter) break
+    cursor += chapter.durationMs / 1_000
+    if (positionSec < cursor) return index
+  }
+  return episode.chapters.length - 1
+}
+
 class TimerController {
   private snapshot: SleepTimerSnapshot = { mode: OFF, episodeId: null }
-  private actions: SleepTimerActions = { pause: () => undefined, seek: () => undefined }
+  private readonly actions: SleepTimerActions
   private readonly listeners = new Set<() => void>()
+  private readonly onArmedChange?: (mode: SleepTimerMode) => void
+
+  constructor(actions: SleepTimerActions, onArmedChange?: (mode: SleepTimerMode) => void) {
+    this.actions = actions
+    this.onArmedChange = onArmedChange
+  }
 
   getSnapshot = (): SleepTimerSnapshot => this.snapshot
 
@@ -71,16 +103,9 @@ class TimerController {
     return () => this.listeners.delete(listener)
   }
 
-  setActions(actions: SleepTimerActions): void {
-    this.actions = actions
-  }
-
-  clearActions(): void {
-    this.actions = { pause: () => undefined, seek: () => undefined }
-  }
-
   arm(mode: SleepTimerMode, episodeId: string | null): void {
     this.snapshot = { mode, episodeId }
+    this.onArmedChange?.(mode)
     this.listeners.forEach((listener) => listener())
   }
 
@@ -95,6 +120,15 @@ class TimerController {
   off(): void {
     if (this.snapshot.mode._tag === "Off") return
     this.arm(OFF, null)
+  }
+
+  /** Re-targets `EndOfChapter` to the chapter the listener jumped to so manual seeks never trigger a false stop. */
+  onManualSeek(episode: Episode | null, targetPositionSec: number): void {
+    const { mode, episodeId } = this.snapshot
+    if (mode._tag !== "EndOfChapter") return
+    const nextIndex = chapterIndexAt(episode, targetPositionSec)
+    if (nextIndex === null || nextIndex === mode.chapterIndex) return
+    this.arm({ _tag: "EndOfChapter", chapterIndex: nextIndex }, episodeId)
   }
 
   check(status: Pick<NativeStatus, "episodeId" | "index" | "ended">, nowMs: number, episode: Episode | null): void {
@@ -115,48 +149,18 @@ class TimerController {
   }
 }
 
-export function createSleepTimerController(actions?: SleepTimerActions): {
+export function createSleepTimerController(
+  actions: SleepTimerActions = { pause: () => undefined, seek: () => undefined },
+  onArmedChange?: (mode: SleepTimerMode) => void,
+): {
   readonly getSnapshot: () => SleepTimerSnapshot
   readonly subscribe: (listener: () => void) => () => void
-  readonly setActions: (next: SleepTimerActions) => void
-  readonly clearActions: () => void
   readonly arm: (mode: SleepTimerMode, episodeId: string | null) => void
   readonly setPreset: (preset: SleepTimerPreset, nowMs: number, chapterIndex: number, episodeId: string | null) => void
   readonly addFiveMinutes: (nowMs: number) => void
   readonly off: () => void
+  readonly onManualSeek: (episode: Episode | null, targetPositionSec: number) => void
   readonly check: (status: Pick<NativeStatus, "episodeId" | "index" | "ended">, nowMs: number, episode: Episode | null) => void
 } {
-  const controller = new TimerController()
-  if (actions) controller.setActions(actions)
-  return controller
-}
-
-export const sleepTimer = createSleepTimerController()
-
-export function useSleepTimer(
-  status: NativeStatus,
-  episode: Episode | null,
-  actions: SleepTimerActions,
-): { readonly mode: SleepTimerMode; readonly remaining: string | null } {
-  const snapshot = useSyncExternalStore(sleepTimer.subscribe, sleepTimer.getSnapshot, sleepTimer.getSnapshot)
-  const [nowMs, setNowMs] = useState(() => Date.now())
-
-  useEffect(() => {
-    sleepTimer.setActions(actions)
-    return () => sleepTimer.clearActions()
-  }, [actions.pause, actions.seek])
-
-  useEffect(() => {
-    const check = () => {
-      const now = Date.now()
-      setNowMs(now)
-      sleepTimer.check(status, now, episode)
-    }
-    check()
-    if (snapshot.mode._tag !== "Countdown") return
-    const interval = setInterval(check, 1_000)
-    return () => clearInterval(interval)
-  }, [episode, snapshot.mode, status.ended, status.episodeId, status.index])
-
-  return { mode: snapshot.mode, remaining: formatRemaining(snapshot.mode, nowMs) }
+  return new TimerController(actions, onArmedChange)
 }

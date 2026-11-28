@@ -12,7 +12,8 @@ import { clock, jobLabel, speed } from "../lib/format"
 import { useEpisode } from "../lib/library"
 import { RouteButton } from "../player/native"
 import { isWaiting, player, usePlayerStatus } from "../player/player"
-import { sleepTimer, type SleepTimerMode, type SleepTimerPreset, useSleepTimer } from "../player/sleepTimer"
+import type { SleepTimerMode, SleepTimerPreset } from "../player/sleepTimer"
+import { sleepTimer, useSleepTimer } from "../player/sleepTimerRuntime"
 import { Reader } from "../reader/Reader"
 import { hasText } from "../reader/text"
 import { colors, fonts, radius, space, SPEEDS } from "../theme"
@@ -23,7 +24,7 @@ export default function PlayerScreen() {
   const { width } = useWindowDimensions()
   const status = usePlayerStatus()
   const episode = useEpisode(status.episodeId)
-  const timer = useSleepTimer(status, episode, { pause: () => player.pause(), seek: (position) => player.seek(position) })
+  const timer = useSleepTimer()
   const [panel, setPanel] = useState<"art" | "reader" | "chapters">("art")
   const reading = panel === "reader"
   const showChapters = panel === "chapters"
@@ -111,7 +112,7 @@ export default function PlayerScreen() {
 
       <View style={styles.tools}>
         <SpeedButton rate={status.rate} />
-        <SleepTimerButton mode={timer.mode} remaining={timer.remaining} status={status} />
+        <SleepTimerButton mode={timer.mode} remaining={timer.remaining} a11yLabel={timer.a11yLabel} status={status} />
         <View style={styles.tool}>
           <RouteButton style={styles.route} tint={colors.text} activeTint={colors.accent} />
         </View>
@@ -208,10 +209,12 @@ function SpeedButton({ rate }: { rate: number }) {
 function SleepTimerButton({
   mode,
   remaining,
+  a11yLabel,
   status,
 }: {
   mode: SleepTimerMode
   remaining: string | null
+  a11yLabel: string
   status: { episodeId: string | null; index: number }
 }) {
   const active = mode._tag !== "Off"
@@ -224,30 +227,35 @@ function SleepTimerButton({
           ? ["+5 minutes", "15 minutes", "30 minutes", "45 minutes", "60 minutes", "End of chapter", "Turn off", "Cancel"]
           : ["15 minutes", "30 minutes", "45 minutes", "60 minutes", "Turn off", "Cancel"]
     ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, userInterfaceStyle: "dark" },
+      {
+        options,
+        cancelButtonIndex: options.length - 1,
+        ...(mode._tag === "Off" ? {} : { destructiveButtonIndex: options.length - 2 }),
+        userInterfaceStyle: "dark",
+      },
       (index) => {
         const episodeId = status.episodeId
         if (episodeId === null) return
         const nowMs = Date.now()
         if (mode._tag === "Off") {
-          if (index < 4) sleepTimer.setPreset((index + 1) * 15 as SleepTimerPreset, nowMs, status.index, episodeId)
+          if (index < 4) sleepTimer.setPreset(((index + 1) * 15) as SleepTimerPreset, nowMs, status.index, episodeId)
           else if (index === 4) sleepTimer.setPreset("EndOfChapter", nowMs, status.index, episodeId)
         } else if (mode._tag === "Countdown") {
           if (index === 0) sleepTimer.addFiveMinutes(nowMs)
-          else if (index < 5) sleepTimer.setPreset(index * 15 as SleepTimerPreset, nowMs, status.index, episodeId)
+          else if (index < 5) sleepTimer.setPreset((index * 15) as SleepTimerPreset, nowMs, status.index, episodeId)
           else if (index === 5) sleepTimer.setPreset("EndOfChapter", nowMs, status.index, episodeId)
           else if (index === 6) sleepTimer.off()
         } else {
-          if (index < 4) sleepTimer.setPreset((index + 1) * 15 as SleepTimerPreset, nowMs, status.index, episodeId)
+          if (index < 4) sleepTimer.setPreset(((index + 1) * 15) as SleepTimerPreset, nowMs, status.index, episodeId)
           else if (index === 4) sleepTimer.off()
         }
       },
     )
   }
   return (
-    <Tap style={styles.tool} accessibilityRole="button" accessibilityLabel={active ? `Sleep timer ${remaining}` : "Sleep timer Off"} onPress={pick}>
+    <Tap style={styles.tool} accessibilityRole="button" accessibilityLabel={a11yLabel} onPress={pick}>
       <Icon name={active ? "moon.fill" : "moon"} size={25} color={active ? colors.accent : colors.text} />
-      {active ? <Text style={styles.timerText}>{remaining === "End of ch." ? "Ch. end" : remaining}</Text> : null}
+      {mode._tag !== "Off" && remaining !== null ? <Text style={styles.timerText}>{remaining}</Text> : null}
     </Tap>
   )
 }

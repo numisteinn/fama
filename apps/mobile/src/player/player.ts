@@ -22,6 +22,7 @@ let source: TrackSource | null = null
 let api: Api | null = null
 
 const statusListeners = new Set<() => void>()
+const observerListeners = new Set<(kind: "status" | "seek", targetPositionSec?: number) => void>()
 
 export type TrackSource = {
   mediaUrl(path: string): string
@@ -105,10 +106,26 @@ function dispatch(event: PlayerEvent) {
   core = result.core
   if (core.entries !== before.entries) progress.replace(core.entries)
   for (const effect of result.effects) run(effect)
-  if (core.status !== before.status) statusListeners.forEach((listener) => listener())
+  if (core.status !== before.status) {
+    statusListeners.forEach((listener) => listener())
+    observerListeners.forEach((listener) => listener("status"))
+  }
 }
 
 FamaPlayer.addListener("onStatus", (status) => dispatch({ _tag: "Status", status }))
+
+export function subscribePlayer(listener: (kind: "status" | "seek", targetPositionSec?: number) => void): () => void {
+  observerListeners.add(listener)
+  return () => observerListeners.delete(listener)
+}
+
+export function getPlayerState(): { readonly status: NativeStatus; readonly episode: Episode | null } {
+  const episode =
+    core.status.episodeId === null
+      ? null
+      : (core.library.find((item) => item.id === core.status.episodeId) ?? null)
+  return { status: core.status, episode }
+}
 
 export function usePlayerStatus(): NativeStatus {
   return useSyncExternalStore(
@@ -162,10 +179,13 @@ export const player = {
   },
   /** Seconds. */
   skip(delta: number) {
+    const targetSec = Math.max(0, Math.min(core.status.duration, core.status.position + delta))
+    observerListeners.forEach((listener) => listener("seek", targetSec))
     dispatch({ _tag: "Skip", deltaMs: delta * 1000 })
   },
   /** Episode seconds. */
-  seek(position: number, play = false) {
+  seek(position: number, play = false, internal = false) {
+    if (!internal) observerListeners.forEach((listener) => listener("seek", position))
     dispatch({ _tag: "Seek", positionMs: position * 1000, play })
   },
   async setRate(rate: number) {

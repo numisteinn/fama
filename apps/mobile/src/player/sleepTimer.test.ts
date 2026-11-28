@@ -1,7 +1,9 @@
 import { describe, expect, test, vi } from "vitest"
 import {
+  accessibilityLabel,
   addFiveMinutes,
   chapterBoundaryReached,
+  chapterIndexAt,
   createSleepTimerController,
   formatRemaining,
   isExpired,
@@ -42,11 +44,19 @@ describe("sleep timer modes", () => {
     })
   })
 
-  test("formats countdowns and chapter endings", () => {
+  test("formats countdowns with ceil rounding and chapter endings", () => {
+    expect(formatRemaining({ _tag: "Countdown", endsAtMs: 15 * 60 * 1_000 }, 10)).toBe("15:00")
     expect(formatRemaining({ _tag: "Countdown", endsAtMs: 91_000 }, 0)).toBe("1:31")
     expect(formatRemaining({ _tag: "Countdown", endsAtMs: 0 }, 1_000)).toBe("0:00")
-    expect(formatRemaining({ _tag: "EndOfChapter", chapterIndex: 0 }, 0)).toBe("End of ch.")
+    expect(formatRemaining({ _tag: "EndOfChapter", chapterIndex: 0 }, 0)).toBe("Ch. end")
     expect(formatRemaining({ _tag: "Off" }, 0)).toBeNull()
+  })
+
+  test("builds full-word accessibility labels", () => {
+    expect(accessibilityLabel({ _tag: "Off" }, 0)).toBe("Sleep timer, off")
+    expect(accessibilityLabel({ _tag: "EndOfChapter", chapterIndex: 0 }, 0)).toBe("Sleep timer, end of chapter")
+    expect(accessibilityLabel({ _tag: "Countdown", endsAtMs: 15 * 60 * 1_000 }, 0)).toBe("Sleep timer, 15 minutes left")
+    expect(accessibilityLabel({ _tag: "Countdown", endsAtMs: 30_000 }, 0)).toBe("Sleep timer, less than 1 minute left")
   })
 
   test("checks countdown expiration inclusively", () => {
@@ -74,6 +84,21 @@ describe("sleep timer modes", () => {
     expect(pause).toHaveBeenCalledOnce()
     expect(seek).toHaveBeenCalledWith(90)
     expect(controller.getSnapshot().mode).toEqual({ _tag: "Off" })
+  })
+
+  test("manual chapter jump re-arms EndOfChapter instead of falsely pausing", () => {
+    const pause = vi.fn<() => void>()
+    const seek = vi.fn<(position: number) => void>()
+    const controller = createSleepTimerController({ pause, seek })
+    controller.arm({ _tag: "EndOfChapter", chapterIndex: 0 }, "episode")
+    expect(chapterIndexAt(episode, 95)).toBe(1)
+    controller.onManualSeek(episode, 95)
+    controller.check(status({ index: 1 }), 0, episode)
+    expect(pause).not.toHaveBeenCalled()
+    expect(controller.getSnapshot().mode).toEqual({ _tag: "EndOfChapter", chapterIndex: 1 })
+    // Seeking back to chapter 0 also re-arms to chapter 0.
+    controller.onManualSeek(episode, 10)
+    expect(controller.getSnapshot().mode).toEqual({ _tag: "EndOfChapter", chapterIndex: 0 })
   })
 
   test("clears an armed timer when the episode changes", () => {
